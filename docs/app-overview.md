@@ -111,6 +111,7 @@ Okay, let's enhance the implementation plan to include environment setup details
             *    Create a simple BaseModel class that will be used to represent files.
             *    Add a serializer to the model that transforms the file names into an array of dicts with just the file name.
             *   Use `dotenv` to keep environment variables.
+            *   **CSV File Source:** The CSV files are named "netspeed.csv" and are located in a specific directory on the server. Each day has a separate file, with "netspeed.csv" representing the most current file, "netspeed.csv.0" representing yesterday's file, and so on.
         *   *Deliverable:*
             *   An endpoint that returns all files inside the `/data` folder as JSON array using stubs.
             *   A new class with a serializer for file representation.
@@ -125,6 +126,9 @@ Okay, let's enhance the implementation plan to include environment setup details
         *   *Task:* Create a basic `/api/search` endpoint that can receive params.
         *   *Details:*
             *   Create the route with a stub for the main logic.
+            *   **Search Modes:** Implement two search modes:
+                *   **Normal Search:** Searches the most current "netspeed.csv" file.
+                *   **Search All Netspeed Files:** Searches all available "netspeed.csv" files (netspeed.csv, netspeed.csv.0, netspeed.csv.1, etc.).
         *   *Deliverable:*
             *   A stub of the endpoint with a logger.
         *   *Acceptance Criteria:*
@@ -141,8 +145,8 @@ Okay, let's enhance the implementation plan to include environment setup details
     *   A basic FastAPI application setup with one endpoint.
     *   Celery and Redis configured and running.
     *   Basic dependency management with pip and `requirements.txt`.
-    *   Basic `/api/files` endpoint with initial model created, and serialization of the data.
-    *   Basic `/api/search` endpoint created with stub logic.
+    *   Basic `/api/files` endpoint with initial model created, and serialization of the data, including details about the "netspeed.csv" file source.
+    *   Basic `/api/search` endpoint created with stub logic, including implementation of the two search modes.
     *   Initial models created.
     *   Environment variables setup
 
@@ -221,5 +225,3 @@ Okay, let's enhance the implementation plan to include environment setup details
 *   Ensure that your code respects the project structure created in each phase.
 *   Follow the logging conventions created.
 *   Use the stubs that were created for each component as a starting point.
-
-With this level of detail, your developers should have a clear understanding of the project's structure and be able to start coding immediately. Do you have any other questions or further areas you'd like to refine?
