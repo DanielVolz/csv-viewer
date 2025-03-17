@@ -1,0 +1,11 @@
+ip_address,mac_address,serial_number,vlan,subnet,phone_number,switch_host_url,switch_interface #the headers are not present in the original netspeed.csv files
+192.168.1.10,00:1A:2B:3C:4D:5E,ABC123XYZ,10,255.255.255.0,555-123-4567,switch1.example.com,GigabitEthernet1/0/1
+10.0.0.5,A0:B1:C2:D3:E4:F5,DEF456UVW,20,255.255.0.0,555-987-6543,switch2.example.com,GigabitEthernet1/0/2
+172.16.0.15,11:22:33:44:55:66,GHI789RST,30,255.255.255.128,555-555-1212,switch3.example.com,GigabitEthernet1/0/3
+192.168.10.2,77:88:99:AA:BB:CC,JKL012OPQ,40,255.255.255.0,555-222-3344,switch1.example.com,GigabitEthernet1/0/4
+10.10.10.1,DD:EE:FF:00:11:22,MNO345LMN,10,255.255.255.240,555-777-8899,switch2.example.com,GigabitEthernet1/0/5
+172.17.0.20,33:44:55:66:77:88,PQR678STU,50,255.255.0.0,555-333-4455,switch3.example.com,GigabitEthernet1/0/6
+192.168.5.1,99:AA:BB:CC:DD:EE,VWX901YZ,20,255.255.255.0,555-444-5566,switch1.example.com,GigabitEthernet1/0/7
+10.0.1.2,EE:FF:00:11:22:33,BCD234EFG,30,255.255.255.192,555-666-7788,switch2.example.com,GigabitEthernet1/0/8
+172.16.100.1,44:55:66:77:88:99,HIJ567KLM,60,255.255.0.0,555-888-9900,switch3.example.com,GigabitEthernet1/0/9
+192.168.20.5,FF:00:11:22:33:44,NOP890QRS,40,255.255.255.0,555-111-2233,switch1.example.com,GigabitEthernet1/0/10

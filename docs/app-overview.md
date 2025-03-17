@@ -35,7 +35,7 @@ Okay, let's enhance the implementation plan to include environment setup details
             *   Branching model is documented.
             *   `.gitignore` and `.dockerignore` files are in place for backend and frontend.
     4.  **Virtual Environment Setup:**
-        *   *Action:* Create a Python virtual environment for the backend and a Node environment for the frontend.
+        *   *Action:* [DONE] Create a Python virtual environment for the backend and a Node environment for the frontend.
         *   *Details:*
             *   Use `virtualenv` for Python in the backend (`/backend` folder).
             *   Use `npm` to initialize Node in the frontend (`/frontend` folder).
@@ -54,7 +54,7 @@ Okay, let's enhance the implementation plan to include environment setup details
 *   **Goal:** Set up the FastAPI backend, Celery, Redis, basic API endpoints, and initial models.
 *   **Tasks:**
     1.  **FastAPI Project Setup:**
-        *   *Action:* Create a FastAPI application with a basic project structure.
+        *   *Action:* [DONE] Create a FastAPI application with a basic project structure.
         *   *Details:*
             *   Include a `main.py` file with the application initialization and settings.
             *   Create a `config.py` file for environment variables and settings.
@@ -67,7 +67,7 @@ Okay, let's enhance the implementation plan to include environment setup details
             *   FastAPI app can run via `uvicorn main:app --reload`.
             *   `/` endpoint responds with a JSON message.
     2.  **Dependency Installation (Backend):**
-        *   *Task:* Install required python packages (FastAPI, `uvicorn`, `python-dotenv`, `celery`, `redis`, `elasticsearch`).
+        *   *Task:* [DONE] Install required python packages (FastAPI, `uvicorn`, `python-dotenv`, `celery`, `redis`, `elasticsearch`).
         *   *Details:* Use `pip` to install the required libraries within the virtual environment.
         *   *Deliverable:*
             *   All dependencies are installed within the virtual environment.
@@ -76,7 +76,7 @@ Okay, let's enhance the implementation plan to include environment setup details
             *   A list of dependencies are provided in a `requirements.txt` file.
             *   All the packages are installed.
     3.  **Celery Configuration:**
-        *   *Task:* Configure Celery to use Redis as a message broker.
+        *   *Task:* [DONE] Configure Celery to use Redis as a message broker.
         *   *Details:*
             *   Define a `celeryconfig.py` file, a basic task in a file `/tasks/tasks.py`.
             *   Create a task for parsing csv files, logging a message as a stub.
@@ -89,21 +89,21 @@ Okay, let's enhance the implementation plan to include environment setup details
             *   Test task can be run by the celery worker and is outputted to the console.
             *   The stub task shows a message on the console.
     4.  **Redis Setup:**
-        *   *Task:* Install and run redis.
+        *   *Task:* [DONE] Install and run redis.
         *   *Details:* Redis should be running in the server.
         *   *Deliverable:*
             *   Redis installed and running.
         *   *Acceptance Criteria:*
             *   `redis-cli ping` should respond with `PONG`.
     5. **Elasticsearch Setup**
-         * *Task:* Create the necessary configuration for ElasticSearch.
+         * *Task:* [DONE] Create the necessary configuration for ElasticSearch.
          * *Details:* A configuration object should be created that contains the connection details for Elasticsearch.
          * *Deliverable:*
             * A file in /utils/elastic.py with the configuration details
          * *Acceptance Criteria:*
             *   The configuration object is created.
     6.  **Basic CSV file endpoint**
-        *   *Task:* Create a basic file endpoint `/api/files` that returns the list of files.
+        *   *Task:* [DONE] Create a basic file endpoint `/api/files` that returns the list of files.
         *   *Details:*
             *   Create a new folder where all the files will be stored `/data`.
             *   The API should return the list of files using a stub for the response (e.g., file names as a string).
@@ -123,7 +123,7 @@ Okay, let's enhance the implementation plan to include environment setup details
             *   The new method returns data that is used in the response.
             *  `.env` file exists with stubs.
     7. **Basic search endpoint**
-        *   *Task:* Create a basic `/api/search` endpoint that can receive params.
+        *   *Task:* [DONE] Create a basic `/api/search` endpoint that can receive params.
         *   *Details:*
             *   Create the route with a stub for the main logic.
             *   **Search Modes:** Implement two search modes:
@@ -134,7 +134,7 @@ Okay, let's enhance the implementation plan to include environment setup details
         *   *Acceptance Criteria:*
             *   The request to `/api/search` should return the logger message.
     8.  **Environment variables setup**
-        *   *Task:* Setup environment variables for the project.
+        *   *Task:* [DONE] Setup environment variables for the project.
         *   *Details:* Add basic variables for the application.
         *   *Deliverable:*
             *   `.env` file with basic environment variables.
@@ -155,28 +155,28 @@ Okay, let's enhance the implementation plan to include environment setup details
 *   **Goal:** Set up a basic React frontend with Material UI, axios, and a basic table that shows the list of files from the backend.
 *   **Tasks:**
     1.  **React Project Setup:**
-        *   *Task:* Create a new React project using `create-react-app`.
+        *   *Task:* [DONE] Create a new React project using `create-react-app`.
         *   *Details:* Ensure that the node environment is installed properly. Remove all default files generated.
         *   *Deliverable:*
             *   A basic React app that runs with just an App component in place.
         *   *Acceptance Criteria:*
             *   `npm start` should start the default React development server.
     2.  **Material UI Installation:**
-        *   *Task:* Install Material UI and emotion libraries as dependencies.
+        *   *Task:* [DONE] Install Material UI and emotion libraries as dependencies.
         *   *Details:* Use `npm` to install the dependencies in the frontend folder.
         *   *Deliverable:*
             *   Material UI dependencies added to `package.json`.
         *   *Acceptance Criteria:*
             *   Material UI components can be imported and rendered in React components.
     3.  **Axios Installation:**
-        *   *Task:* Install the `axios` library.
+        *   *Task:* [DONE] Install the `axios` library.
         *   *Details:* Use `npm` to install the `axios` dependency.
         *   *Deliverable:*
             *   `axios` dependency installed.
         *   *Acceptance Criteria:*
             *   `axios` can be used to make HTTP requests.
     4.  **Basic Table Component:**
-        *   *Task:* Create a basic table component in React, in a new `Components` folder.
+        *   *Task:* [DONE] Create a basic table component in React, in a new `Components` folder.
         *   *Details:*
             *   Use Material UI components for table rendering.
             *   Include logic to call the backend `/api/files` endpoint using `axios`.
