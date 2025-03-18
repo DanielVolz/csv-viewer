@@ -1,5 +1,7 @@
 import csv
 import logging
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 
@@ -7,9 +9,28 @@ from typing import List, Dict, Tuple, Optional, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Define headers formats
+NEW_HEADERS = [
+    "IP Address", "Line Number", "Serial Number", "Model Name", "MAC Address", "MAC Address 2", 
+    "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", "Switch Hostname", "Switch Port", 
+    "Speed 3", "Speed 4"
+]
+
+OLD_HEADERS = [
+    "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2", 
+    "Speed 1", "Speed 2", "Switch Hostname", "Switch Port", "Speed 3", "Speed 4"
+]
+
+# Define the desired display order for columns
+DESIRED_ORDER = [
+    "File Name", "Creation Date", "IP Address", "Line Number", "MAC Address", "Subnet Mask", 
+    "Voice VLAN", "Switch Hostname", "Switch Port", "Serial Number", "Model Name"
+]
+
 def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
     """
     Read a CSV file and return headers and rows as dictionaries.
+    Detects whether the file is in the old or new format and handles accordingly.
     
     Args:
         file_path: Path to the CSV file
@@ -21,99 +42,69 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
     """
     try:
         rows = []
-        headers = []
+        
+        # Get file information
+        file_name = os.path.basename(file_path)
+        file_stat = os.stat(file_path)
+        creation_date = datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
         
         with open(file_path, 'r') as csv_file:
             csv_reader = csv.reader(csv_file)
             
-            # Get headers (first row)
-            headers_line = next(csv_reader, [])
+            # Read all rows as we need to count columns to determine format
+            all_rows = list(csv_reader)
             
-            # Clean up headers - handle comment in header row
-            headers = []
-            for header in headers_line:
-                # Strip any comment from the last header
-                if '#' in header and headers_line.index(header) == len(headers_line) - 1:
-                    header = header.split('#')[0].strip()
-                headers.append(header)
+            # Determine format based on number of columns
+            if len(all_rows) == 0:
+                logger.warning(f"Empty file: {file_path}")
+                return DESIRED_ORDER, []
             
-            # Parse rows
-            for row in csv_reader:
-                if len(row) == len(headers):
-                    row_dict = dict(zip(headers, row))
+            # Detect format based on number of columns in the first data row
+            if len(all_rows[0]) == 14:  # New format has 14 columns
+                file_headers = NEW_HEADERS
+            else:  # Old format has 11 columns
+                file_headers = OLD_HEADERS
+            
+            # Process rows
+            for row in all_rows:
+                if len(row) == len(file_headers):
+                    # Create a dictionary with the appropriate headers
+                    row_dict = dict(zip(file_headers, row))
+                    
+                    # Add file name and creation date
+                    row_dict["File Name"] = file_name
+                    row_dict["Creation Date"] = creation_date
+                    
                     rows.append(row_dict)
                 else:
                     logger.warning(f"Skipping row in {file_path} due to column mismatch.")
         
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
-        return headers, rows
+        return DESIRED_ORDER, rows
     
     except Exception as e:
         logger.error(f"Error reading CSV file {file_path}: {e}")
         return [], []
 
-def search_mac_address(file_path: str, mac_address: str) -> Optional[Dict[str, Any]]:
+def search_field_in_files(directory_path: str, search_term: str, field_name: Optional[str] = None, include_historical: bool = False) -> Tuple[List[str], List[Dict[str, Any]]]:
     """
-    Search for a MAC address in a CSV file.
-    
-    Args:
-        file_path: Path to the CSV file
-        mac_address: MAC address to search for
-        
-    Returns:
-        Dictionary containing the row if found, None otherwise
-    """
-    try:
-        headers, rows = read_csv_file(file_path)
-        
-        # Normalize the search MAC address (remove colons, lowercase)
-        normalized_search_mac = mac_address.lower().replace(':', '').replace('-', '')
-        
-        # Look for the mac_address column
-        mac_column = None
-        for header in headers:
-            if 'mac' in header.lower():
-                mac_column = header
-                break
-        
-        if not mac_column:
-            logger.warning(f"No MAC address column found in {file_path}")
-            return None
-        
-        # Search for the MAC address
-        for row in rows:
-            # Normalize the row's MAC address
-            row_mac = row[mac_column].lower().replace(':', '').replace('-', '')
-            
-            if row_mac == normalized_search_mac:
-                logger.info(f"Found MAC address {mac_address} in {file_path}")
-                return row
-        
-        logger.info(f"MAC address {mac_address} not found in {file_path}")
-        return None
-    
-    except Exception as e:
-        logger.error(f"Error searching for MAC address in {file_path}: {e}")
-        return None
-
-def search_mac_address_in_files(directory_path: str, mac_address: str, include_historical: bool = False) -> Tuple[List[str], Optional[Dict[str, Any]]]:
-    """
-    Search for a MAC address in all netspeed CSV files in a directory.
+    Search for a term in any field or a specific field in all CSV files in a directory.
     
     Args:
         directory_path: Path to the directory containing CSV files
-        mac_address: MAC address to search for
+        search_term: Term to search for
+        field_name: Optional specific field name to search in (if None, searches all fields)
         include_historical: Whether to include historical files
         
     Returns:
-        Tuple containing (headers, row) if found, (headers, None) otherwise
+        Tuple containing (headers, matching_rows)
     """
     try:
         dir_path = Path(directory_path)
         
         if not dir_path.exists() or not dir_path.is_dir():
             logger.error(f"Directory {directory_path} does not exist or is not a directory")
-            return [], None
+            return [], []
         
         # List of files to search
         files_to_search = []
@@ -129,28 +120,44 @@ def search_mac_address_in_files(directory_path: str, mac_address: str, include_h
             for file_path in dir_path.glob(historical_pattern):
                 files_to_search.append(file_path)
         
-        logger.info(f"Searching for MAC address {mac_address} in {len(files_to_search)} files")
+        logger.info(f"Searching for term '{search_term}' in {len(files_to_search)} files")
+        
+        # Normalize the search term (lowercase)
+        normalized_search_term = search_term.lower()
+        
+        # Store matching rows
+        matching_rows = []
+        headers = []
         
         # Search each file
         for file_path in files_to_search:
-            headers, rows = read_csv_file(str(file_path))
-            if not headers or not rows:
-                continue
-                
-            result = search_mac_address(str(file_path), mac_address)
-            if result:
-                return headers, result
+            file_headers, rows = read_csv_file(str(file_path))
+            
+            # Store headers from the first file (should be consistent across files)
+            if not headers and file_headers:
+                headers = file_headers
+            
+            # Search for term in each row
+            for row in rows:
+                # If a specific field is provided, only search that field
+                if field_name:
+                    if field_name in row and row[field_name] and normalized_search_term in str(row[field_name]).lower():
+                        matching_rows.append(row)
+                # Otherwise, search all fields
+                else:
+                    for key, value in row.items():
+                        if value and normalized_search_term in str(value).lower():
+                            matching_rows.append(row)
+                            break  # Found in one field, no need to check others
         
-        # If we get here, no results were found
-        logger.info(f"MAC address {mac_address} not found in any file")
+        logger.info(f"Found {len(matching_rows)} matches for term '{search_term}'")
         
-        # Return headers from the current file anyway (if it exists)
-        if current_file.exists():
+        # Return headers and matching rows
+        if current_file.exists() and not headers:
             headers, _ = read_csv_file(str(current_file))
-            return headers, None
         
-        return [], None
+        return headers, matching_rows
     
     except Exception as e:
-        logger.error(f"Error searching for MAC address in directory {directory_path}: {e}")
-        return [], None
+        logger.error(f"Error searching in directory {directory_path}: {e}")
+        return [], []

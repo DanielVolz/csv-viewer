@@ -1,7 +1,7 @@
 import React from 'react';
-import { Container, AppBar, Toolbar, Typography, CssBaseline, Divider } from '@mui/material';
+import { Container, AppBar, Toolbar, Typography, CssBaseline, Divider, Paper } from '@mui/material';
 import FileTable from './components/FileTable';
-import MacAddressSearch from './components/MacAddressSearch';
+import CSVSearch from './components/CSVSearch';
 
 function App() {
   return (
@@ -23,15 +23,12 @@ function App() {
             View and search CSV files containing network data.
           </Typography>
           
-          {/* MAC Address Search */}
-          <MacAddressSearch />
+          {/* CSV Search */}
+          <CSVSearch />
           
           <Divider sx={{ my: 4 }} />
           
           {/* File List */}
-          <Typography variant="h5" gutterBottom>
-            Available Netspeed Files
-          </Typography>
           <FileTable />
         </main>
       </Container>
