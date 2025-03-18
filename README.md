@@ -1,70 +1,58 @@
-# Getting Started with Create React App
+# CSV Data Viewer
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A web application for viewing and searching CSV files containing network data.
+
+## What is CSV Data Viewer?
+
+CSV Data Viewer is a full-stack web application designed to help users view and search CSV files that contain network data. The application allows users to:
+
+- Browse available CSV files
+- View the contents of CSV files
+- Search for specific MAC addresses within the network data
+- Include historical files in searches
+
+The application consists of a React frontend and a FastAPI backend, with data storage using Elasticsearch and task management using Redis and Celery.
+
+## Installation
+
+1.  **Prerequisites:**
+    *   [Node.js](https://nodejs.org/) (LTS version)
+    *   [Python 3.x](https://www.python.org/)
+    *   [Redis](https://redis.io/)
+    *   [Elasticsearch](https://www.elastic.co/)
+
+2.  **Backend Setup:**
+    ```bash
+    cd backend
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -r requirements.txt
+    ```
+
+3.  **Frontend Setup:**
+    ```bash
+    cd frontend
+    npm install
+    ```
+
+4.  **Running the Application:**
+    ```bash
+    ./start-app.sh
+    ```
+
+    This script will start both the backend and frontend servers.
 
 ## Available Scripts
 
 In the project directory, you can run:
 
-### `npm start`
+### `./start-app.sh`
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+Runs both the backend and frontend servers in development mode.
+Open [http://localhost:3000](http://localhost:3000) to view the app in your browser.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
-
-### `npm test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+The script automatically:
+- Activates the Python virtual environment
+- Starts the FastAPI backend server
+- Starts the React frontend development server
+- Provides clean shutdown with Ctrl+C
