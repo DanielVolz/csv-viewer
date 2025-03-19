@@ -1,17 +1,19 @@
 import React from 'react';
-import { Container, AppBar, Toolbar, Typography, CssBaseline, Divider, Paper } from '@mui/material';
+import { Container, AppBar, Toolbar, Typography, Divider } from '@mui/material';
 import FileTable from './components/FileTable';
 import CSVSearch from './components/CSVSearch';
+import FileInfoBox from './components/FileInfoBox';
+import DarkModeToggle from './components/DarkModeToggle';
 
 function App() {
   return (
     <div className="App">
-      <CssBaseline />
       <AppBar position="static" sx={{ marginBottom: 2 }}>
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             CSV Data Viewer
           </Typography>
+          <DarkModeToggle />
         </Toolbar>
       </AppBar>
       <Container>
@@ -22,6 +24,9 @@ function App() {
           <Typography variant="body1" paragraph>
             View and search CSV files containing network data.
           </Typography>
+          
+          {/* File Info Box */}
+          <FileInfoBox />
           
           {/* CSV Search */}
           <CSVSearch />

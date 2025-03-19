@@ -177,8 +177,31 @@ function CSVSearch() {
           
           {((hasSearched && results?.data && results?.headers) || 
              (!hasSearched && previewData?.data && previewData?.headers)) && (
-            <TableContainer component={Paper} sx={{ margin: '20px 0', maxHeight: 600 }}>
-              <Table stickyHeader sx={{ minWidth: 800 }} aria-label="data table">
+            <TableContainer 
+              component={Paper} 
+              sx={{ 
+                margin: '20px 0', 
+                height: 'auto',
+                maxHeight: 'none',
+                overflow: 'auto',
+                boxShadow: 3
+              }}
+            >
+              <Table sx={{ width: 'auto', tableLayout: 'fixed' }} aria-label="data table">
+                {/* Define column widths */}
+                <colgroup>
+                  <col style={{ minWidth: '120px' }} />
+                  <col style={{ minWidth: '150px' }} />
+                  <col style={{ minWidth: '100px' }} />
+                  <col style={{ minWidth: '100px' }} />
+                  <col style={{ minWidth: '130px' }} />
+                  <col style={{ minWidth: '100px' }} />
+                  <col style={{ minWidth: '80px' }} />
+                  <col style={{ minWidth: '150px' }} />
+                  <col style={{ minWidth: '150px' }} />
+                  <col style={{ minWidth: '120px' }} />
+                  <col style={{ minWidth: '120px' }} />
+                </colgroup>
                 <TableHead>
                   <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
                     {(hasSearched ? results.headers : previewData.headers).map((header) => (

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "CSV Data Viewer"
     
     # File Settings
-    CSV_FILES_DIR: str = "../example-data"
+    CSV_FILES_DIR: str = "./example-data"
     
     # Database Settings
     REDIS_URL: str = "redis://localhost:6379"

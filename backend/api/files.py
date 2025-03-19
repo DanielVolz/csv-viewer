@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 from datetime import datetime
 import logging
 
@@ -50,6 +51,53 @@ async def list_files():
             detail="Failed to list CSV files"
         )
 
+
+@router.get("/netspeed_info")
+async def get_netspeed_info():
+    """
+    Get information about the current netspeed.csv file.
+    
+    Returns:
+        Dictionary with creation date and line count
+    """
+    try:
+        # Get path to current CSV file
+        csv_dir = Path(settings.CSV_FILES_DIR)
+        current_file = csv_dir / "netspeed.csv"
+        
+        if not current_file.exists():
+            return {
+                "success": False,
+                "message": "Current netspeed.csv file not found",
+                "date": None,
+                "line_count": 0
+            }
+        
+        # Get file creation date
+        creation_time = current_file.stat().st_mtime
+        creation_date = datetime.fromtimestamp(creation_time).strftime(
+            "%Y-%m-%d %H:%M:%S")
+        
+        # Count lines (subtract 1 for header)
+        with open(current_file, 'r') as f:
+            line_count = sum(1 for _ in f) - 1
+        
+        result = {
+            "success": True,
+            "message": "Netspeed.csv file information retrieved successfully",
+            "date": creation_date,
+            "line_count": line_count
+        }
+        return JSONResponse(content=result)
+        
+    except Exception as e:
+        logger.error(f"Error getting netspeed file info: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get netspeed file information"
+        )
+
+
 @router.get("/preview")
 async def preview_current_file(limit: int = 25):
     """
@@ -82,7 +130,8 @@ async def preview_current_file(limit: int = 25):
         
         return {
             "success": True,
-            "message": f"Showing first {len(preview_rows)} entries of {len(rows)} total",
+            "message": (f"Showing first {len(preview_rows)} entries of "
+                        f"{len(rows)} total"),
             "headers": headers,
             "data": preview_rows
         }

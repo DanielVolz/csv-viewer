@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Table,
   TableBody,
@@ -10,7 +10,11 @@ import {
   Typography,
   CircularProgress,
   Alert,
-  Box
+  Box,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel
 } from '@mui/material';
 import useFilePreview from '../hooks/useFilePreview';
 
@@ -18,7 +22,19 @@ import useFilePreview from '../hooks/useFilePreview';
  * Component that displays a preview of the current netspeed CSV file
  */
 function FilePreview() {
-  const { previewData, loading, error } = useFilePreview(25); // Load first 25 entries
+  // Define possible preview limits
+  const previewLimits = [10, 25, 50, 100];
+  
+  // Use state to track the selected limit
+  const [previewLimit, setPreviewLimit] = useState(100);
+  
+  // Use the hook with the dynamic limit
+  const { previewData, loading, error } = useFilePreview(previewLimit);
+  
+  // Handle change in preview limit
+  const handleLimitChange = (event) => {
+    setPreviewLimit(Number(event.target.value));
+  };
 
   if (loading) {
     return (
@@ -46,16 +62,55 @@ function FilePreview() {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>
-        CSV File Preview
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h5">
+          CSV File Preview (First {previewData.data.length} Entries)
+        </Typography>
+        
+        <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
+          <InputLabel id="preview-limit-label">Show Entries</InputLabel>
+          <Select
+            labelId="preview-limit-label"
+            value={previewLimit}
+            onChange={handleLimitChange}
+            label="Show Entries"
+          >
+            {previewLimits.map(limit => (
+              <MenuItem key={limit} value={limit}>{limit}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Box>
       
       <Alert severity="info" sx={{ margin: '20px 0' }}>
-        {previewData.message}
+        Showing first {previewData.data.length} entries of {previewData.line_count || previewData.data.length} total
       </Alert>
       
-      <TableContainer component={Paper} sx={{ margin: '20px 0', maxHeight: 600 }}>
-        <Table stickyHeader sx={{ minWidth: 800 }} aria-label="netspeed file preview table">
+      <TableContainer 
+        component={Paper} 
+        sx={{ 
+          margin: '20px 0',
+          height: 'auto',
+          maxHeight: 'none',
+          overflow: 'auto',
+          boxShadow: 3
+        }}
+      >
+        <Table sx={{ width: 'auto', tableLayout: 'fixed' }} aria-label="netspeed file preview table">
+          {/* Define column widths */}
+          <colgroup>
+            <col style={{ minWidth: '120px' }} />
+            <col style={{ minWidth: '150px' }} />
+            <col style={{ minWidth: '100px' }} />
+            <col style={{ minWidth: '100px' }} />
+            <col style={{ minWidth: '130px' }} />
+            <col style={{ minWidth: '100px' }} />
+            <col style={{ minWidth: '80px' }} />
+            <col style={{ minWidth: '150px' }} />
+            <col style={{ minWidth: '150px' }} />
+            <col style={{ minWidth: '120px' }} />
+            <col style={{ minWidth: '120px' }} />
+          </colgroup>
           <TableHead>
             <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
               {previewData.headers.map((header) => (
