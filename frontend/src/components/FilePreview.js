@@ -96,21 +96,7 @@ function FilePreview() {
           boxShadow: 3
         }}
       >
-        <Table sx={{ width: 'auto', tableLayout: 'fixed' }} aria-label="netspeed file preview table">
-          {/* Define column widths */}
-          <colgroup>
-            <col style={{ width: '50px' }} /> {/* # column */}
-            <col style={{ minWidth: '120px' }} />
-            <col style={{ minWidth: '150px' }} />
-            <col style={{ minWidth: '100px' }} />
-            <col style={{ minWidth: '130px' }} />
-            <col style={{ minWidth: '100px' }} />
-            <col style={{ minWidth: '80px' }} />
-            <col style={{ minWidth: '150px' }} />
-            <col style={{ minWidth: '150px' }} />
-            <col style={{ minWidth: '120px' }} />
-            <col style={{ minWidth: '120px' }} />
-          </colgroup>
+        <Table sx={{ width: 'auto', tableLayout: 'auto' }} aria-label="netspeed file preview table">
           <TableHead>
             <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
               {previewData.headers.map((header) => (
