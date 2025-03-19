@@ -3,6 +3,7 @@ import axios from 'axios';
 
 // Define the desired column order
 const DESIRED_ORDER = [
+  "#",
   "File Name",
   "Creation Date",
   "IP Address",

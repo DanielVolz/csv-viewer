@@ -139,6 +139,35 @@ Add a dark mode feature to the application to improve user experience in low-lig
 5. All components remain fully functional and readable in both themes
 6. Tables and data maintain proper contrast and readability in dark mode
 
+## Task 1.1: Row Number Column Addition
+
+### Objective
+Add a "#" column to the CSV data display that shows sequential row numbers, making it easier to reference specific entries in the dataset.
+
+### Technical Requirements
+
+#### Backend
+1. **CSV Utility Changes**
+   - Modified the CSV utility to add a "#" column to each row
+   - Added "#" to the DESIRED_ORDER list to ensure it appears as the first column
+   - Row numbers start from 1 and increment sequentially
+
+#### Frontend
+1. **Column Display**
+   - Updated `useFilePreview.js` to include the "#" column in the desired column order
+   - The "#" column appears as the first column in the table
+   - Numbers are displayed as strings to maintain consistency with other cell values
+
+### Implementation
+- The backend adds a "#" field to each row during CSV processing
+- The frontend displays this field as the first column in the table
+- Row numbers provide a clear reference point for each entry
+
+### Acceptance Criteria
+1. A "#" column appears as the first column in the CSV preview table
+2. Each row displays its sequential number starting from 1
+3. The numbering is consistent and accurate across all displayed rows
+
 ## Task 1: MAC Address Search Implementation
 
 ### Objective
