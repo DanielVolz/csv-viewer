@@ -262,3 +262,42 @@ Create a search functionality on the React website that allows users to search f
 4. The table includes all headers from the original CSV file
 5. If no match is found, an appropriate message is displayed
 6. The search works for both current and historical netspeed.csv files
+
+## OpenSearch Integration (backend/utils/elastic.py)
+
+### Objective
+Implement OpenSearch integration for efficient CSV data indexing and searching.
+
+### Technical Improvements
+
+1. **Code Organization**
+   - Extracted reusable field type definitions:
+     - `keyword_type` for simple string fields
+     - `text_with_keyword` for fields requiring both full-text and exact matching
+   - Moved duplicated logic into dedicated helper methods:
+     - `_build_query_body` for query construction
+     - `_deduplicate_documents` for result deduplication
+
+2. **Query Building**
+   - Created a specialized `_build_query_body` method that handles:
+     - Field-specific searches with precise matching
+     - Multi-field searches with relevance scoring
+     - Special handling for identifier fields (Line Number, MAC Address)
+
+3. **Data Deduplication**
+   - Implemented document deduplication based on composite keys
+   - Uses MAC Address and File Name to identify unique records
+   - Prevents duplicate results when searching across multiple indices
+
+4. **Configuration Management**
+   - Centralized connection parameters in a dictionary
+   - Added documentation notes about moving credentials to environment variables
+
+### Implementation
+- The OpenSearch integration enables efficient searching across large CSV datasets
+- Helper methods improve code organization and maintainability
+- Query building is optimized for both exact and fuzzy matching
+
+### Security Recommendations
+- Credentials should be moved from hardcoded values to environment variables
+- Password should be stored securely using environment variables or secrets management

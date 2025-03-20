@@ -2,7 +2,7 @@ from celery import Celery
 import logging
 from pathlib import Path
 from typing import Optional, Dict, List
-from utils.elastic import elastic_config
+from utils.opensearch import opensearch_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +29,7 @@ def index_csv(file_path: str) -> dict:
     logger.info(f"Indexing CSV file at {file_path}")
     
     try:
-        success, count = elastic_config.index_csv_file(file_path)
+        success, count = opensearch_config.index_csv_file(file_path)
         
         if success:
             return {
@@ -56,13 +56,12 @@ def index_csv(file_path: str) -> dict:
 
 
 @app.task(name='tasks.index_all_csv_files')
-def index_all_csv_files(directory_path: str, pattern: str = "*.csv") -> dict:
+def index_all_csv_files(directory_path: str) -> dict:
     """
     Task to index all CSV files in a directory.
     
     Args:
         directory_path: Path to the directory containing CSV files
-        pattern: Pattern to match CSV files
         
     Returns:
         dict: A dictionary containing the indexing results
@@ -70,9 +69,16 @@ def index_all_csv_files(directory_path: str, pattern: str = "*.csv") -> dict:
     logger.info(f"Indexing all CSV files in {directory_path}")
     
     try:
-        # Find all CSV files
+        # Find all CSV files including historical ones
         path = Path(directory_path)
-        files = list(path.glob(pattern))
+        
+        # Use a list comprehension with multiple patterns to find all relevant files
+        patterns = ["netspeed.csv", "netspeed.csv.*"]
+        files = []
+        for pattern in patterns:
+            files.extend(list(path.glob(pattern)))
+        
+        logger.info(f"Found {len(files)} files matching patterns: {patterns}")
         
         if not files:
             return {
@@ -90,7 +96,7 @@ def index_all_csv_files(directory_path: str, pattern: str = "*.csv") -> dict:
         for file_path in files:
             # Process synchronously in this task to avoid task queue overload
             try:
-                success, count = elastic_config.index_csv_file(str(file_path))
+                success, count = opensearch_config.index_csv_file(str(file_path))
                 total_documents += count
                 
                 results.append({
@@ -142,7 +148,7 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
     logger.info(f"Searching OpenSearch for '{query}'")
     
     try:
-        headers, documents = elastic_config.search(
+        headers, documents = opensearch_config.search(
             query=query,
             field=field,
             include_historical=include_historical

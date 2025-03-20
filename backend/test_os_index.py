@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from utils.elastic import elastic_config
+from utils.opensearch import opensearch_config
 import sys
 import logging
 
@@ -19,14 +19,14 @@ def list_indices():
     """List all indices in OpenSearch"""
     try:
         # Test connection to OpenSearch
-        if not elastic_config.client.ping():
+        if not opensearch_config.client.ping():
             logger.error("Cannot connect to OpenSearch!")
             return
             
         logger.info("Successfully connected to OpenSearch")
         
         # Get all indices
-        indices = elastic_config.client.indices.get(index="*")
+        indices = opensearch_config.client.indices.get(index="*")
         
         if not indices:
             logger.info("No indices found in OpenSearch!")
@@ -34,13 +34,13 @@ def list_indices():
             
         logger.info(f"Found {len(indices)} indices:")
         for idx in indices:
-            doc_count = elastic_config.client.cat.count(
+            doc_count = opensearch_config.client.cat.count(
                 index=idx, format="json"
             )
             logger.info(f"  - {idx}: {doc_count} documents")
             
             # Get mapping for this index
-            mapping = elastic_config.client.indices.get_mapping(index=idx)
+            mapping = opensearch_config.client.indices.get_mapping(index=idx)
             logger.info(f"  - Mappings: {mapping[idx]['mappings']}")
             
     except Exception as e:
@@ -64,7 +64,7 @@ def trigger_indexing():
         
         for file_path in csv_files:
             logger.info(f"Indexing {file_path}...")
-            success, count = elastic_config.index_csv_file(str(file_path))
+            success, count = opensearch_config.index_csv_file(str(file_path))
             logger.info(f"  - Success: {success}, Documents indexed: {count}")
             
     except Exception as e:
@@ -77,7 +77,7 @@ def test_search():
         search_term = "192"  # Should match IP addresses
         logger.info(f"Testing search for term '{search_term}'")
         
-        headers, documents = elastic_config.search(search_term)
+        headers, documents = opensearch_config.search(search_term)
         
         logger.info(f"Found {len(documents)} results for term '{search_term}'")
         if documents:
@@ -92,14 +92,14 @@ def update_index_settings():
     """Update settings for all existing indices"""
     try:
         # Test connection to OpenSearch
-        if not elastic_config.client.ping():
+        if not opensearch_config.client.ping():
             logger.error("Cannot connect to OpenSearch!")
             return
             
         logger.info("Updating index settings...")
         
         # Get all indices
-        indices = elastic_config.client.indices.get(index="*")
+        indices = opensearch_config.client.indices.get(index="*")
         
         if not indices:
             logger.info("No indices found to update!")
@@ -108,7 +108,7 @@ def update_index_settings():
         logger.info(f"Found {len(indices)} indices to update:")
         for idx in indices:
             logger.info(f"Updating settings for {idx}...")
-            success = elastic_config.update_index_settings(idx)
+            success = opensearch_config.update_index_settings(idx)
             logger.info(f"  - Success: {success}")
             
     except Exception as e:
