@@ -95,9 +95,9 @@ Okay, let's enhance the implementation plan to include environment setup details
             *   Redis installed and running.
         *   *Acceptance Criteria:*
             *   `redis-cli ping` should respond with `PONG`.
-    5. **Elasticsearch Setup**
-         * *Task:* [DONE] Create the necessary configuration for ElasticSearch.
-         * *Details:* A configuration object should be created that contains the connection details for Elasticsearch.
+    5. **OpenSearch Setup**
+         * *Task:* [DONE] Create the necessary configuration for OpenSearch.
+         * *Details:* A configuration object should be created that contains the connection details for OpenSearch.
          * *Deliverable:*
             * A file in /utils/elastic.py with the configuration details
          * *Acceptance Criteria:*
@@ -194,28 +194,28 @@ Okay, let's enhance the implementation plan to include environment setup details
     *   Axios is ready to be used.
     *   A basic table component that shows the list of files.
 
-**Phase 4: Elasticsearch Setup (1 Week)**
+**Phase 4: OpenSearch Setup (1 Week)**
 
-*   **Goal:** Install and configure Elasticsearch for data indexing and querying.
+*   **Goal:** Install and configure OpenSearch for data indexing and querying.
 *   **Tasks:**
-    1.  **Elasticsearch Installation:**
-        *   *Task:* Install Elasticsearch on the server.
-        *   *Details:* Use the official documentation from elastic.
+    1.  **OpenSearch Installation:**
+        *   *Task:* Install OpenSearch on the server.
+        *   *Details:* Use Docker Compose to run OpenSearch container.
         *   *Deliverable:*
-            *   A running Elasticsearch instance in the server.
+            *   A running OpenSearch instance in the server.
         *   *Acceptance Criteria:*
-            *   A call to Elasticsearch using curl returns data.
-    2.  **Elasticsearch Testing (Python)**
-        *   *Task:* Create a python script that connects to Elasticsearch to test it.
-        *   *Details:* A simple python script that reads/writes a test document to Elasticsearch using the configuration created in Phase 2.
+            *   A call to OpenSearch using curl returns data.
+    2.  **OpenSearch Testing (Python)**
+        *   *Task:* Create a python script that connects to OpenSearch to test it.
+        *   *Details:* A simple python script that reads/writes a test document to OpenSearch using the configuration created in Phase 2.
         *   *Deliverable:*
             *   A script that writes and retrieves the test document.
         *   *Acceptance Criteria:*
             *   The test script inserts and gets the test document.
 
 *   **Phase 4 Deliverables:**
-    *   A running Elasticsearch instance.
-    *   A working python test script that proves Elasticsearch is working.
+    *   A running OpenSearch instance.
+    *   A working python test script that proves OpenSearch is working.
 
 **Important Notes for Developers:**
 

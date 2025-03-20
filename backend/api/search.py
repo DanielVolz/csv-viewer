@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import Optional
 import logging
 from config import settings
-from tasks.tasks import search_elasticsearch
+from tasks.tasks import search_opensearch
 from celery.result import AsyncResult
 
 # Configure logging
@@ -49,7 +49,7 @@ async def search_files(
         # General search
         if query:
             # Submit search task to Celery
-            task = search_elasticsearch.delay(
+            task = search_opensearch.delay(
                 query=query,
                 field=field,
                 include_historical=include_historical

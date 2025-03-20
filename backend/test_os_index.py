@@ -12,24 +12,24 @@ logging.basicConfig(
 )
 
 
-logger = logging.getLogger("test_es_index")
+logger = logging.getLogger("test_os_index")
 
 
 def list_indices():
-    """List all indices in Elasticsearch"""
+    """List all indices in OpenSearch"""
     try:
-        # Test connection to Elasticsearch
+        # Test connection to OpenSearch
         if not elastic_config.client.ping():
-            logger.error("Cannot connect to Elasticsearch!")
+            logger.error("Cannot connect to OpenSearch!")
             return
             
-        logger.info("Successfully connected to Elasticsearch")
+        logger.info("Successfully connected to OpenSearch")
         
         # Get all indices
         indices = elastic_config.client.indices.get(index="*")
         
         if not indices:
-            logger.info("No indices found in Elasticsearch!")
+            logger.info("No indices found in OpenSearch!")
             return
             
         logger.info(f"Found {len(indices)} indices:")
@@ -91,9 +91,9 @@ def test_search():
 def update_index_settings():
     """Update settings for all existing indices"""
     try:
-        # Test connection to Elasticsearch
+        # Test connection to OpenSearch
         if not elastic_config.client.ping():
-            logger.error("Cannot connect to Elasticsearch!")
+            logger.error("Cannot connect to OpenSearch!")
             return
             
         logger.info("Updating index settings...")

@@ -58,14 +58,14 @@ function FileTable() {
       </Typography>
       
       <TableContainer component={Paper} sx={{ margin: '20px 0' }}>
-        <Table sx={{ minWidth: 650 }} aria-label="netspeed files table">
+        <Table sx={{ tableLayout: 'fixed' }} aria-label="netspeed files table">
           <TableHead>
             <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
-              <TableCell><Typography variant="subtitle1"><strong>File Name</strong></Typography></TableCell>
-              <TableCell><Typography variant="subtitle1"><strong>Status</strong></Typography></TableCell>
-              <TableCell><Typography variant="subtitle1"><strong>Format</strong></Typography></TableCell>
-              <TableCell><Typography variant="subtitle1"><strong>Creation Date</strong></Typography></TableCell>
-              <TableCell><Typography variant="subtitle1"><strong>Path</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>File Name</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>Status</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>Format</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>Creation Date</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>Path</strong></Typography></TableCell>
             </TableRow>
           </TableHead>
           <TableBody>

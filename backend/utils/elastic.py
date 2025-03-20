@@ -1,4 +1,4 @@
-from elasticsearch import Elasticsearch, helpers
+from opensearchpy import OpenSearch, helpers
 from config import settings
 import logging
 from pathlib import Path
@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class ElasticConfig:
-    """Elasticsearch configuration and client management."""
+    """OpenSearch configuration and client management."""
     
     def __init__(self):
-        """Initialize Elasticsearch configuration."""
-        self.hosts = [settings.ELASTICSEARCH_URL]
+        """Initialize OpenSearch configuration."""
+        self.hosts = [settings.OPENSEARCH_URL]
         self._client = None
         self.index_mappings = {
             "mappings": {
@@ -53,16 +53,19 @@ class ElasticConfig:
         }
     
     @property
-    def client(self) -> Elasticsearch:
+    def client(self) -> OpenSearch:
         """
-        Get or create Elasticsearch client.
+        Get or create OpenSearch client.
         
         Returns:
-            Elasticsearch: Configured Elasticsearch client
+            OpenSearch: Configured OpenSearch client
         """
         if self._client is None:
-            self._client = Elasticsearch(
+            self._client = OpenSearch(
                 hosts=self.hosts,
+                http_auth=('admin', 'Alterichkotzepass23$'),  # Basic authentication
+                verify_certs=False,  # Skip SSL verification
+                ssl_show_warn=False,  # Suppress SSL warnings
                 request_timeout=30,  # 30 second timeout
                 retry_on_timeout=True,
                 max_retries=3
@@ -70,11 +73,11 @@ class ElasticConfig:
             # Test connection
             try:
                 if self._client.ping():
-                    logger.info("Successfully connected to Elasticsearch")
+                    logger.info("Successfully connected to OpenSearch")
                 else:
-                    logger.warning("Could not connect to Elasticsearch")
+                    logger.warning("Could not connect to OpenSearch")
             except Exception as e:
-                logger.error(f"Error connecting to Elasticsearch: {e}")
+                logger.error(f"Error connecting to OpenSearch: {e}")
                 
         return self._client
     
@@ -131,7 +134,7 @@ class ElasticConfig:
             
     def create_index(self, index_name: str) -> bool:
         """
-        Create an Elasticsearch index with the appropriate mappings.
+        Create an OpenSearch index with the appropriate mappings.
         
         Args:
             index_name: Name of the index to create
@@ -158,7 +161,7 @@ class ElasticConfig:
             
     def delete_index(self, index_name: str) -> bool:
         """
-        Delete an Elasticsearch index.
+        Delete an OpenSearch index.
         
         Args:
             index_name: Name of the index to delete
@@ -238,7 +241,7 @@ class ElasticConfig:
     
     def index_csv_file(self, file_path: str) -> Tuple[bool, int]:
         """
-        Index a CSV file into Elasticsearch.
+        Index a CSV file into OpenSearch.
         
         Args:
             file_path: Path to the CSV file to index
@@ -273,7 +276,7 @@ class ElasticConfig:
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False, 
               size: int = 20000) -> Tuple[List[str], List[Dict[str, Any]]]:
         """
-        Search Elasticsearch for documents matching the query.
+        Search OpenSearch for documents matching the query.
         
         Args:
             query: Query string

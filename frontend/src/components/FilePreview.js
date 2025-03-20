@@ -24,13 +24,13 @@ import useFilePreview from '../hooks/useFilePreview';
 function FilePreview() {
   // Define possible preview limits
   const previewLimits = [10, 25, 50, 100];
-  
+
   // Use state to track the selected limit
   const [previewLimit, setPreviewLimit] = useState(100);
-  
+
   // Use the hook with the dynamic limit
   const { previewData, loading, error } = useFilePreview(previewLimit);
-  
+
   // Handle change in preview limit
   const handleLimitChange = (event) => {
     setPreviewLimit(Number(event.target.value));
@@ -66,7 +66,7 @@ function FilePreview() {
         <Typography variant="h5">
           CSV File Preview (First {previewData.data.length} Entries)
         </Typography>
-        
+
         <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
           <InputLabel id="preview-limit-label">Show Entries</InputLabel>
           <Select
@@ -81,14 +81,14 @@ function FilePreview() {
           </Select>
         </FormControl>
       </Box>
-      
+
       <Alert severity="info" sx={{ margin: '20px 0' }}>
         Showing first {previewData.data.length} entries of {previewData.line_count || previewData.data.length} total
       </Alert>
-      
-      <TableContainer 
-        component={Paper} 
-        sx={{ 
+
+      <TableContainer
+        component={Paper}
+        sx={{
           margin: '20px 0',
           height: 'auto',
           maxHeight: 'none',
@@ -102,9 +102,9 @@ function FilePreview() {
               {previewData.headers.map((header) => (
                 <TableCell key={header}>
                   <Typography variant="subtitle2">
-                    <strong>{header}</strong>
-                  </Typography>
-                </TableCell>
+                      <strong>{header}</strong>
+                    </Typography>
+                  </TableCell>
               ))}
             </TableRow>
           </TableHead>
@@ -117,12 +117,12 @@ function FilePreview() {
                 {previewData.headers.map((header) => {
                   // Handle special formatting for specific columns
                   let cellContent = row[header];
-                  
+
                   // Format dates
                   if (header === "Creation Date" && cellContent) {
                     cellContent = new Date(cellContent).toLocaleString();
                   }
-                  
+
                   // Format MAC addresses with colons
                   if ((header === "MAC Address" || header === "MAC Address 2") && cellContent) {
                     if (cellContent.length === 12 && !cellContent.includes(':')) {
@@ -130,7 +130,7 @@ function FilePreview() {
                       cellContent = formattedMac;
                     }
                   }
-                  
+
                   return (
                     <TableCell key={`${index}-${header}`}>
                       {cellContent}

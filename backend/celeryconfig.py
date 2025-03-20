@@ -8,7 +8,9 @@ result_backend = settings.REDIS_URL
 
 # Task routes
 task_routes = {
-    'tasks.parse_csv': {'queue': 'csv_processing'}
+    'tasks.search_opensearch': {'queue': 'search'},
+    'tasks.index_csv': {'queue': 'csv_processing'},
+    'tasks.index_all_csv_files': {'queue': 'csv_processing'}
 }
 
 # Task serialization format

@@ -18,7 +18,7 @@ app.config_from_object('celeryconfig')
 @app.task(name='tasks.index_csv')
 def index_csv(file_path: str) -> dict:
     """
-    Task to index a CSV file in Elasticsearch.
+    Task to index a CSV file in OpenSearch.
     
     Args:
         file_path: Path to the CSV file to index
@@ -126,10 +126,10 @@ def index_all_csv_files(directory_path: str, pattern: str = "*.csv") -> dict:
         }
 
 
-@app.task(name='tasks.search_elasticsearch')
-def search_elasticsearch(query: str, field: Optional[str] = None, include_historical: bool = False) -> dict:
+@app.task(name='tasks.search_opensearch')
+def search_opensearch(query: str, field: Optional[str] = None, include_historical: bool = False) -> dict:
     """
-    Task to search Elasticsearch.
+    Task to search OpenSearch.
     
     Args:
         query: Search query
@@ -139,7 +139,7 @@ def search_elasticsearch(query: str, field: Optional[str] = None, include_histor
     Returns:
         dict: A dictionary containing the search results
     """
-    logger.info(f"Searching Elasticsearch for '{query}'")
+    logger.info(f"Searching OpenSearch for '{query}'")
     
     try:
         headers, documents = elastic_config.search(

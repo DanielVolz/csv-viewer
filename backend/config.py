@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     
     # Database Settings
     REDIS_URL: str = "redis://localhost:6379"
-    ELASTICSEARCH_URL: str = "http://localhost:9200"
+    OPENSEARCH_URL: str = "http://localhost:9200"
     
     # Server Settings
     HOST: str = "0.0.0.0"
