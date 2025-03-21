@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     CSV_FILES_DIR: str = "/app/data"
 
     # Database Settings
-    REDIS_URL: str = "redis://localhost:6379"
-    OPENSEARCH_URL: str = "http://localhost:9200"
+    REDIS_URL: str = "redis://redis:6379"
+    OPENSEARCH_URL: str = "http://opensearch:9200"
     OPENSEARCH_PASSWORD: Optional[str] = None
 
     # Server Settings
