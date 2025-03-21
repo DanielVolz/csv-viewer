@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -10,14 +11,15 @@ class Settings(BaseSettings):
     # API Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "CSV Data Viewer"
-    
+
     # File Settings
-    CSV_FILES_DIR: str = "./example-data"
-    
+    CSV_FILES_DIR: str = "/app/data"
+
     # Database Settings
     REDIS_URL: str = "redis://localhost:6379"
     OPENSEARCH_URL: str = "http://localhost:9200"
-    
+    OPENSEARCH_PASSWORD: Optional[str] = None
+
     # Server Settings
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -34,7 +36,6 @@ class Settings(BaseSettings):
     
     class Config:
         case_sensitive = True
-        env_file = ".env"
 
 
 @lru_cache()

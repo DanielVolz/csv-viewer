@@ -8,6 +8,8 @@ import logging
 from models.file import FileModel
 from config import settings
 from utils.csv_utils import read_csv_file
+from tasks.tasks import index_all_csv_files, app
+from celery import current_app
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +30,7 @@ async def list_files():
     """
     try:
         # Get path to CSV files directory
-        csv_dir = Path(settings.CSV_FILES_DIR)
+        csv_dir = Path("/app/data")
         
         # List all netspeed CSV files
         files = []
@@ -62,7 +64,7 @@ async def get_netspeed_info():
     """
     try:
         # Get path to current CSV file
-        csv_dir = Path(settings.CSV_FILES_DIR)
+        csv_dir = Path("/app/data")
         current_file = csv_dir / "netspeed.csv"
         
         if not current_file.exists():
@@ -106,12 +108,12 @@ async def preview_current_file(limit: int = 25):
     Args:
         limit: Maximum number of entries to return (default 25)
         
-    Returns:
+        Returns:
         Dictionary with headers and preview rows
     """
     try:
         # Get path to current CSV file
-        csv_dir = Path(settings.CSV_FILES_DIR)
+        csv_dir = Path("/app/data")
         current_file = csv_dir / "netspeed.csv"
         
         if not current_file.exists():
@@ -141,4 +143,18 @@ async def preview_current_file(limit: int = 25):
         raise HTTPException(
             status_code=500,
             detail="Failed to get file preview"
+        )
+
+
+@router.get("/reload_celery")
+async def reload_celery():
+    """Reload Celery configuration."""
+    try:
+        app.control.purge()
+        return {"message": "Celery configuration reloaded"}
+    except Exception as e:
+        logger.error(f"Error reloading Celery configuration: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to reload Celery configuration"
         )

@@ -82,7 +82,7 @@ class OpenSearchConfig:
             # Create client with connection parameters
             opensearch_params = {
                 'hosts': self.hosts,
-                'http_auth': ('admin', 'Alterichkotzepass23$'),  # Should be in environment vars
+                'http_auth': ('admin', settings.OPENSEARCH_PASSWORD),  # Use from settings
                 'verify_certs': False,
                 'ssl_show_warn': False,
                 'request_timeout': 30,

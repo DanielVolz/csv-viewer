@@ -53,11 +53,11 @@ def trigger_indexing():
         # Use the index_all_csv_files function from the ElasticConfig class
         from config import settings
         
-        logger.info(f"Indexing CSV files from {settings.CSV_FILES_DIR}")
+        logger.info(f"Indexing CSV files from /app/data")
         
         # Index each CSV file
         from pathlib import Path
-        csv_dir = Path(settings.CSV_FILES_DIR)
+        csv_dir = Path("/app/data")
         csv_files = list(csv_dir.glob("*.csv*"))
         
         logger.info(f"Found {len(csv_files)} CSV files: {csv_files}")

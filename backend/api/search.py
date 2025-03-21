@@ -110,7 +110,7 @@ async def index_all_csv_files(
     
     try:
         # Submit indexing task to Celery
-        task = index_all_csv_files.delay(settings.CSV_FILES_DIR)
+        task = index_all_csv_files.delay("/app/data")
         
         return {
             "success": True,

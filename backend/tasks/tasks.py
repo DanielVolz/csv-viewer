@@ -73,7 +73,7 @@ def index_all_csv_files(directory_path: str) -> dict:
         path = Path(directory_path)
         
         # Use a list comprehension with multiple patterns to find all relevant files
-        patterns = ["netspeed.csv", "netspeed.csv.*"]
+        patterns = ["netspeed.csv", "netspeed.csv.*", "netspeed.csv_bak"]
         files = []
         for pattern in patterns:
             files.extend(list(path.glob(pattern)))
