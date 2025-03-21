@@ -301,3 +301,52 @@ Implement OpenSearch integration for efficient CSV data indexing and searching.
 ### Security Recommendations
 - Credentials should be moved from hardcoded values to environment variables
 - Password should be stored securely using environment variables or secrets management
+
+## Task 2: Comprehensive Testing Implementation
+
+### Objective
+Develop a comprehensive test suite for both frontend and backend components to ensure application reliability, catch regressions, and facilitate future development.
+
+### Technical Requirements
+
+#### Frontend Tests
+
+1. **Component Tests**
+   - Created tests for all React components:
+     - `CSVSearch.test.js`: Tests search functionality, result display, and pagination
+     - `DarkModeToggle.test.js`: Tests theme switching and persistence
+     - `FileInfoBox.test.js`: Tests API data fetching and information display
+     - `FileTable.test.js`: Tests file listing and status indicators
+     - `FilePreview.test.js`: Tests CSV data preview and limit adjustments
+
+2. **Custom Hook Tests**
+   - Implemented tests for all custom hooks:
+     - `useFiles.test.js`: Tests file listing API integration
+     - `useFilePreview.test.js`: Tests CSV preview data fetching and processing
+     - `useSearchCSV.test.js`: Tests search functionality and pagination
+
+#### Backend Tests
+
+1. **API Endpoint Tests**
+   - Created tests for FastAPI endpoints:
+     - `test_search.py`: Tests search query handling, result formatting, and error cases
+     - `test_files.py`: Tests file listing, preview generation, and metadata extraction
+
+2. **Utility Function Tests**
+   - Implemented tests for utility modules:
+     - `test_opensearch.py`: Tests OpenSearch integration, query building, and result processing
+     - `test_csv_utils.py`: Tests CSV parsing, formatting, and error handling
+
+### Implementation
+- Frontend tests use React Testing Library and Jest
+- Backend tests use pytest and FastAPI's TestClient
+- All tests include positive cases, error handling, and edge cases
+- Mocks and fixtures are used to isolate components during testing
+- Documentation explains how to run tests and add new ones
+
+### Acceptance Criteria
+1. All frontend components are covered by tests for rendering and functionality
+2. All backend API endpoints have comprehensive tests
+3. Utility functions are tested for correct behavior and error handling
+4. Tests run successfully and provide clear feedback about failures
+5. Documentation explains the testing approach and how to run tests
