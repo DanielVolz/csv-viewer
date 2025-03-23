@@ -1,6 +1,7 @@
 from opensearchpy import OpenSearch, helpers
 from config import settings
 import logging
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Generator, Optional, Tuple
 from .csv_utils import read_csv_file
@@ -412,6 +413,34 @@ class OpenSearchConfig:
                 },
                 "size": size
             }
+            
+            # Add IP Address partial search with range query ONLY if query looks like a valid IP prefix
+            # Use a strict regex to validate IP-like patterns and avoid errors with non-IP search terms
+            ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$')
+            if ip_pattern.match(query):
+                try:
+                    # For partial IP matching, we'll construct a range query
+                    # If query = "10.0", search all IPs from "10.0.0.0" to "10.0.255.255"
+                    ip_parts = query.split('.')
+                    if 1 <= len(ip_parts) <= 3:  # Partial IP with 1-3 octets
+                        lower_bound = query
+                        while lower_bound.count('.') < 3:
+                            lower_bound += ".0"
+                            
+                        upper_bound = query
+                        while upper_bound.count('.') < 3:
+                            upper_bound += ".255"
+                            
+                        search_query["query"]["bool"]["should"].append({
+                            "range": {
+                                "IP Address": {
+                                    "gte": lower_bound,
+                                    "lte": upper_bound
+                                }
+                            }
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to add IP range search for '{query}': {e}")
             
             # Log the final query for debugging
             logger.info(f"Final search query: {search_query}")
