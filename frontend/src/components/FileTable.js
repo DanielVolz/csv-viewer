@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Table,
   TableBody,
@@ -11,15 +11,44 @@ import {
   CircularProgress,
   Alert,
   Box,
-  Chip
+  Chip,
+  Button,
+  Snackbar
 } from '@mui/material';
+import axios from 'axios';
 import useFiles from '../hooks/useFiles';
 
 /**
  * Component that displays a table of netspeed CSV files
  */
 function FileTable() {
-  const { files, loading, error } = useFiles();
+  const { files, loading, error, refetch } = useFiles();
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMessage, setReindexMessage] = useState('');
+  const [openSnackbar, setOpenSnackbar] = useState(false);
+  
+  const handleReindex = async () => {
+    try {
+      setReindexing(true);
+      const response = await axios.get('http://localhost:8000/api/files/reindex');
+      setReindexMessage(response.data.message || 'Reindexing in progress...');
+      setOpenSnackbar(true);
+      // Wait a moment and then refetch to show updated data
+      setTimeout(() => {
+        refetch();
+        setReindexing(false);
+      }, 2000);
+    } catch (error) {
+      console.error('Error triggering reindex:', error);
+      setReindexMessage('Error triggering reindex. Please try again.');
+      setOpenSnackbar(true);
+      setReindexing(false);
+    }
+  };
+  
+  const handleCloseSnackbar = () => {
+    setOpenSnackbar(false);
+  };
 
   if (loading) {
     return (
@@ -47,9 +76,26 @@ function FileTable() {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>
-        CSV File List
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h5">
+          CSV File List
+        </Typography>
+        <Button 
+          variant="contained" 
+          color="primary" 
+          onClick={handleReindex}
+          disabled={reindexing}
+        >
+          {reindexing ? 'Reindexing...' : 'Reindex All Files'}
+        </Button>
+      </Box>
+      
+      <Snackbar
+        open={openSnackbar}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        message={reindexMessage}
+      />
       
       <Typography variant="body2" color="text.secondary" paragraph>
         The following CSV files are available. Files are listed with the current file first, 
@@ -105,7 +151,7 @@ function FileTable() {
                   )}
                 </TableCell>
                 <TableCell>
-                  {file.name === 'netspeed.csv' ? (
+                  {file.format === 'new' ? (
                     <Chip 
                       label="New Format (14 columns)" 
                       color="primary" 

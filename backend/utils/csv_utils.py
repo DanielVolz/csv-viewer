@@ -49,9 +49,14 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         # Get file information
         file_name = os.path.basename(file_path)
         file_stat = os.stat(file_path)
+        # Format the date to match the OpenSearch mapping format (yyyy-MM-dd)
+        # This will remove any time component that may cause parsing issues
         creation_date = datetime.fromtimestamp(
             file_stat.st_ctime
-        ).strftime('%Y-%m-%d %H:%M:%S')
+        ).strftime('%Y-%m-%d')
+        
+        # Log the formatted date for debugging
+        logger.info(f"Formatted date for {file_path}: {creation_date}")
         
         with open(file_path, 'r') as csv_file:
             csv_reader = csv.reader(csv_file)
@@ -78,7 +83,7 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                     
                     # Add file name, creation date, and row number
                     row_dict["File Name"] = file_name
-                    row_dict["Creation Date"] = creation_date
+                    row_dict["Creation Date"] = creation_date  # Make sure this has only the date part
                     # Add row number as string to match other values
                     row_dict["#"] = str(idx)
                     

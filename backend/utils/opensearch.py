@@ -264,6 +264,20 @@ class OpenSearchConfig:
             # Clean up data as needed (handle nulls, etc.)
             doc = {k: (v if v else "") for k, v in row.items()}
             
+            # Handle Creation Date format specifically to ensure it matches the mapping
+            if "Creation Date" in doc:
+                try:
+                    # Try to parse the date and reformat it to ensure yyyy-MM-dd format
+                    date_str = doc["Creation Date"]
+                    # Check if the date has a time component
+                    if " " in date_str:
+                        # If it contains a space, it likely has a time component
+                        # Extract just the date part (before the space)
+                        doc["Creation Date"] = date_str.split(" ")[0]
+                    logger.info(f"Formatted Creation Date for indexing: {doc['Creation Date']}")
+                except Exception as e:
+                    logger.warning(f"Error formatting date: {e}, using original: {doc.get('Creation Date', '')}")
+            
             # Convert all values to strings to avoid mapping errors
             doc = {k: str(v) for k, v in doc.items()}
 

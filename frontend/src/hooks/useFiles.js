@@ -1,17 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 /**
  * Custom hook for fetching files from the backend API
- * @returns {Object} { files, loading, error }
+ * @returns {Object} { files, loading, error, refetch }
  */
 function useFiles() {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const fetchFiles = async () => {
+  const fetchFiles = useCallback(async () => {
       try {
         setLoading(true);
         // Call the backend API endpoint
@@ -29,12 +28,17 @@ function useFiles() {
       } finally {
         setLoading(false);
       }
-    };
-
-    fetchFiles();
   }, []);
 
-  return { files, loading, error };
+  useEffect(() => {
+    fetchFiles();
+  }, [fetchFiles]);
+
+  const refetch = useCallback(() => {
+    fetchFiles();
+  }, [fetchFiles]);
+
+  return { files, loading, error, refetch };
 }
 
 export default useFiles;

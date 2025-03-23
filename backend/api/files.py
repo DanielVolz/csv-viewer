@@ -78,7 +78,7 @@ async def get_netspeed_info():
         # Get file creation date
         creation_time = current_file.stat().st_mtime
         creation_date = datetime.fromtimestamp(creation_time).strftime(
-            "%Y-%m-%d %H:%M:%S")
+            "%Y-%m-%d")
         
         # Count lines (subtract 1 for header)
         with open(current_file, 'r') as f:
@@ -157,6 +157,35 @@ async def reload_celery():
         raise HTTPException(
             status_code=500,
             detail="Failed to reload Celery configuration"
+        )
+
+
+@router.get("/reindex")
+async def reindex_all_files():
+    """
+    Trigger reindexing of all CSV files while the app is running.
+    
+    Returns:
+        Dictionary with the status of the reindexing task
+    """
+    try:
+        # Get path to CSV files directory
+        csv_dir = "/app/data"
+        
+        # Trigger the Celery task asynchronously
+        task = index_all_csv_files.delay(csv_dir)
+        
+        return {
+            "success": True,
+            "message": "Reindexing task has been triggered",
+            "task_id": task.id
+        }
+        
+    except Exception as e:
+        logger.error(f"Error triggering reindexing task: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to trigger reindexing task"
         )
 
 
