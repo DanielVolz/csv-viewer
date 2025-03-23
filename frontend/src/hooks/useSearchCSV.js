@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
+import { toast } from 'react-toastify';
 
 // Define the desired column order - same as in useFilePreview.js
 const DESIRED_ORDER = [
@@ -33,7 +34,9 @@ function useSearchCSV() {
 
   const searchAll = async (searchTerm, includeHistorical = true) => {
     if (!searchTerm) {
-      setError('Please enter a search term');
+      const errorMessage = 'Please enter a search term';
+      setError(errorMessage);
+      toast.warning(errorMessage);
       return false;
     }
 
@@ -80,15 +83,31 @@ function useSearchCSV() {
           data: filteredData
         });
       } else {
-        // If no data or error, just set the original response
-        setResults(originalData);
+      // If no data or error, just set the original response
+      setResults(originalData);
+      
+      // Show a toast notification for no results
+      if (originalData.success && (!Array.isArray(originalData.data) || originalData.data.length === 0)) {
+        toast.info('No results found for your search term.', {
+          position: "top-right",
+          autoClose: 3000
+        });
       }
+    }
       
       // Handle pagination
       if (response.data.success && Array.isArray(response.data.data)) {
         const totalItems = response.data.data.length;
         const pageSize = pagination.pageSize;
         const totalPages = Math.ceil(totalItems / pageSize);
+        
+        // Show success toast with result count
+        if (totalItems > 0) {
+          toast.success(`Found ${totalItems} results for "${searchTerm}"`, {
+            position: "top-right",
+            autoClose: 3000
+          });
+        }
         
         setPagination({
           ...pagination,
@@ -102,12 +121,19 @@ function useSearchCSV() {
       console.error('Error searching term:', err);
       
       // Handle timeout errors specifically
+      let errorMessage = '';
       if (err.code === 'ECONNABORTED') {
-        setError('Search timed out. Please try a more specific search term.');
+        errorMessage = 'Search timed out. Please try a more specific search term.';
+        setError(errorMessage);
+        toast.error(errorMessage);
       } else if (err.response && err.response.status === 504) {
-        setError('Search timed out on the server. Please try a more specific search term.');
+        errorMessage = 'Search timed out on the server. Please try a more specific search term.';
+        setError(errorMessage);
+        toast.error(errorMessage);
       } else {
-        setError('Failed to search. Please try again later.');
+        errorMessage = 'Failed to search. Please try again later.';
+        setError(errorMessage);
+        toast.error(errorMessage);
       }
       
       // Clear results

@@ -73,7 +73,7 @@ const FileInfoBox = () => {
       className="file-info-paper"
       sx={{ 
         p: 0, 
-        mb: 4, 
+        mb: 2, 
         borderRadius: 2,
         overflow: 'hidden',
         transition: 'all 0.3s ease'
@@ -82,7 +82,7 @@ const FileInfoBox = () => {
       {/* Header with gradient background */}
       <Box 
         sx={{ 
-          p: 2, 
+          p: 1, 
           background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
           color: 'white',
           display: 'flex', 
@@ -91,8 +91,8 @@ const FileInfoBox = () => {
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <InfoIcon sx={{ mr: 1.5, fontSize: 28 }} />
-          <Typography variant="h6" fontWeight="500">
+          <InfoIcon sx={{ mr: 1, fontSize: 24 }} />
+          <Typography variant="subtitle1" fontWeight="normal">
             Current CSV File Information
           </Typography>
         </Box>
@@ -110,7 +110,7 @@ const FileInfoBox = () => {
       <Divider />
       
       {/* Content */}
-      <CardContent sx={{ p: 3, backgroundColor: '#f8f9fa' }}>
+      <CardContent sx={{ p: 2, backgroundColor: '#f8f9fa' }}>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={4}>
             <Box 
@@ -119,17 +119,17 @@ const FileInfoBox = () => {
                 display: 'flex', 
                 alignItems: 'center',
                 backgroundColor: 'white',
-                p: 1.5,
+                p: 1,
                 borderRadius: 1,
                 boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
               }}
             >
-              <InsertDriveFileIcon sx={{ color: '#1976d2', mr: 1.5, fontSize: 24 }} />
+              <InsertDriveFileIcon sx={{ color: '#1976d2', mr: 1, fontSize: 20 }} />
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  FILE NAME
+                  File
                 </Typography>
-                <Typography variant="body1" fontWeight="medium">
+                <Typography variant="body2" fontWeight="normal">
                   netspeed.csv
                 </Typography>
               </Box>
@@ -143,17 +143,17 @@ const FileInfoBox = () => {
                 display: 'flex', 
                 alignItems: 'center',
                 backgroundColor: 'white',
-                p: 1.5,
+                p: 1,
                 borderRadius: 1,
                 boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
               }}
             >
-              <EventIcon sx={{ color: '#ff9800', mr: 1.5, fontSize: 24 }} />
+              <EventIcon sx={{ color: '#ff9800', mr: 1, fontSize: 20 }} />
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  CREATED ON
+                  Created
                 </Typography>
-                <Typography variant="body1" fontWeight="medium">
+                <Typography variant="body2" fontWeight="normal">
                   {fileInfo?.date || 'Unknown'}
                 </Typography>
               </Box>
@@ -167,17 +167,17 @@ const FileInfoBox = () => {
                 display: 'flex', 
                 alignItems: 'center',
                 backgroundColor: 'white',
-                p: 1.5,
+                p: 1,
                 borderRadius: 1,
                 boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
               }}
             >
-              <PhoneAndroidIcon sx={{ color: '#4caf50', mr: 1.5, fontSize: 24 }} />
+              <PhoneAndroidIcon sx={{ color: '#4caf50', mr: 1, fontSize: 20 }} />
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  PHONE ENTRIES
+                  Entries
                 </Typography>
-                <Typography variant="body1" fontWeight="medium">
+                <Typography variant="body2" fontWeight="normal">
                   {fileInfo?.line_count.toLocaleString() || '0'} lines
                 </Typography>
               </Box>

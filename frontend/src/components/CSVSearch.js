@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { 
-  Box, 
-  TextField, 
-  Button, 
-  Typography, 
+import {
+  Box,
+  TextField,
+  Button,
+  Typography,
   Paper,
   Table,
   TableBody,
@@ -22,34 +22,40 @@ import {
   InputLabel,
   Grid
 } from '@mui/material';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import SearchIcon from '@mui/icons-material/Search';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 
 /**
  * Component for searching CSV files and displaying results
- * Also shows the first 25 entries of the CSV file as initial results
+ * Also shows the first 100 entries of the CSV file as initial results
  */
 function CSVSearch() {
   const [searchTerm, setSearchTerm] = useState('');
   const [includeHistorical, setIncludeHistorical] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
-  const { 
-    searchAll, 
-    results, 
+  const {
+    searchAll,
+    results,
     allResults,
-    loading: searchLoading, 
+    loading: searchLoading,
     error: searchError,
     pagination,
     setPage,
     setPageSize
   } = useSearchCSV();
-  const { previewData, loading: previewLoading, error: previewError } = useFilePreview(25);
+  const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
 
   const handleSearch = async () => {
     if (!searchTerm) return;
     const success = await searchAll(searchTerm, includeHistorical);
-    if (success) setHasSearched(true);
+    
+    if (success) {
+      setHasSearched(true);
+      // Toast notifications for search results are now handled in the useSearchCSV hook
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -60,10 +66,21 @@ function CSVSearch() {
 
   return (
     <Box sx={{ mb: 4 }}>
+      <ToastContainer 
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+      />
       <Typography variant="h5" gutterBottom>
         CSV Search
       </Typography>
-      
+
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
@@ -78,9 +95,9 @@ function CSVSearch() {
               helperText="Search for any text across all fields in the CSV files"
               sx={{ mr: 2 }}
             />
-            <Button 
-              variant="contained" 
-              color="primary" 
+            <Button
+              variant="contained"
+              color="primary"
               onClick={handleSearch}
               startIcon={<SearchIcon />}
               sx={{ height: 56 }}
@@ -89,7 +106,7 @@ function CSVSearch() {
               Search
             </Button>
           </Box>
-          
+
           <FormControlLabel
             control={
               <Checkbox
@@ -121,22 +138,22 @@ function CSVSearch() {
       {!searchLoading && !previewLoading && (hasSearched ? results : previewData) && (
         <Box>
           <Typography variant="h6" gutterBottom>
-            {hasSearched ? "Search Results" : "CSV File Preview (First 25 Entries)"}
+            {hasSearched ? "Search Results" : "CSV File Preview"}
           </Typography>
-          
+
           <Box sx={{ mb: 2 }}>
-            <Alert 
-              severity={hasSearched ? (results?.success ? "success" : "info") : "info"} 
+            <Alert
+              severity={hasSearched ? (results?.success ? "success" : "info") : "info"}
               sx={{ mb: 2 }}
             >
-              {hasSearched ? results?.message : (previewData?.message || "Showing first 25 entries from the CSV file")}
+              {hasSearched ? results?.message : (previewData?.message || "Showing first 100 entries from the CSV file")}
             </Alert>
-            
+
             {/* Pagination Controls */}
             {hasSearched && results?.success && results?.pagination && (
-              <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
+              <Box sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
                 alignItems: 'center',
                 flexWrap: 'wrap',
                 gap: 2
@@ -144,7 +161,7 @@ function CSVSearch() {
                 <Typography variant="body2">
                   Showing {results.pagination.currentStart} to {results.pagination.currentEnd} of {results.pagination.totalItems} results
                 </Typography>
-                
+
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
                     <InputLabel id="page-size-label">Page Size</InputLabel>
@@ -161,9 +178,9 @@ function CSVSearch() {
                       <MenuItem value={250}>250</MenuItem>
                     </Select>
                   </FormControl>
-                  
-                  <Pagination 
-                    count={pagination.totalPages} 
+
+                  <Pagination
+                    count={pagination.totalPages}
                     page={pagination.page}
                     onChange={(e, page) => setPage(page)}
                     color="primary"
@@ -174,68 +191,109 @@ function CSVSearch() {
               </Box>
             )}
           </Box>
-          
-          {((hasSearched && results?.data && results?.headers) || 
-             (!hasSearched && previewData?.data && previewData?.headers)) && (
-            <TableContainer 
-              component={Paper} 
-              sx={{ 
-                margin: '20px 0', 
-                height: 'auto',
-                maxHeight: 'none',
-                overflow: 'auto',
-                boxShadow: 3
-              }}
-            >
-              <Table sx={{ width: 'auto', tableLayout: 'fixed' }} aria-label="data table">
-                {/* Define column widths */}
-                <colgroup>
-                  <col style={{ minWidth: '120px' }} />
-                  <col style={{ minWidth: '150px' }} />
-                  <col style={{ minWidth: '100px' }} />
-                  <col style={{ minWidth: '100px' }} />
-                  <col style={{ minWidth: '130px' }} />
-                  <col style={{ minWidth: '100px' }} />
-                  <col style={{ minWidth: '80px' }} />
-                  <col style={{ minWidth: '150px' }} />
-                  <col style={{ minWidth: '150px' }} />
-                  <col style={{ minWidth: '120px' }} />
-                  <col style={{ minWidth: '120px' }} />
-                </colgroup>
-                <TableHead>
-                  <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
-                    {(hasSearched ? results.headers : previewData.headers).map((header) => (
-                      <TableCell key={header}>
-                        <Typography variant="subtitle2">
-                          <strong>{header}</strong>
-                        </Typography>
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {hasSearched ? (
-                    results.data === null ? (
-                      <TableRow>
-                        <TableCell colSpan={results.headers.length} align="center">
-                          No data found
+
+          {((hasSearched && results?.data && results?.headers) ||
+            (!hasSearched && previewData?.data && previewData?.headers)) && (
+              <TableContainer
+                component={Paper}
+                sx={{
+                  margin: '20px 0',
+                  height: 'auto',
+                  maxHeight: 'none',
+                  overflow: 'auto',
+                  boxShadow: 3
+                }}
+              >
+                <Table sx={{ width: 'auto', tableLayout: 'fixed' }} aria-label="data table">
+                  <TableHead>
+                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+                      {hasSearched && (
+                        <TableCell>
+                          <Typography variant="subtitle2">
+                            <strong>#</strong>
+                          </Typography>
                         </TableCell>
-                      </TableRow>
-                    ) : Array.isArray(results.data) ? (
-                      results.data.map((row, index) => (
-                        <TableRow
-                          key={index}
-                          sx={{ '&:nth-of-type(odd)': { backgroundColor: '#fafafa' } }}
-                        >
+                      )}
+                      {(hasSearched ? results.headers : previewData.headers).map((header) => (
+                        <TableCell key={header}>
+                          <Typography variant="subtitle2">
+                            <strong>{header}</strong>
+                          </Typography>
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {hasSearched ? (
+                      results.data === null ? (
+                        <TableRow>
+                          <TableCell colSpan={results.headers.length + 1} align="center">
+                            No data found
+                          </TableCell>
+                        </TableRow>
+                      ) : Array.isArray(results.data) ? (
+                        results.data.map((row, index) => (
+                          <TableRow
+                            key={index}
+                            sx={{ '&:nth-of-type(odd)': { backgroundColor: '#fafafa' } }}
+                          >
+                            <TableCell>
+                              {index + 1}
+                            </TableCell>
+                            {results.headers.map((header) => {
+                              // Handle special formatting for specific columns
+                              let cellContent = row[header];
+
+                              // Format dates
+                              if (header === "Creation Date" && cellContent) {
+                                cellContent = new Date(cellContent).toLocaleString();
+                              }
+
+                              return (
+                                <TableCell key={`${index}-${header}`}>
+                                  {cellContent}
+                                </TableCell>
+                              );
+                            })}
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell>
+                            1
+                          </TableCell>
                           {results.headers.map((header) => {
                             // Handle special formatting for specific columns
-                            let cellContent = row[header];
-                            
+                            let cellContent = results.data[header];
+
                             // Format dates
                             if (header === "Creation Date" && cellContent) {
                               cellContent = new Date(cellContent).toLocaleString();
                             }
-                            
+
+                            return (
+                              <TableCell key={header}>
+                                {cellContent}
+                              </TableCell>
+                            );
+                          })}
+                        </TableRow>
+                      )
+                    ) : (
+                      previewData.data.map((row, index) => (
+                        <TableRow
+                          key={index}
+                          sx={{ '&:nth-of-type(odd)': { backgroundColor: '#fafafa' } }}
+                        >
+                          {previewData.headers.map((header) => {
+                            // Handle special formatting for specific columns
+                            let cellContent = row[header];
+
+                            // Format dates
+                            if (header === "Creation Date" && cellContent) {
+                              cellContent = new Date(cellContent).toLocaleString();
+                            }
+
                             return (
                               <TableCell key={`${index}-${header}`}>
                                 {cellContent}
@@ -244,53 +302,11 @@ function CSVSearch() {
                           })}
                         </TableRow>
                       ))
-                    ) : (
-                      <TableRow>
-                        {results.headers.map((header) => {
-                          // Handle special formatting for specific columns
-                          let cellContent = results.data[header];
-                          
-                          // Format dates
-                          if (header === "Creation Date" && cellContent) {
-                            cellContent = new Date(cellContent).toLocaleString();
-                          }
-                          
-                          return (
-                            <TableCell key={header}>
-                              {cellContent}
-                            </TableCell>
-                          );
-                        })}
-                      </TableRow>
-                    )
-                  ) : (
-                    previewData.data.map((row, index) => (
-                      <TableRow
-                        key={index}
-                        sx={{ '&:nth-of-type(odd)': { backgroundColor: '#fafafa' } }}
-                      >
-                        {previewData.headers.map((header) => {
-                          // Handle special formatting for specific columns
-                          let cellContent = row[header];
-                          
-                          // Format dates
-                          if (header === "Creation Date" && cellContent) {
-                            cellContent = new Date(cellContent).toLocaleString();
-                          }
-                          
-                          return (
-                            <TableCell key={`${index}-${header}`}>
-                              {cellContent}
-                            </TableCell>
-                          );
-                        })}
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
         </Box>
       )}
     </Box>

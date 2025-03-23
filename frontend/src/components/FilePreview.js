@@ -16,6 +16,8 @@ import {
   FormControl,
   InputLabel
 } from '@mui/material';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import useFilePreview from '../hooks/useFilePreview';
 
 /**
@@ -33,7 +35,12 @@ function FilePreview() {
 
   // Handle change in preview limit
   const handleLimitChange = (event) => {
-    setPreviewLimit(Number(event.target.value));
+    const newLimit = Number(event.target.value);
+    setPreviewLimit(newLimit);
+    toast.info(`Preview limit updated to ${newLimit} rows`, {
+      position: "top-right",
+      autoClose: 2000
+    });
   };
 
   if (loading) {
@@ -62,6 +69,17 @@ function FilePreview() {
 
   return (
     <Box>
+      <ToastContainer 
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+      />
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5">
           CSV File Preview (First {previewData.data.length} Entries)

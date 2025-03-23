@@ -15,13 +15,8 @@ import Brightness7Icon from '@mui/icons-material/Brightness7';  // Sun icon
 function DarkModeToggle() {
   const { isDarkMode, toggleTheme } = useTheme();
 
-  // Log theme state changes to console
-  useEffect(() => {
-    console.log('Dark mode is:', isDarkMode ? 'ON' : 'OFF');
-  }, [isDarkMode]);
 
   const handleToggle = () => {
-    console.log('Toggle theme clicked, current state:', isDarkMode);
     toggleTheme();
   };
 
@@ -36,10 +31,9 @@ function DarkModeToggle() {
       }}
     >
       <Tooltip title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}>
-        <IconButton 
-          onClick={handleToggle} 
+        <IconButton
+          onClick={handleToggle}
           color="inherit"
-          aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
           sx={{
             backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)',
             '&:hover': {

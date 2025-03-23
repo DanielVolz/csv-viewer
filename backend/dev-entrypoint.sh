@@ -1,11 +1,21 @@
 #!/bin/bash
 set -e
 
-# Install Python dependencies if not already installed
-echo "Ensuring Python dependencies are installed..."
+# Install system dependencies
+echo "Installing system dependencies..."
+apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+echo "Installing Python dependencies..."
 pip install --no-cache-dir -r requirements.txt
 
-# Create data directory if it doesn't exist
+# Make entrypoint.sh executable
+chmod +x /app/entrypoint.sh
+
+# Create directory for CSV files if it doesn't exist
 echo "Ensuring data directory exists..."
 mkdir -p ./data
 
@@ -20,7 +30,7 @@ echo "Celery worker started"
 
 # Start FastAPI application in the background
 echo "Starting FastAPI application..."
-uvicorn main:app --host 0.0.0.0 --port 8000 &
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
 UVICORN_PID=$!
 
 # Wait for the FastAPI application to start
