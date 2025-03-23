@@ -24,20 +24,35 @@ class FileModel(BaseModel):
         name = file_path.split("/")[-1]
         is_current = name == "netspeed.csv"
         
-        # For historical files (netspeed.csv.N), try to get date
+        # Get date for all files
         date = None
-        if not is_current and name.startswith("netspeed.csv."):
-            try:
-                days_ago = int(name.split(".")[-1])
-                date = datetime.now().replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                # Subtract days to get the file's date
-                date = date.fromtimestamp(
-                    date.timestamp() - (days_ago * 24 * 60 * 60)
-                )
-            except (ValueError, IndexError):
-                pass
+        try:
+            import os
+            from pathlib import Path
+            
+            # For all files, try to get the actual modification time
+            file_path_obj = Path(file_path)
+            if file_path_obj.exists():
+                mtime = file_path_obj.stat().st_mtime
+                date = datetime.fromtimestamp(mtime)
+            
+            # If modification time exists but for files with special naming patterns,
+            # we might want to use calculated dates instead in some cases
+            if name.startswith("netspeed.csv.") and name[13:].isdigit():
+                try:
+                    days_ago = int(name.split(".")[-1])
+                    date = datetime.now().replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    # Subtract days to get the file's date
+                    date = date.fromtimestamp(
+                        date.timestamp() - (days_ago * 24 * 60 * 60)
+                    )
+                except (ValueError, IndexError):
+                    pass
+        except Exception:
+            # If any error occurs, just leave date as None
+            pass
         
         return cls(
             name=name,

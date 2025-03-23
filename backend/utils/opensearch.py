@@ -43,10 +43,7 @@ class OpenSearchConfig:
                     "File Name": self.keyword_type,
                     "Creation Date": {
                         "type": "date",
-                        "format": (
-                            "yyyy-MM-dd HH:mm:ss||"
-                            "yyyy-MM-dd||epoch_millis"
-                        )
+                        "format": "yyyy-MM-dd"
                     },
                     "IP Address": {"type": "ip"},
                     "Line Number": self.keyword_type,

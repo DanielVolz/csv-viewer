@@ -122,7 +122,7 @@ function FileTable() {
                   )}
                 </TableCell>
                 <TableCell>
-                  {file.date ? new Date(file.date).toLocaleString() : 'N/A'}
+                  {file.date ? new Date(file.date).toISOString().split('T')[0] : 'N/A'}
                 </TableCell>
                 <TableCell>{file.path}</TableCell>
               </TableRow>

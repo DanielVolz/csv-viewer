@@ -136,9 +136,10 @@ function FilePreview() {
                   // Handle special formatting for specific columns
                   let cellContent = row[header];
 
-                  // Format dates
+                  // Format dates to ISO 8601 (YYYY-MM-DD)
                   if (header === "Creation Date" && cellContent) {
-                    cellContent = new Date(cellContent).toLocaleString();
+                    const date = new Date(cellContent);
+                    cellContent = date.toISOString().split('T')[0];
                   }
 
                   // Format MAC addresses with colons
