@@ -414,23 +414,29 @@ class OpenSearchConfig:
                 "size": size
             }
             
-            # Add IP Address partial search with range query ONLY if query looks like a valid IP prefix
-            # Use a strict regex to validate IP-like patterns and avoid errors with non-IP search terms
-            ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$')
+            # Add IP Address partial search with range query if query looks like a valid IP prefix
+            # Use a regex that allows for trailing dots to handle formats like "10.0.0."
+            ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}\.?$')
             if ip_pattern.match(query):
                 try:
                     # For partial IP matching, we'll construct a range query
                     # If query = "10.0", search all IPs from "10.0.0.0" to "10.0.255.255"
-                    ip_parts = query.split('.')
+                    # First strip any trailing dot for processing
+                    clean_query = query.rstrip('.')
+                    ip_parts = clean_query.split('.')
+                    
                     if 1 <= len(ip_parts) <= 3:  # Partial IP with 1-3 octets
-                        lower_bound = query
+                        # Construct lower bound
+                        lower_bound = clean_query
                         while lower_bound.count('.') < 3:
                             lower_bound += ".0"
-                            
-                        upper_bound = query
+                        
+                        # Construct upper bound
+                        upper_bound = clean_query
                         while upper_bound.count('.') < 3:
                             upper_bound += ".255"
-                            
+                        
+                        # Add the range query
                         search_query["query"]["bool"]["should"].append({
                             "range": {
                                 "IP Address": {
