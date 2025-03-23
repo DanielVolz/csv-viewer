@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Box,
   TextField,
@@ -19,12 +19,12 @@ import {
   Select,
   MenuItem,
   FormControl,
-  InputLabel,
-  Grid
+  InputLabel
 } from '@mui/material';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import SearchIcon from '@mui/icons-material/Search';
+import ClearIcon from '@mui/icons-material/Clear';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 
@@ -36,10 +36,10 @@ function CSVSearch() {
   const [searchTerm, setSearchTerm] = useState('');
   const [includeHistorical, setIncludeHistorical] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
+  const searchFieldRef = useRef(null);
   const {
     searchAll,
     results,
-    allResults,
     loading: searchLoading,
     error: searchError,
     pagination,
@@ -48,13 +48,79 @@ function CSVSearch() {
   } = useSearchCSV();
   const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
 
-  const handleSearch = async () => {
+  // Track typing activity
+  const typingTimeoutRef = useRef(null);
+  // Store last executed search term
+  const lastSearchTermRef = useRef('');
+  // Track if user is in the middle of typing
+  const [isTyping, setIsTyping] = useState(false);
+
+  // Function to actually execute search after user has stopped typing
+  const executeSearch = useCallback((term) => {
+    // Only search if term is valid and different from last search
+    if (term.length >= 3 && term !== lastSearchTermRef.current) {
+      lastSearchTermRef.current = term;
+
+      searchAll(term, includeHistorical, true).then(success => {
+        if (success) {
+          setHasSearched(true);
+        }
+      });
+    }
+  }, [includeHistorical, searchAll]);
+
+  // This function runs on every keystroke
+  const handleInputChange = (e) => {
+    const term = e.target.value;
+    setSearchTerm(term);
+    setIsTyping(true);
+
+    // Clear any existing typing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    if (term === '') {
+      // If search term is empty, clear results
+      setHasSearched(false);
+      lastSearchTermRef.current = '';
+      setIsTyping(false);
+    } else if (term.length >= 3) {
+      // Set a timeout to execute search after user stops typing
+      // This approach is more reliable than debounce for preventing 
+      // intermediate searches
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+        executeSearch(term);
+      }, 1000); // 1-second delay after typing stops
+    }
+  };
+
+  // Function to handle explicit search (button click or Enter)
+  const handleSearch = () => {
     if (!searchTerm) return;
-    const success = await searchAll(searchTerm, includeHistorical);
-    
-    if (success) {
-      setHasSearched(true);
-      // Toast notifications for search results are now handled in the useSearchCSV hook
+
+    // Cancel any pending timeouts
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Update the last search term and execute the search
+    lastSearchTermRef.current = searchTerm;
+    searchAll(searchTerm, includeHistorical, true).then(success => {
+      if (success) {
+        setHasSearched(true);
+      }
+    });
+  };
+
+  // Function to clear the search field
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setHasSearched(false);
+    // Focus on the search field after clearing
+    if (searchFieldRef.current) {
+      searchFieldRef.current.focus();
     }
   };
 
@@ -66,7 +132,7 @@ function CSVSearch() {
 
   return (
     <Box sx={{ mb: 4 }}>
-      <ToastContainer 
+      <ToastContainer
         position="top-right"
         autoClose={3000}
         hideProgressBar={false}
@@ -83,28 +149,41 @@ function CSVSearch() {
 
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
-            <TextField
-              label="Search Term"
-              placeholder="Enter search term..."
-              variant="outlined"
-              fullWidth
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              onKeyPress={handleKeyPress}
-              helperText="Search for any text across all fields in the CSV files"
-              sx={{ mr: 2 }}
-            />
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleSearch}
-              startIcon={<SearchIcon />}
-              sx={{ height: 56 }}
-              disabled={searchLoading || !searchTerm}
-            >
-              Search
-            </Button>
+          <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', position: 'relative' }}>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
+              <TextField
+                inputRef={searchFieldRef}
+                label="Search Term"
+                placeholder="Enter search term..."
+                variant="outlined"
+                fullWidth
+                value={searchTerm}
+                onChange={handleInputChange}
+                onKeyPress={handleKeyPress}
+                helperText="Search for any text across all fields in the CSV files"
+                sx={{ mr: 2 }}
+              />
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleSearch}
+                startIcon={<SearchIcon />}
+                sx={{ height: 56 }}
+                disabled={searchLoading || !searchTerm}
+              >
+                Search
+              </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                onClick={handleClearSearch}
+                startIcon={<ClearIcon />}
+                sx={{ height: 56, ml: 1 }}
+                disabled={searchLoading || !searchTerm}
+              >
+                Clear
+              </Button>
+            </Box>
           </Box>
 
           <FormControlLabel

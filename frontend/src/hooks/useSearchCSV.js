@@ -32,11 +32,13 @@ function useSearchCSV() {
     totalPages: 0
   });
 
-  const searchAll = async (searchTerm, includeHistorical = true) => {
+  const searchAll = async (searchTerm, includeHistorical = true, showToasts = true) => {
     if (!searchTerm) {
       const errorMessage = 'Please enter a search term';
       setError(errorMessage);
-      toast.warning(errorMessage);
+      if (showToasts) {
+        toast.warning(errorMessage);
+      }
       return false;
     }
 
@@ -44,7 +46,7 @@ function useSearchCSV() {
       setLoading(true);
       setError(null);
       
-      // Call the backend API endpoint
+      // The actual API call happens regardless of showToasts
       const response = await axios.get('http://localhost:8000/api/search/', {
         params: {
           query: searchTerm,
@@ -87,7 +89,7 @@ function useSearchCSV() {
       setResults(originalData);
       
       // Show a toast notification for no results
-      if (originalData.success && (!Array.isArray(originalData.data) || originalData.data.length === 0)) {
+      if (showToasts && originalData.success && (!Array.isArray(originalData.data) || originalData.data.length === 0)) {
         toast.info('No results found for your search term.', {
           position: "top-right",
           autoClose: 3000
@@ -102,7 +104,7 @@ function useSearchCSV() {
         const totalPages = Math.ceil(totalItems / pageSize);
         
         // Show success toast with result count
-        if (totalItems > 0) {
+        if (showToasts && totalItems > 0) {
           toast.success(`Found ${totalItems} results for "${searchTerm}"`, {
             position: "top-right",
             autoClose: 3000
@@ -125,15 +127,21 @@ function useSearchCSV() {
       if (err.code === 'ECONNABORTED') {
         errorMessage = 'Search timed out. Please try a more specific search term.';
         setError(errorMessage);
-        toast.error(errorMessage);
+        if (showToasts) {
+          toast.error(errorMessage);
+        }
       } else if (err.response && err.response.status === 504) {
         errorMessage = 'Search timed out on the server. Please try a more specific search term.';
         setError(errorMessage);
-        toast.error(errorMessage);
+        if (showToasts) {
+          toast.error(errorMessage);
+        }
       } else {
         errorMessage = 'Failed to search. Please try again later.';
         setError(errorMessage);
-        toast.error(errorMessage);
+        if (showToasts) {
+          toast.error(errorMessage);
+        }
       }
       
       // Clear results
