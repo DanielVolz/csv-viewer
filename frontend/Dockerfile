@@ -1,5 +1,5 @@
 # Base stage for shared dependencies
-FROM node:20 as base
+FROM node:20 AS base
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY package*.json ./
 RUN npm install --legacy-peer-deps
 
 # Build stage
-FROM base as build
+FROM base AS build
 
 # Copy all frontend files
 COPY . .
@@ -19,7 +19,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM nginx:stable-alpine as production
+FROM nginx:stable-alpine AS production
 
 # Copy built files from build stage to nginx serve directory
 COPY --from=build /app/build /usr/share/nginx/html
@@ -34,7 +34,7 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 
 # Development stage
-FROM base as dev
+FROM base AS dev
 
 # In dev mode, we'll mount the source code as a volume
 # so we only need minimal setup here

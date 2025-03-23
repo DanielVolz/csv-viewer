@@ -340,53 +340,63 @@ class OpenSearchConfig:
         Returns:
             Dict[str, Any]: Query body
         """
+        # Log what kind of query we're building for debugging
+        logger.info(f"Building query body for query: {query}, field: {field}, size: {size}")
+
         if field:
-            return {
-                "query": {
-                    "match": {
-                        field: query
-                    }
-                },
-                "size": size
-            }
-        else:
-            # Construct precise search query
+            # Field-specific search with both exact and partial matching
             return {
                 "query": {
                     "bool": {
                         "should": [
-                            # Exact match search across fields
-                            {
-                                "multi_match": {
-                                    "query": query,
-                                    "fields": ["*"],
-                                    "type": "best_fields"
-                                }
-                            },
-                            # Exact match for Line Number without prefix
-                            {
-                                "term": {
-                                    "Line Number": query
-                                }
-                            },
-                            # Exact match for MAC Address
-                            {
-                                "term": {
-                                    "MAC Address": query
-                                }
-                            },
-                            # Exact match for Line Number with plus prefix
-                            {
-                                "term": {
-                                    "Line Number": f"+{query}"
-                                }
-                            }
+                            # Exact match
+                            {"term": {field: query}},
+                            # Prefix match
+                            {"prefix": {field: query}},
+                            # Wildcard for partial match
+                            {"wildcard": {field: f"*{query}*"}}
                         ],
                         "minimum_should_match": 1
                     }
                 },
                 "size": size
             }
+        else:
+            # General search across all fields with improved partial matching
+            search_query = {
+                "query": {
+                    "bool": {
+                        "should": [
+                            # Original exact matches
+                            {"multi_match": {"query": query, "fields": ["*"]}},
+                            {"term": {"Line Number": query}},
+                            {"term": {"MAC Address": query}},
+                            {"term": {"Line Number": f"+{query}"}},
+                            
+                            # Add case-insensitive wildcard search for partial matching
+                            {"wildcard": {"MAC Address": f"*{query.lower()}*"}},
+                            {"wildcard": {"MAC Address": f"*{query.upper()}*"}},
+                            {"wildcard": {"MAC Address 2": f"*{query.lower()}*"}},
+                            {"wildcard": {"MAC Address 2": f"*{query.upper()}*"}},
+                            {"wildcard": {"Serial Number": f"*{query}*"}},
+                            {"wildcard": {"Model Name": f"*{query}*"}},
+                            {"wildcard": {"Switch Hostname": f"*{query}*"}},
+                            {"wildcard": {"File Name": f"*{query}*"}},
+                            
+                            # Fuzzy matching for approximate matches
+                            {"fuzzy": {"MAC Address": {"value": query, "fuzziness": "AUTO"}}},
+                            {"fuzzy": {"Model Name": {"value": query, "fuzziness": "AUTO"}}}
+                        ],
+                        "minimum_should_match": 1
+                    }
+                },
+                "size": size
+            }
+            
+            # Log the final query for debugging
+            logger.info(f"Final search query: {search_query}")
+            
+            return search_query
 
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False,
               size: int = 20000) -> Tuple[List[str], List[Dict[str, Any]]]:

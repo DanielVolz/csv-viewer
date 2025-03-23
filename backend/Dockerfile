@@ -1,5 +1,5 @@
 # Base stage for shared dependencies
-FROM python:3.12-slim as base
+FROM python:3.12-slim AS base
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ RUN mkdir -p ./data
 RUN mkdir -p /app/celery
 
 # Production stage
-FROM base as production
+FROM base AS production
 
 # Copy application code
 COPY . .
@@ -43,7 +43,7 @@ EXPOSE 5555
 CMD ["/app/entrypoint.sh"]
 
 # Development stage
-FROM base as dev
+FROM base AS dev
 
 # In dev, we'll mount the code as a volume, so minimal copying needed here
 COPY dev-entrypoint.sh /app/
