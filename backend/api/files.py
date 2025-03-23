@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
 from typing import List
 from datetime import datetime
@@ -157,4 +157,45 @@ async def reload_celery():
         raise HTTPException(
             status_code=500,
             detail="Failed to reload Celery configuration"
+        )
+
+
+@router.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    Download a CSV file by name.
+    
+    Args:
+        filename: Name of the file to download (e.g., netspeed.csv, netspeed.csv.1)
+        
+    Returns:
+        The file for download
+    """
+    try:
+        # Get path to CSV files directory
+        csv_dir = Path("/app/data")
+        file_path = csv_dir / filename
+        
+        # Check if file exists
+        if not file_path.exists():
+            logger.error(f"File not found: {filename}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"File {filename} not found"
+            )
+        
+        # Return file as download response
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type="text/csv"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading file {filename}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to download file: {str(e)}"
         )

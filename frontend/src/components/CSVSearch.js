@@ -329,9 +329,23 @@ function CSVSearch() {
                               }
 
                               return (
-                                <TableCell key={`${index}-${header}`}>
+                            <TableCell key={`${index}-${header}`}>
+                              {header === "File Name" ? (
+                                <a 
+                                  href={`http://localhost:8000/api/files/download/${cellContent}`} 
+                                  download
+                                  style={{ 
+                                    color: 'inherit', 
+                                    textDecoration: 'underline',
+                                    cursor: 'pointer'
+                                  }}
+                                >
                                   {cellContent}
-                                </TableCell>
+                                </a>
+                              ) : (
+                                cellContent
+                              )}
+                            </TableCell>
                               );
                             })}
                           </TableRow>
@@ -352,7 +366,21 @@ function CSVSearch() {
 
                             return (
                               <TableCell key={header}>
-                                {cellContent}
+                                {header === "File Name" ? (
+                                  <a 
+                                    href={`http://localhost:8000/api/files/download/${cellContent}`} 
+                                    download
+                                    style={{ 
+                                      color: 'inherit', 
+                                      textDecoration: 'underline',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {cellContent}
+                                  </a>
+                                ) : (
+                                  cellContent
+                                )}
                               </TableCell>
                             );
                           })}
@@ -375,7 +403,21 @@ function CSVSearch() {
 
                             return (
                               <TableCell key={`${index}-${header}`}>
-                                {cellContent}
+                                {header === "File Name" ? (
+                                  <a 
+                                    href={`http://localhost:8000/api/files/download/${cellContent}`} 
+                                    download
+                                    style={{ 
+                                      color: 'inherit', 
+                                      textDecoration: 'underline',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {cellContent}
+                                  </a>
+                                ) : (
+                                  cellContent
+                                )}
                               </TableCell>
                             );
                           })}

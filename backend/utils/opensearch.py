@@ -402,11 +402,11 @@ class OpenSearchConfig:
                             # Model and file information
                             {"wildcard": {"Model Name": f"*{query.lower()}*"}},
                             {"wildcard": {"Model Name": f"*{query.upper()}*"}},
-                            {"wildcard": {"File Name": f"*{query}*"}},
+                            {"wildcard": {"File Name": f"*{query}*"}}
                             
-                            # Fuzzy matching for approximate matches
-                            {"fuzzy": {"MAC Address": {"value": query, "fuzziness": "AUTO"}}},
-                            {"fuzzy": {"Model Name": {"value": query, "fuzziness": "AUTO"}}}
+                            # Fuzzy matching disabled per user request
+                            # {"fuzzy": {"MAC Address": {"value": query, "fuzziness": "AUTO"}}},
+                            # {"fuzzy": {"Model Name": {"value": query, "fuzziness": "AUTO"}}}
                         ],
                         "minimum_should_match": 1
                     }

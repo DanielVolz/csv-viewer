@@ -75,7 +75,17 @@ function FileTable() {
                 sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
               >
                 <TableCell component="th" scope="row">
-                  {file.name}
+                  <a 
+                    href={`http://localhost:8000/api/files/download/${file.name}`} 
+                    download
+                    style={{ 
+                      color: 'inherit', 
+                      textDecoration: 'underline',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {file.name}
+                  </a>
                 </TableCell>
                 <TableCell>
                   {file.is_current ? (
