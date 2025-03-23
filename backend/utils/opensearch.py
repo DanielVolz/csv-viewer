@@ -373,14 +373,34 @@ class OpenSearchConfig:
                             {"term": {"MAC Address": query}},
                             {"term": {"Line Number": f"+{query}"}},
                             
-                            # Add case-insensitive wildcard search for partial matching
+                            # Add case-insensitive wildcard search for all text/keyword fields
+                            # MAC Address fields
                             {"wildcard": {"MAC Address": f"*{query.lower()}*"}},
                             {"wildcard": {"MAC Address": f"*{query.upper()}*"}},
                             {"wildcard": {"MAC Address 2": f"*{query.lower()}*"}},
                             {"wildcard": {"MAC Address 2": f"*{query.upper()}*"}},
-                            {"wildcard": {"Serial Number": f"*{query}*"}},
-                            {"wildcard": {"Model Name": f"*{query}*"}},
-                            {"wildcard": {"Switch Hostname": f"*{query}*"}},
+                            
+                            # Serial Number and IDs
+                            {"wildcard": {"Serial Number": f"*{query.lower()}*"}},
+                            {"wildcard": {"Serial Number": f"*{query.upper()}*"}},
+                            {"wildcard": {"Line Number": f"*{query}*"}},
+                            
+                            # Network/Switch related fields
+                            {"wildcard": {"Switch Hostname": f"*{query.lower()}*"}},
+                            {"wildcard": {"Switch Hostname": f"*{query.upper()}*"}},
+                            {"wildcard": {"Switch Port": f"*{query}*"}},
+                            {"wildcard": {"Subnet Mask": f"*{query}*"}},
+                            {"wildcard": {"Voice VLAN": f"*{query}*"}},
+                            
+                            # Speed measurements
+                            {"wildcard": {"Speed 1": f"*{query}*"}},
+                            {"wildcard": {"Speed 2": f"*{query}*"}},
+                            {"wildcard": {"Speed 3": f"*{query}*"}},
+                            {"wildcard": {"Speed 4": f"*{query}*"}},
+                            
+                            # Model and file information
+                            {"wildcard": {"Model Name": f"*{query.lower()}*"}},
+                            {"wildcard": {"Model Name": f"*{query.upper()}*"}},
                             {"wildcard": {"File Name": f"*{query}*"}},
                             
                             # Fuzzy matching for approximate matches
