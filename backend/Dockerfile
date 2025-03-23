@@ -32,9 +32,6 @@ RUN mkdir -p /app/celery
 # Set environment variable for Celery
 ENV C_FORCE_ROOT=true
 
-# Copy the search test script
-COPY search_test.py /app/backend/search_test.py
-
 # Script to start both Celery and Uvicorn
 COPY entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
