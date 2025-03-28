@@ -60,21 +60,38 @@ class FileModel(BaseModel):
         format_type = "old"
         
         try:
-            # For demonstration, detect format based on file path
-            # In a real implementation, you would check the file content
+            # Use a more robust format detection that examines multiple rows
             import csv
             with open(file_path, 'r') as f:
-                first_row = next(csv.reader(f))
-                # Check if the file has 14 columns (new format) or 11 columns (old format)
-                if len(first_row) == 14:
-                    format_type = "new"
+                csv_reader = csv.reader(f)
+                # Read up to 5 rows to determine format
+                rows = []
+                for _ in range(5):
+                    try:
+                        rows.append(next(csv_reader))
+                    except StopIteration:
+                        break
+                
+                if not rows:
+                    # Empty file, use fallback
+                    if name == "netspeed.csv":
+                        format_type = "new"  # Assume current file is new format
+                    else:
+                        format_type = "old"
                 else:
-                    format_type = "old"
+                    # Check if majority of rows have 14 columns (new format)
+                    new_format_count = sum(1 for row in rows if len(row) == 14)
+                    if new_format_count >= len(rows) / 2:  # If majority have 14 columns
+                        format_type = "new"
+                    else:
+                        format_type = "old"
         except Exception as e:
+            # Log the exception for debugging
+            import logging
+            logging.getLogger(__name__).error(f"Error detecting format for {file_path}: {e}")
             # If we can't open or read the file, use a fallback detection by name
-            # This is a simple heuristic that can be improved
-            if name == "netspeed.csv" or name.endswith(".2"):
-                # Assume that netspeed.csv and netspeed.csv.2 are in the new format
+            if name == "netspeed.csv":
+                # Assume that current netspeed.csv is in the new format
                 format_type = "new"
             else:
                 format_type = "old"

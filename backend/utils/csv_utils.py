@@ -68,11 +68,13 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             if len(all_rows) == 0:
                 logger.warning(f"Empty file: {file_path}")
                 return DESIRED_ORDER, []
+            # Detect format based on number of columns in first few data rows
+            num_rows_to_check = min(5, len(all_rows))  # Check up to 5 rows
+            new_format_count = sum(1 for row in all_rows[:num_rows_to_check] if len(row) == 14)
             
-            # Detect format based on number of columns in first data row
-            if len(all_rows[0]) == 14:  # New format has 14 columns
+            if new_format_count >= num_rows_to_check / 2:  # If majority have 14 columns
                 file_headers = NEW_HEADERS
-            else:  # Old format has 11 columns
+            else:  # Otherwise, assume old format
                 file_headers = OLD_HEADERS
             
             # Process rows
@@ -90,7 +92,7 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                     rows.append(row_dict)
                 else:
                     logger.warning(
-                        f"Skipping row in {file_path} due to column mismatch."
+                        f"Skipping row {idx} in {file_path} due to column mismatch. Expected {len(file_headers)} columns, got {len(row)}."
                     )
         
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
