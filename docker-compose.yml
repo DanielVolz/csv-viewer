@@ -1,10 +1,13 @@
 services:
   # Frontend service
   frontend:
+    image: danielvolz23/csv-viewer-frontend:latest-amd64
     build:
       context: ./frontend
       dockerfile: Dockerfile
       target: production
+      platforms:
+        - linux/amd64
     ports:
       - "3000:80"
     depends_on:
@@ -15,10 +18,13 @@ services:
 
   # Backend service
   backend:
+    image: danielvolz23/csv-viewer-backend:latest-amd64
     build:
       context: ./backend
       dockerfile: Dockerfile
       target: production
+      platforms:
+        - linux/amd64
     ports:
       - "8000:8000"
     volumes:
@@ -34,7 +40,7 @@ services:
     networks:
       - app-network
 
-  # Redis service
+  # Redis service - use standard redis image
   redis:
     image: redis:7-alpine
     ports:
@@ -51,7 +57,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # OpenSearch service
+  # OpenSearch service - use standard opensearch image
   opensearch:
     image: opensearchproject/opensearch:2
     container_name: opensearch
