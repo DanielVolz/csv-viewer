@@ -17,6 +17,7 @@ import {
 } from '@mui/material';
 import axios from 'axios';
 import useFiles from '../hooks/useFiles';
+import { API_BASE_URL } from '../utils/apiConfig';
 
 /**
  * Component that displays a table of netspeed CSV files
@@ -30,7 +31,7 @@ function FileTable() {
   const handleReindex = async () => {
     try {
       setReindexing(true);
-      const response = await axios.get('http://localhost:8000/api/files/reindex');
+      const response = await axios.get(`${API_BASE_URL}/api/files/reindex`);
       setReindexMessage(response.data.message || 'Reindexing in progress...');
       setOpenSnackbar(true);
       // Wait a moment and then refetch to show updated data
@@ -122,7 +123,7 @@ function FileTable() {
               >
                 <TableCell component="th" scope="row">
                   <a 
-                    href={`http://localhost:8000/api/files/download/${file.name}`} 
+                    href={`${API_BASE_URL}/api/files/download/${file.name}`} 
                     download
                     style={{ 
                       color: 'inherit', 

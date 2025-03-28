@@ -27,6 +27,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
+import { API_BASE_URL } from '../utils/apiConfig';
 
 /**
  * Component for searching CSV files and displaying results
@@ -333,7 +334,7 @@ function CSVSearch() {
                             <TableCell key={`${index}-${header}`}>
                               {header === "File Name" ? (
                                 <a 
-                                  href={`http://localhost:8000/api/files/download/${cellContent}`} 
+                                  href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                   download
                                   style={{ 
                                     color: 'inherit', 
@@ -370,7 +371,7 @@ function CSVSearch() {
                               <TableCell key={header}>
                                 {header === "File Name" ? (
                                   <a 
-                                    href={`http://localhost:8000/api/files/download/${cellContent}`} 
+                                    href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                     download
                                     style={{ 
                                       color: 'inherit', 
@@ -408,7 +409,7 @@ function CSVSearch() {
                               <TableCell key={`${index}-${header}`}>
                                 {header === "File Name" ? (
                                   <a 
-                                    href={`http://localhost:8000/api/files/download/${cellContent}`} 
+                                    href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                     download
                                     style={{ 
                                       color: 'inherit', 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { API_BASE_URL } from '../utils/apiConfig';
 
 /**
  * Custom hook for fetching files from the backend API
@@ -14,7 +15,7 @@ function useFiles() {
       try {
         setLoading(true);
         // Call the backend API endpoint
-        const response = await axios.get('http://localhost:8000/api/files/');
+        const response = await axios.get(`${API_BASE_URL}/api/files/`);
         setFiles(response.data);
         setError(null);
       } catch (err) {
