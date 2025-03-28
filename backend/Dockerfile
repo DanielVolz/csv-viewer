@@ -12,11 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements file
 COPY requirements.txt .
 
-# Generate requirements hash
-RUN python -c "import hashlib; print(hashlib.md5(open('requirements.txt', 'rb').read()).hexdigest())" > requirements.hash
-
-# Install Python dependencies
-RUN if [ ! -f requirements.hash ]; then pip install --no-cache-dir -r requirements.txt; fi
+# Install Python dependencies - no conditional logic, always install during build
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Set environment variable for Celery
 ENV C_FORCE_ROOT=true
@@ -28,10 +25,15 @@ RUN mkdir -p /app/celery
 # Production stage
 FROM base AS production
 
-# Copy application code
-COPY . .
+# Copy only necessary application code for production
+COPY main.py config.py celeryconfig.py ./
+COPY api/ ./api/
+COPY app/ ./app/
+COPY models/ ./models/
+COPY tasks/ ./tasks/
+COPY utils/ ./utils/
 
-# Copy and make entrypoint executable
+# Copy and make improved entrypoint executable
 COPY entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 

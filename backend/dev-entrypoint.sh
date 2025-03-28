@@ -1,20 +1,6 @@
 #!/bin/bash
 set -e
 
-# Install system dependencies
-echo "Installing system dependencies..."
-apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-echo "Installing Python dependencies..."
-pip install --no-cache-dir -r requirements.txt
-
-# Make entrypoint.sh executable
-chmod +x /app/entrypoint.sh
-
 # Create directory for CSV files if it doesn't exist
 echo "Ensuring data directory exists..."
 mkdir -p ./data

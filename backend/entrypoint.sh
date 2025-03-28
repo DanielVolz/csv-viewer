@@ -1,10 +1,6 @@
 #!/bin/bash
 set -e
 
-# Install Python dependencies if not already installed
-echo "Ensuring Python dependencies are installed..."
-pip install --no-cache-dir -r requirements.txt
-
 # Create data directory if it doesn't exist
 echo "Ensuring data directory exists..."
 mkdir -p ./data

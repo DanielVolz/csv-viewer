@@ -3,17 +3,20 @@ FROM node:20 AS base
 
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy package files first (for better caching)
+COPY package.json package-lock.json ./
 
-# Install dependencies
+# Install dependencies with --legacy-peer-deps flag (required)
 RUN npm install --legacy-peer-deps
 
 # Build stage
 FROM base AS build
 
-# Copy all frontend files
-COPY . .
+# Copy only necessary files for build
+COPY public/ ./public/
+COPY src/ ./src/
+COPY babel.config.js ./
+COPY jest.config.js ./
 
 # Build the app
 RUN npm run build
