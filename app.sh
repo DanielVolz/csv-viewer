@@ -45,10 +45,10 @@ show_help() {
   echo "  ./app.sh status         # Show status of all application components"
 }
 
-# Check if docker-compose is installed
+# Check if docker compose is installed
 check_docker_compose() {
-  if ! command -v docker-compose &> /dev/null; then
-    echo "❌ docker-compose is not installed. Please install Docker and Docker Compose."
+  if ! command -v docker compose &> /dev/null; then
+    echo "❌ docker compose is not installed. Please install Docker and Docker Compose."
     exit 1
   fi
 }
@@ -69,80 +69,80 @@ ensure_data_dir() {
 # Start application with AMD64 images
 start_amd64() {
   echo "🚀 Starting CSV Viewer application (AMD64 version)..."
-  echo "📋 Using default configuration from docker-compose.yml"
+  echo "📋 Using default configuration from docker compose.yml"
 
   # Pull images from Docker Hub
   echo "📥 Pulling images from Docker Hub..."
-  docker-compose pull
+  docker compose pull
 
   # Start the application
   echo "🏁 Starting application services..."
-  docker-compose up -d
+  docker compose up -d
 
   # Show status
   echo "✅ Application started! You can access it at:"
-  echo "   Frontend: http://localhost:3000"
-  echo "   Backend API: http://localhost:8000"
+  echo "   Frontend: http://localhost:${FRONTEND_PORT}"
+  echo "   Backend API: http://localhost:${BACKEND_PORT}"
   echo ""
-  echo "📊 To view logs, run: docker-compose logs -f"
+  echo "📊 To view logs, run: docker compose logs -f"
 }
 
 # Start application with ARM images
 start_arm() {
   echo "🚀 Starting CSV Viewer application (ARM version)..."
-  echo "📋 Using configuration from docker-compose.arm.yml"
+  echo "📋 Using configuration from docker compose.arm.yml"
 
   # Pull images from Docker Hub
   echo "📥 Pulling images from Docker Hub..."
-  docker-compose -f docker-compose.arm.yml pull
+  docker compose -f docker compose.arm.yml pull
 
   # Start the application
   echo "🏁 Starting application services..."
-  docker-compose -f docker-compose.arm.yml up -d
+  docker compose -f docker compose.arm.yml up -d
 
   # Show status
   echo "✅ Application started! You can access it at:"
-  echo "   Frontend: http://localhost:3000"
-  echo "   Backend API: http://localhost:8000"
+  echo "   Frontend: http://localhost:${FRONTEND_PORT}"
+  echo "   Backend API: http://localhost:${BACKEND_PORT}"
   echo ""
-  echo "📊 To view logs, run: docker-compose -f docker-compose.arm.yml logs -f"
+  echo "📊 To view logs, run: docker compose -f docker compose.arm.yml logs -f"
 }
 
 # Start application in development mode
 start_dev() {
   echo "🚀 Starting CSV Viewer application (Development mode)..."
-  echo "📋 Using configuration from docker-compose.dev.yml"
+  echo "📋 Using configuration from docker compose.dev.yml"
 
   # Start the application
   echo "🏁 Starting application services..."
-  docker-compose -f docker-compose.dev.yml up -d
+  docker compose -f docker compose.dev.yml up -d
 
   # Show status
   echo "✅ Application started in development mode! You can access it at:"
-  echo "   Frontend: http://localhost:3001"
-  echo "   Backend API: http://localhost:8000"
+  echo "   Frontend: http://localhost:${FRONTEND_PORT:-3001}"  # Use env variable with fallback
+  echo "   Backend API: http://localhost:${BACKEND_PORT}"
   echo ""
-  echo "📊 To view logs, run: docker-compose -f docker-compose.dev.yml logs -f"
+  echo "📊 To view logs, run: docker compose -f docker compose.dev.yml logs -f"
 }
 
 # Stop application with AMD64 images
 stop_amd64() {
   echo "🛑 Stopping CSV Viewer application (AMD64 version)..."
-  docker-compose down
+  docker compose down
   echo "✅ Application stopped successfully!"
 }
 
 # Stop application with ARM images
 stop_arm() {
   echo "🛑 Stopping CSV Viewer application (ARM version)..."
-  docker-compose -f docker-compose.arm.yml down
+  docker compose -f docker compose.arm.yml down
   echo "✅ Application stopped successfully!"
 }
 
 # Stop application in development mode
 stop_dev() {
   echo "🛑 Stopping CSV Viewer application (Development mode)..."
-  docker-compose -f docker-compose.dev.yml down
+  docker compose -f docker compose.dev.yml down
   echo "✅ Application stopped successfully!"
 }
 
@@ -158,21 +158,21 @@ show_status() {
   echo "Services Health:"
   
   # Check frontend
-  if curl -s -I http://localhost:3000 > /dev/null 2>&1; then
+  if curl -s -I http://localhost:${FRONTEND_PORT} > /dev/null 2>&1; then
     echo "✅ Frontend is running"
   else
     echo "❌ Frontend is not running"
   fi
   
   # Check backend
-  if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+  if curl -s http://localhost:${BACKEND_PORT}/health > /dev/null 2>&1; then
     echo "✅ Backend is running"
   else
     echo "❌ Backend is not running"
   fi
   
   echo ""
-  echo "For more details, run: docker-compose ps"
+  echo "For more details, run: docker compose ps"
 }
 
 # Main execution

@@ -14,13 +14,16 @@ const getBaseUrl = () => {
   // This handles both development and production environments
   const { hostname } = window.location;
   
+  // Get the backend port from environment variables
+  const backendPort = process.env.REACT_APP_BACKEND_PORT || '8000';
+  
   // If we're accessing via IP or domain name, point to same host but backend port
   if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
-    return `http://${hostname}:8000`;
+    return `http://${hostname}:${backendPort}`;
   }
   
   // Default for local development
-  return 'http://localhost:8000';
+  return `http://localhost:${backendPort}`;
 };
 
 export const API_BASE_URL = getBaseUrl();

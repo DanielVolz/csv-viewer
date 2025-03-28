@@ -16,13 +16,15 @@ echo "Celery worker started"
 
 # Start FastAPI application in the background
 echo "Starting FastAPI application..."
-uvicorn main:app --host 0.0.0.0 --port 8000 &
+# Use BACKEND_PORT from environment or default to 8000
+PORT="${BACKEND_PORT:-8000}"
+uvicorn main:app --host 0.0.0.0 --port $PORT &
 UVICORN_PID=$!
 
 # Wait for the FastAPI application to start
 echo "Waiting for FastAPI application to be ready..."
 for i in {1..30}; do
-  if curl -s "http://localhost:8000/health" > /dev/null; then
+  if curl -s "http://localhost:$PORT/health" > /dev/null; then
     echo "FastAPI application is ready"
     break
   fi
@@ -35,7 +37,7 @@ done
 # Index CSV files
 echo "Indexing CSV files..."
 sleep 5  # Additional wait to ensure all services are fully initialized
-curl -s -X GET "http://localhost:8000/api/search/index/all" > /dev/null
+curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null
 echo "Indexing task started"
 
 # Wait for both processes

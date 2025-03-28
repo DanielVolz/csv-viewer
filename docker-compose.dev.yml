@@ -18,7 +18,7 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - WDS_SOCKET_PORT=0
       - PORT=3000
-      - REACT_APP_API_URL=http://backend:8000
+      - REACT_APP_API_URL=http://backend:${BACKEND_PORT}
     networks:
       - app-network
   
@@ -28,7 +28,7 @@ services:
       dockerfile: Dockerfile
       target: dev
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT}:${BACKEND_PORT}"
     volumes:
       - ./backend:/app
     environment:
