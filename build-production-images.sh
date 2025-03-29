@@ -1,6 +1,21 @@
 #!/bin/bash
 set -e
 
+# Send notification function
+send_notification() {
+  message="$1"
+  title="$2"
+  priority="${3:-low}"
+  
+  echo "📱 Sending notification: $title"
+  curl -u pi:m5QtrF8hY \
+    -d "$message" \
+    -H "Title: $title" \
+    -H "Priority: $priority" \
+    -H "Tags: rbpi" \
+    https://ntfy.danielvolz.org/docker-build
+}
+
 # Display usage information
 show_usage() {
   echo "CSV Viewer Image Builder"
@@ -59,6 +74,7 @@ if [ "$ARCH" == "arm" ]; then
   docker-compose -f docker-compose.arm.yml build --pull
   
   echo "✅ Linux/ARM images built successfully!"
+  send_notification "🚀 ARM64 images built successfully!" "CSV Viewer ARM Build Complete"
   
   if [ "$PUSH" == "push" ]; then
     echo "📤 Pushing images to Docker Hub..."
@@ -73,6 +89,7 @@ if [ "$ARCH" == "arm" ]; then
     docker push $BACKEND_IMAGE
     
     echo "✅ Images pushed to Docker Hub successfully!"
+    send_notification "📤 ARM64 images pushed to Docker Hub!" "CSV Viewer ARM Push Complete" "high"
   fi
   
   echo ""
@@ -94,6 +111,7 @@ elif [ "$ARCH" == "amd64" ] || [ "$ARCH" == "default" ]; then
   docker-compose build --pull
   
   echo "✅ Linux/AMD64 images built successfully!"
+  send_notification "🚀 AMD64 images built successfully!" "CSV Viewer AMD64 Build Complete"
   
   if [ "$PUSH" == "push" ]; then
     echo "📤 Pushing images to Docker Hub..."
@@ -108,6 +126,7 @@ elif [ "$ARCH" == "amd64" ] || [ "$ARCH" == "default" ]; then
     docker push $BACKEND_IMAGE
     
     echo "✅ Images pushed to Docker Hub successfully!"
+    send_notification "📤 AMD64 images pushed to Docker Hub!" "CSV Viewer AMD64 Push Complete" "high"
   fi
   
   echo ""
