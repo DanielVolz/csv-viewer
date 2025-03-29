@@ -79,21 +79,47 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             
             # Process rows
             for idx, row in enumerate(all_rows, 1):  # Start counting from 1
-                if len(row) == len(file_headers):
-                    # Create a dictionary with the appropriate headers
-                    row_dict = dict(zip(file_headers, row))
-                    
-                    # Add file name, creation date, and row number
-                    row_dict["File Name"] = file_name
-                    row_dict["Creation Date"] = creation_date  # Make sure this has only the date part
-                    # Add row number as string to match other values
-                    row_dict["#"] = str(idx)
-                    
-                    rows.append(row_dict)
-                else:
+                # Skip rows with too few columns (likely header rows or corrupted data)
+                if len(row) < 2:  # Skip empty or nearly empty rows
                     logger.warning(
-                        f"Skipping row {idx} in {file_path} due to column mismatch. Expected {len(file_headers)} columns, got {len(row)}."
+                        f"Skipping row {idx} in {file_path} - nearly empty row with {len(row)} columns"
                     )
+                    continue
+                    
+                # If the column count is too low, check if this might be a malformed file
+                # If there's a significant mismatch (less than half the expected columns), 
+                # we'll skip this row to prevent data corruption
+                if len(row) < len(file_headers) / 2:
+                    logger.warning(
+                        f"Skipping row {idx} in {file_path} due to column mismatch. Expected {len(file_headers)}, got {len(row)}."
+                    )
+                    continue
+                    
+                # For rows with enough columns but not matching exactly, pad or truncate
+                processed_row = row
+                if len(row) < len(file_headers):
+                    # Pad the row with empty strings
+                    processed_row = row + [''] * (len(file_headers) - len(row))
+                    logger.warning(
+                        f"Row {idx} in {file_path} has fewer columns than expected. Expected {len(file_headers)}, got {len(row)}. Padding with empty values."
+                    )
+                elif len(row) > len(file_headers):
+                    # Truncate the row
+                    processed_row = row[:len(file_headers)]
+                    logger.warning(
+                        f"Row {idx} in {file_path} has more columns than expected. Expected {len(file_headers)}, got {len(row)}. Truncating extra values."
+                    )
+                
+                # Create a dictionary with the appropriate headers
+                row_dict = dict(zip(file_headers, processed_row))
+                
+                # Add file name, creation date, and row number
+                row_dict["File Name"] = file_name
+                row_dict["Creation Date"] = creation_date  # Make sure this has only the date part
+                # Add row number as string to match other values
+                row_dict["#"] = str(idx)
+                
+                rows.append(row_dict)
         
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
         return DESIRED_ORDER, rows

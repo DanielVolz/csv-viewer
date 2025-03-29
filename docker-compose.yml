@@ -15,6 +15,10 @@ services:
     restart: unless-stopped
     networks:
       - app-network
+    environment:
+      - BACKEND_PORT=${BACKEND_PORT}
+    env_file:
+      - .env
 
   # Backend service
   backend:

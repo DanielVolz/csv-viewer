@@ -56,7 +56,7 @@ if [ "$ARCH" == "arm" ]; then
 
   # Build the images for linux/arm64
   echo "🏗️ Building linux/arm64 production images (this may take a few minutes)..."
-  docker-compose -f docker-compose.arm.yml build --pull --no-cache
+  docker-compose -f docker-compose.arm.yml build --pull
   
   echo "✅ Linux/ARM images built successfully!"
   
@@ -91,7 +91,7 @@ elif [ "$ARCH" == "amd64" ] || [ "$ARCH" == "default" ]; then
 
   # Build the images for linux/amd64 (now the default)
   echo "🏗️ Building linux/amd64 production images (this may take a few minutes)..."
-  docker-compose build --pull --no-cache
+  docker-compose build --pull
   
   echo "✅ Linux/AMD64 images built successfully!"
   

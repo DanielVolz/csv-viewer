@@ -27,11 +27,21 @@ FROM nginx:stable-alpine AS production
 # Copy built files from build stage to nginx serve directory
 COPY --from=build /app/build /usr/share/nginx/html
 
-# Copy nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Create nginx config directory
+RUN mkdir -p /etc/nginx/conf.d
+
+# Copy nginx config template
+COPY nginx.conf.template /etc/nginx/conf.d/default.conf.template
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Expose port 80
 EXPOSE 80
+
+# Set entrypoint
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 # Start nginx
 CMD ["nginx", "-g", "daemon off;"]
@@ -42,8 +52,21 @@ FROM base AS dev
 # In dev mode, we'll mount the source code as a volume
 # so we only need minimal setup here
 
+# Copy nginx dev config
+COPY nginx.dev.conf /app/nginx.dev.conf
+
+# Create nginx config directory
+RUN mkdir -p /etc/nginx/conf.d
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 # Expose development port
 EXPOSE 3000
+
+# Set entrypoint
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 # Start development server with hot reloading
 CMD ["npm", "start"]

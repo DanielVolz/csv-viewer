@@ -90,39 +90,39 @@ start_amd64() {
 # Start application with ARM images
 start_arm() {
   echo "🚀 Starting CSV Viewer application (ARM version)..."
-  echo "📋 Using configuration from docker compose.arm.yml"
+  echo "📋 Using configuration from docker-compose.arm.yml"
 
   # Pull images from Docker Hub
   echo "📥 Pulling images from Docker Hub..."
-  docker compose -f docker compose.arm.yml pull
+  docker compose -f docker-compose.arm.yml pull
 
   # Start the application
   echo "🏁 Starting application services..."
-  docker compose -f docker compose.arm.yml up -d
+  docker compose -f docker-compose.arm.yml up -d
 
   # Show status
   echo "✅ Application started! You can access it at:"
   echo "   Frontend: http://localhost:${FRONTEND_PORT}"
   echo "   Backend API: http://localhost:${BACKEND_PORT}"
   echo ""
-  echo "📊 To view logs, run: docker compose -f docker compose.arm.yml logs -f"
+  echo "📊 To view logs, run: docker compose -f docker-compose.arm.yml logs -f"
 }
 
 # Start application in development mode
 start_dev() {
   echo "🚀 Starting CSV Viewer application (Development mode)..."
-  echo "📋 Using configuration from docker compose.dev.yml"
+  echo "📋 Using configuration from docker-compose.dev.yml"
 
   # Start the application
   echo "🏁 Starting application services..."
-  docker compose -f docker compose.dev.yml up -d
+  docker compose -f docker-compose.dev.yml up -d
 
   # Show status
   echo "✅ Application started in development mode! You can access it at:"
   echo "   Frontend: http://localhost:${FRONTEND_PORT:-3001}"  # Use env variable with fallback
   echo "   Backend API: http://localhost:${BACKEND_PORT}"
   echo ""
-  echo "📊 To view logs, run: docker compose -f docker compose.dev.yml logs -f"
+  echo "📊 To view logs, run: docker compose -f docker-compose.dev.yml logs -f"
 }
 
 # Stop application with AMD64 images
@@ -135,14 +135,14 @@ stop_amd64() {
 # Stop application with ARM images
 stop_arm() {
   echo "🛑 Stopping CSV Viewer application (ARM version)..."
-  docker compose -f docker compose.arm.yml down
+  docker compose -f docker-compose.arm.yml down
   echo "✅ Application stopped successfully!"
 }
 
 # Stop application in development mode
 stop_dev() {
   echo "🛑 Stopping CSV Viewer application (Development mode)..."
-  docker compose -f docker compose.dev.yml down
+  docker compose -f docker-compose.dev.yml down
   echo "✅ Application stopped successfully!"
 }
 
