@@ -58,10 +58,19 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         # Log the formatted date for debugging
         logger.info(f"Formatted date for {file_path}: {creation_date}")
         
+        # First try with semicolon delimiter, then comma if needed
+        all_rows = []
+        
         with open(file_path, 'r') as csv_file:
-            csv_reader = csv.reader(csv_file)
+            content = csv_file.read()
+            csv_file.seek(0)  # Reset file pointer to start
             
-            # Read all rows as we need to count columns to determine format
+            # Detect if file uses semicolons
+            delimiter = ';' if ';' in content else ','
+            logger.info(f"Detected delimiter '{delimiter}' for file {file_path}")
+            
+            # Parse with the detected delimiter
+            csv_reader = csv.reader(csv_file, delimiter=delimiter)
             all_rows = list(csv_reader)
             
             # Determine format based on number of columns
@@ -70,11 +79,21 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                 return DESIRED_ORDER, []
             # Detect format based on number of columns in first few data rows
             num_rows_to_check = min(5, len(all_rows))  # Check up to 5 rows
-            new_format_count = sum(1 for row in all_rows[:num_rows_to_check] if len(row) == 14)
             
-            if new_format_count >= num_rows_to_check / 2:  # If majority have 14 columns
+            # Log the actual column counts for debugging
+            for i, row in enumerate(all_rows[:num_rows_to_check]):
+                logger.info(f"Row {i+1} in {file_path} has {len(row)} columns")
+            
+            # Count rows that match the new format column count
+            new_format_count = sum(1 for row in all_rows[:num_rows_to_check] if len(row) == 14)
+            logger.info(f"New format count: {new_format_count}/{num_rows_to_check}")
+            
+            # Use new format if ANY row has 14 columns (since semicolon is correctly used)
+            if new_format_count > 0:
+                logger.info(f"Using NEW format headers for {file_path}")
                 file_headers = NEW_HEADERS
-            else:  # Otherwise, assume old format
+            else:
+                logger.info(f"Using OLD format headers for {file_path}")
                 file_headers = OLD_HEADERS
             
             # Process rows
