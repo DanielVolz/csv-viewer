@@ -25,15 +25,15 @@ import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import { API_BASE_URL } from '../utils/apiConfig';
 
 /**
  * Component for searching CSV files and displaying results
- * Also shows the first 100 entries of the CSV file as initial results
  */
-function CSVSearch() {
+function CSVSearch({ previewLimit }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [includeHistorical, setIncludeHistorical] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
@@ -47,7 +47,8 @@ function CSVSearch() {
     setPage,
     setPageSize
   } = useSearchCSV();
-  const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
+
+  const { previewData, loading: previewLoading, error: previewError } = useFilePreview(previewLimit);
 
   // Track typing activity
   const typingTimeoutRef = useRef(null);
@@ -337,11 +338,18 @@ function CSVSearch() {
                                   href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                   download
                                   style={{ 
+                                    display: 'flex',
+                                    alignItems: 'center',
                                     color: 'inherit', 
                                     textDecoration: 'underline',
                                     cursor: 'pointer'
                                   }}
                                 >
+                                  <FileDownloadIcon 
+                                    fontSize="small" 
+                                    color="primary" 
+                                    sx={{ mr: 1 }}
+                                  />
                                   {cellContent}
                                 </a>
                               ) : (
@@ -374,11 +382,18 @@ function CSVSearch() {
                                     href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                     download
                                     style={{ 
+                                      display: 'flex',
+                                      alignItems: 'center',
                                       color: 'inherit', 
                                       textDecoration: 'underline',
                                       cursor: 'pointer'
                                     }}
                                   >
+                                    <FileDownloadIcon 
+                                      fontSize="small" 
+                                      color="primary" 
+                                      sx={{ mr: 1 }}
+                                    />
                                     {cellContent}
                                   </a>
                                 ) : (
@@ -412,11 +427,18 @@ function CSVSearch() {
                                     href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                     download
                                     style={{ 
+                                      display: 'flex',
+                                      alignItems: 'center',
                                       color: 'inherit', 
                                       textDecoration: 'underline',
                                       cursor: 'pointer'
                                     }}
                                   >
+                                    <FileDownloadIcon 
+                                      fontSize="small" 
+                                      color="primary" 
+                                      sx={{ mr: 1 }}
+                                    />
                                     {cellContent}
                                   </a>
                                 ) : (

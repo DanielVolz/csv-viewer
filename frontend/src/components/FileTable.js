@@ -15,6 +15,7 @@ import {
   Button,
   Snackbar
 } from '@mui/material';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import axios from 'axios';
 import useFiles from '../hooks/useFiles';
 import { API_BASE_URL } from '../utils/apiConfig';
@@ -122,17 +123,26 @@ function FileTable() {
                 sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
               >
                 <TableCell component="th" scope="row">
-                  <a 
-                    href={`${API_BASE_URL}/api/files/download/${file.name}`} 
-                    download
-                    style={{ 
-                      color: 'inherit', 
-                      textDecoration: 'underline',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {file.name}
-                  </a>
+                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                    <a 
+                      href={`${API_BASE_URL}/api/files/download/${file.name}`} 
+                      download
+                      style={{ 
+                        display: 'flex',
+                        alignItems: 'center',
+                        color: 'inherit', 
+                        textDecoration: 'underline',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <FileDownloadIcon 
+                        fontSize="small" 
+                        color="primary" 
+                        sx={{ mr: 1 }}
+                      />
+                      {file.name}
+                    </a>
+                  </Box>
                 </TableCell>
                 <TableCell>
                   {file.is_current ? (
