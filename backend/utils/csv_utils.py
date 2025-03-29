@@ -178,16 +178,23 @@ def search_field_in_files(
         # List of files to search
         files_to_search = []
         
-        # Current file
+        # Initialize current_file reference
         current_file = dir_path / "netspeed.csv"
-        if current_file.exists():
-            files_to_search.append(current_file)
         
-        # Historical files if requested
+        # Add files to search based on include_historical flag
         if include_historical:
+            # Add current file
+            if current_file.exists():
+                files_to_search.append(current_file)
+            
+            # Add historical files
             historical_pattern = "netspeed.csv.*"
             for file_path in dir_path.glob(historical_pattern):
                 files_to_search.append(file_path)
+        else:
+            # Only add current file when not including historical files
+            if current_file.exists():
+                files_to_search.append(current_file)
         
         logger.info(
             f"Searching for term '{search_term}' in {len(files_to_search)} files"

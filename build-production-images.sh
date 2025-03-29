@@ -12,7 +12,7 @@ send_notification() {
     -d "$message" \
     -H "Title: $title" \
     -H "Priority: $priority" \
-    -H "Tags: rbpi" \
+    -H "Tags: docker" \
     https://ntfy.danielvolz.org/docker-build
 }
 
@@ -82,11 +82,22 @@ if [ "$ARCH" == "arm" ]; then
     FRONTEND_IMAGE=$(grep -A1 "frontend:" docker-compose.arm.yml | grep "image:" | awk '{print $2}')
     BACKEND_IMAGE=$(grep -A1 "backend:" docker-compose.arm.yml | grep "image:" | awk '{print $2}')
     
-    echo "Pushing $FRONTEND_IMAGE..."
-    docker push $FRONTEND_IMAGE
+    # Ensure images are pushed to danielvolz23 repository
+    FRONTEND_IMAGE_NAME=$(echo $FRONTEND_IMAGE | awk -F/ '{print $NF}')
+    BACKEND_IMAGE_NAME=$(echo $BACKEND_IMAGE | awk -F/ '{print $NF}')
     
-    echo "Pushing $BACKEND_IMAGE..."
-    docker push $BACKEND_IMAGE
+    FRONTEND_PUSH_IMAGE="danielvolz23/$FRONTEND_IMAGE_NAME"
+    BACKEND_PUSH_IMAGE="danielvolz23/$BACKEND_IMAGE_NAME"
+    
+    echo "Tagging $FRONTEND_IMAGE as $FRONTEND_PUSH_IMAGE..."
+    docker tag $FRONTEND_IMAGE $FRONTEND_PUSH_IMAGE
+    echo "Pushing $FRONTEND_PUSH_IMAGE..."
+    docker push $FRONTEND_PUSH_IMAGE
+    
+    echo "Tagging $BACKEND_IMAGE as $BACKEND_PUSH_IMAGE..."
+    docker tag $BACKEND_IMAGE $BACKEND_PUSH_IMAGE
+    echo "Pushing $BACKEND_PUSH_IMAGE..."
+    docker push $BACKEND_PUSH_IMAGE
     
     echo "✅ Images pushed to Docker Hub successfully!"
     send_notification "📤 ARM64 images pushed to Docker Hub!" "CSV Viewer ARM Push Complete" "high"
@@ -119,11 +130,22 @@ elif [ "$ARCH" == "amd64" ] || [ "$ARCH" == "default" ]; then
     FRONTEND_IMAGE=$(grep -A1 "frontend:" docker-compose.yml | grep "image:" | awk '{print $2}')
     BACKEND_IMAGE=$(grep -A1 "backend:" docker-compose.yml | grep "image:" | awk '{print $2}')
     
-    echo "Pushing $FRONTEND_IMAGE..."
-    docker push $FRONTEND_IMAGE
+    # Ensure images are pushed to danielvolz23 repository
+    FRONTEND_IMAGE_NAME=$(echo $FRONTEND_IMAGE | awk -F/ '{print $NF}')
+    BACKEND_IMAGE_NAME=$(echo $BACKEND_IMAGE | awk -F/ '{print $NF}')
     
-    echo "Pushing $BACKEND_IMAGE..."
-    docker push $BACKEND_IMAGE
+    FRONTEND_PUSH_IMAGE="danielvolz23/$FRONTEND_IMAGE_NAME"
+    BACKEND_PUSH_IMAGE="danielvolz23/$BACKEND_IMAGE_NAME"
+    
+    echo "Tagging $FRONTEND_IMAGE as $FRONTEND_PUSH_IMAGE..."
+    docker tag $FRONTEND_IMAGE $FRONTEND_PUSH_IMAGE
+    echo "Pushing $FRONTEND_PUSH_IMAGE..."
+    docker push $FRONTEND_PUSH_IMAGE
+    
+    echo "Tagging $BACKEND_IMAGE as $BACKEND_PUSH_IMAGE..."
+    docker tag $BACKEND_IMAGE $BACKEND_PUSH_IMAGE
+    echo "Pushing $BACKEND_PUSH_IMAGE..."
+    docker push $BACKEND_PUSH_IMAGE
     
     echo "✅ Images pushed to Docker Hub successfully!"
     send_notification "📤 AMD64 images pushed to Docker Hub!" "CSV Viewer AMD64 Push Complete" "high"

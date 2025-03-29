@@ -142,23 +142,24 @@ class OpenSearchConfig:
                 # If including historical files, search all indices starting with "netspeed_"
                 return ["netspeed_*"]
             else:
-                # If not including historical files, search only the "netspeed_netspeed" index if it exists
-                if "netspeed_netspeed" in indices:
+                # If not including historical files, search only the current netspeed file index
+                # A netspeed.csv file should be indexed as "netspeed_netspeed_csv"
+                current_index = "netspeed_netspeed_csv"
+                
+                # Check if the current index exists
+                if current_index in indices:
+                    return [current_index]
+                elif "netspeed_netspeed" in indices:
+                    # Backward compatibility for older index naming
                     return ["netspeed_netspeed"]
                 else:
-                    # If the main index doesn't exist, return all netspeed indices as a fallback
-                    netspeed_indices = [idx for idx in indices if idx.startswith("netspeed_")]
-                    if netspeed_indices:
-                        logger.warning(
-                            f"No netspeed_netspeed index found, using all netspeed indices as fallback: {netspeed_indices}"
-                        )
-                        return netspeed_indices
-                    else:
-                        logger.warning("No netspeed indices found, using all indices")
-                        return ["*"]
+                    # If no appropriate index is found, log a warning but don't default to all indices
+                    logger.warning("No current netspeed index found. Search results may be empty.")
+                    # Return a non-existent index name to ensure no results rather than wrong results
+                    return ["netspeed_current_only"]
         except Exception as e:
             logger.error(f"Error getting search indices: {e}")
-            return ["netspeed_*"] if include_historical else ["netspeed_netspeed"]
+            return ["netspeed_*"] if include_historical else ["netspeed_current_only"]
 
     def create_index(self, index_name: str) -> bool:
         """
