@@ -147,7 +147,7 @@ function FileTable() {
               <TableCell><Typography variant="subtitle1" noWrap><strong>Status</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Format</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Entries</strong></Typography></TableCell>
-              <TableCell><Typography variant="subtitle1" noWrap><strong>Creation Date</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>File Creation Date</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Path</strong></Typography></TableCell>
             </TableRow>
           </TableHead>

@@ -92,18 +92,11 @@ async def get_netspeed_info():
                 "date": None,
                 "line_count": 0
             }
-        # Get file creation date (birth time) using stat command
-        try:
-            process = subprocess.run(
-                ["stat", "-c", "%w", "/app/data/netspeed.csv"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            creation_date = process.stdout.strip().split()[0]  # Extract date part
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Error getting creation date: {e}")
-            creation_date = None
+        # Use the file model which handles creation date properly with fallbacks
+        file_model = FileModel.from_path(str(current_file))
+        
+        # Format date consistently 
+        creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
         # Count lines (subtract 1 for header)
         with open(current_file, 'r') as f:

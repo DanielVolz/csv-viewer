@@ -151,7 +151,7 @@ const FileInfoBox = () => {
               <EventIcon sx={{ color: '#ff9800', mr: 1, fontSize: 20 }} />
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  Created
+                  File Creation Date
                 </Typography>
                 <Typography variant="body2" fontWeight="normal">
                   {fileInfo?.date || 'Unknown'}
