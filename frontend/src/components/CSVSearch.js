@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import {
   Box,
   TextField,
@@ -38,6 +38,40 @@ function CSVSearch({ previewLimit }) {
   const [includeHistorical, setIncludeHistorical] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
   const searchFieldRef = useRef(null);
+  
+  /**
+   * Returns color for date display based on how recent the date is:
+   * - Green for today's date
+   * - Orange for dates within the next two weeks (including future and past dates)
+   * - Red for dates older than 2 weeks in the past
+   */
+  const getDateColor = (dateString) => {
+    if (!dateString) return 'inherit';
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Reset time to start of day
+    
+    const fileDate = new Date(dateString);
+    fileDate.setHours(0, 0, 0, 0); // Reset time to start of day
+    
+    // Calculate difference in days
+    const diffTime = fileDate - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) {
+      // Today
+      return 'green';
+    } else if (diffDays > 0 && diffDays <= 14) {
+      // Future dates within next two weeks
+      return 'orange';
+    } else if (diffDays < 0 && diffDays >= -14) {
+      // Past dates within previous two weeks
+      return 'orange';
+    } else {
+      // Older dates (more than 2 weeks in the past)
+      return 'red';
+    }
+  };
   const {
     searchAll,
     results,
@@ -325,15 +359,17 @@ function CSVSearch({ previewLimit }) {
                               // Handle special formatting for specific columns
                               let cellContent = row[header];
 
-                              // Format dates to ISO 8601 (YYYY-MM-DD)
-                              if (header === "Creation Date" && cellContent) {
-                                const date = new Date(cellContent);
-                                cellContent = date.toISOString().split('T')[0];
-                              }
+                              // Creation Date should already be in proper format from backend
+                              let formattedDate = cellContent;
 
                               return (
                             <TableCell key={`${index}-${header}`}>
-                              {header === "File Name" ? (
+                              {header === "Creation Date" && cellContent ? (
+                                <Typography style={{ color: getDateColor(cellContent) }}>
+                                  {cellContent}
+                                </Typography>
+                              ) : 
+                              header === "File Name" ? (
                                 <a 
                                   href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                   download
@@ -352,6 +388,10 @@ function CSVSearch({ previewLimit }) {
                                   />
                                   {cellContent}
                                 </a>
+                              ) : header === "Creation Date" ? (
+                                <Typography style={{ color: getDateColor(cellContent) }}>
+                                  {formattedDate}
+                                </Typography>
                               ) : (
                                 cellContent
                               )}
@@ -369,15 +409,17 @@ function CSVSearch({ previewLimit }) {
                             // Handle special formatting for specific columns
                             let cellContent = results.data[header];
 
-                            // Format dates to ISO 8601 (YYYY-MM-DD) 
-                            if (header === "Creation Date" && cellContent) {
-                              const date = new Date(cellContent);
-                              cellContent = date.toISOString().split('T')[0];
-                            }
+                            // Creation Date should already be in proper format from backend
+                            let formattedDate = cellContent;
 
                             return (
                               <TableCell key={header}>
-                                {header === "File Name" ? (
+                                {header === "Creation Date" && cellContent ? (
+                                  <Typography style={{ color: getDateColor(cellContent) }}>
+                                    {cellContent}
+                                  </Typography>
+                                ) : 
+                                header === "File Name" ? (
                                   <a 
                                     href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                     download
@@ -396,6 +438,10 @@ function CSVSearch({ previewLimit }) {
                                     />
                                     {cellContent}
                                   </a>
+                                ) : header === "Creation Date" ? (
+                                  <Typography style={{ color: getDateColor(cellContent) }}>
+                                    {formattedDate}
+                                  </Typography>
                                 ) : (
                                   cellContent
                                 )}
@@ -414,15 +460,16 @@ function CSVSearch({ previewLimit }) {
                             // Handle special formatting for specific columns
                             let cellContent = row[header];
 
-                            // Format dates to ISO 8601 (YYYY-MM-DD)
-                            if (header === "Creation Date" && cellContent) {
-                              const date = new Date(cellContent);
-                              cellContent = date.toISOString().split('T')[0];
-                            }
+                            // Creation Date should already be in proper format from backend
+                            let formattedDate = cellContent;
 
                             return (
                               <TableCell key={`${index}-${header}`}>
-                                {header === "File Name" ? (
+                                {header === "Creation Date" && cellContent ? (
+                                  <Typography style={{ color: getDateColor(cellContent) }}>
+                                    {cellContent}
+                                  </Typography>
+                                ) : header === "File Name" ? (
                                   <a 
                                     href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
                                     download

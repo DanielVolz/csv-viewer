@@ -1,6 +1,11 @@
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class FileModel(BaseModel):
@@ -22,20 +27,54 @@ class FileModel(BaseModel):
         Returns:
             FileModel: Instance representing the file
         """
+        # Import modules inside method to ensure they're available
+        import os
+        from pathlib import Path
+        import subprocess
+        import csv
+        import logging
+        
+        # Create a local logger for use within this method
+        local_logger = logging.getLogger(__name__)
+        
         name = file_path.split("/")[-1]
         is_current = name == "netspeed.csv"
         
         # Get date for all files
         date = None
         try:
-            import os
-            from pathlib import Path
-            
-            # For all files, try to get the actual modification time
             file_path_obj = Path(file_path)
             if file_path_obj.exists():
-                mtime = file_path_obj.stat().st_mtime
-                date = datetime.fromtimestamp(mtime)
+                try:
+                    # Use Linux stat command to get creation date (birth time)
+                    # Using %w instead of %y to get creation time, not modification time
+                    process = subprocess.run(
+                        ["stat", "-c", "%w", file_path],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    creation_time_str = process.stdout.strip()
+                    logging.getLogger(__name__).info(f"Raw creation time from stat: {creation_time_str}")
+                    
+                    # Extract just the date part (YYYY-MM-DD) from the timestamp
+                    date_part = creation_time_str.split()[0]
+                    logging.getLogger(__name__).info(f"Extracted date part: {date_part}")
+                    
+                    try:
+                        # Parse the simple date format
+                        date = datetime.strptime(date_part, "%Y-%m-%d")
+                        logging.getLogger(__name__).info(f"Successfully parsed date: {date}")
+                    except ValueError as ve:
+                        logging.getLogger(__name__).warning(f"Error parsing extracted date part: {ve}")
+                        # Fallback to modification time if date parsing fails
+                        mtime = file_path_obj.stat().st_mtime
+                        date = datetime.fromtimestamp(mtime)
+                        logging.getLogger(__name__).info(f"Using fallback modification time: {date}")
+                except subprocess.CalledProcessError:
+                    # Fallback to modification time if stat fails
+                    mtime = file_path_obj.stat().st_mtime
+                    date = datetime.fromtimestamp(mtime)
             
             # If modification time exists but for files with special naming patterns,
             # we might want to use calculated dates instead in some cases

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List
 from datetime import datetime
 import logging
+import subprocess
 
 from models.file import FileModel
 from config import settings
@@ -74,12 +75,19 @@ async def get_netspeed_info():
                 "date": None,
                 "line_count": 0
             }
-        
-        # Get file creation date
-        creation_time = current_file.stat().st_mtime
-        creation_date = datetime.fromtimestamp(creation_time).strftime(
-            "%Y-%m-%d")
-        
+        # Get file creation date (birth time) using stat command
+        try:
+            process = subprocess.run(
+                ["stat", "-c", "%w", "/app/data/netspeed.csv"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            creation_date = process.stdout.strip().split()[0]  # Extract date part
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error getting creation date: {e}")
+            creation_date = None
+
         # Count lines (subtract 1 for header)
         with open(current_file, 'r') as f:
             line_count = sum(1 for _ in f) - 1
@@ -101,31 +109,37 @@ async def get_netspeed_info():
 
 
 @router.get("/preview")
-async def preview_current_file(limit: int = 25):
+async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv"):
     """
-    Get a preview of the current netspeed.csv file (first N entries).
+    Get a preview of a CSV file (first N entries) along with its creation date.
     
     Args:
         limit: Maximum number of entries to return (default 25)
+        filename: Name of the file to preview (default "netspeed.csv")
         
         Returns:
-        Dictionary with headers and preview rows
+        Dictionary with headers, preview rows, and file creation date
     """
     try:
-        # Get path to current CSV file
+        # Get path to CSV file
         csv_dir = Path("/app/data")
-        current_file = csv_dir / "netspeed.csv"
+        file_path = csv_dir / filename
         
-        if not current_file.exists():
+        if not file_path.exists():
             return {
                 "success": False,
-                "message": "Current netspeed.csv file not found",
+                "message": f"File {filename} not found",
                 "headers": [],
-                "data": []
+                "data": [],
+                "creation_date": None
             }
         
+        # Get file creation date
+        file_model = FileModel.from_path(str(file_path))
+        creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
+        
         # Read CSV file
-        headers, rows = read_csv_file(str(current_file))
+        headers, rows = read_csv_file(str(file_path))
         
         # Limit number of rows
         preview_rows = rows[:limit]
@@ -135,7 +149,9 @@ async def preview_current_file(limit: int = 25):
             "message": (f"Showing first {len(preview_rows)} entries of "
                         f"{len(rows)} total"),
             "headers": headers,
-            "data": preview_rows
+            "data": preview_rows,
+            "creation_date": creation_date,
+            "file_format": file_model.format
         }
         
     except Exception as e:

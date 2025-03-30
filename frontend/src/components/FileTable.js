@@ -29,6 +29,40 @@ function FileTable() {
   const [reindexMessage, setReindexMessage] = useState('');
   const [openSnackbar, setOpenSnackbar] = useState(false);
   
+  /**
+   * Returns color for date display based on how recent the date is:
+   * - Green for today's date
+   * - Orange for dates within the next two weeks (including future and past dates)
+   * - Red for dates older than 2 weeks in the past
+   */
+  const getDateColor = (dateString) => {
+    if (!dateString) return 'inherit';
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Reset time to start of day
+    
+    const fileDate = new Date(dateString);
+    fileDate.setHours(0, 0, 0, 0); // Reset time to start of day
+    
+    // Calculate difference in days
+    const diffTime = fileDate - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) {
+      // Today
+      return 'green';
+    } else if (diffDays > 0 && diffDays <= 14) {
+      // Future dates within next two weeks
+      return 'orange';
+    } else if (diffDays < 0 && diffDays >= -14) {
+      // Past dates within previous two weeks
+      return 'orange';
+    } else {
+      // Older dates (more than 2 weeks in the past)
+      return 'red';
+    }
+  };
+  
   const handleReindex = async () => {
     try {
       setReindexing(true);
@@ -179,7 +213,15 @@ function FileTable() {
                   )}
                 </TableCell>
                 <TableCell>
-                  {file.date ? new Date(file.date).toISOString().split('T')[0] : 'N/A'}
+                  {file.date ? (
+                    <Typography 
+                      style={{ 
+                        color: getDateColor(file.date) 
+                      }}
+                    >
+                      {new Date(file.date).toISOString().split('T')[0]}
+                    </Typography>
+                  ) : 'N/A'}
                 </TableCell>
                 <TableCell>{file.path}</TableCell>
               </TableRow>

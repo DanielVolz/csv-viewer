@@ -143,7 +143,7 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
         include_historical: Whether to include historical indices
         
     Returns:
-        dict: A dictionary containing the search results
+        dict: A dictionary containing the search results including file creation dates
     """
     logger.info(f"Searching OpenSearch for '{query}'")
     
@@ -153,6 +153,61 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
             field=field,
             include_historical=include_historical
         )
+        
+        # Process documents to ensure file creation dates are included
+        for doc in documents:
+            # Check if the document has a file name
+            if 'File Name' in doc:
+                file_name = doc['File Name']
+                # Create a file model to get the date info
+                try:
+                    file_path = f"/app/data/{file_name}"
+                    # Get a complete FileModel to get the correct date
+                    from models.file import FileModel
+                    file_model = FileModel.from_path(file_path)
+                    
+                    # Use the date from FileModel which already handles all the details correctly
+                    if file_model.date:
+                        doc['Creation Date'] = file_model.date.strftime('%Y-%m-%d')
+                    else:
+                        # Fallback if date is not available
+                        import subprocess
+                        from pathlib import Path
+                        from datetime import datetime
+                        
+                        try:
+                            # Match the same stat command used in FileModel.from_path
+                            process = subprocess.run(
+                                ["stat", "-c", "%w", file_path],
+                                capture_output=True,
+                                text=True,
+                                check=True
+                            )
+                            creation_time_str = process.stdout.strip()
+                            # Extract just the date part (YYYY-MM-DD) from the timestamp
+                            date_part = creation_time_str.split()[0]
+                            doc['Creation Date'] = date_part
+                        except subprocess.CalledProcessError:
+                            # Fallback to modification time if stat fails
+                            file_path_obj = Path(file_path)
+                            mtime = file_path_obj.stat().st_mtime
+                            date = datetime.fromtimestamp(mtime)
+                            doc['Creation Date'] = date.strftime('%Y-%m-%d')
+                    
+                    # For file format, still use FileModel
+                    from models.file import FileModel
+                    file_model = FileModel.from_path(file_path)
+                    doc['File Format'] = file_model.format
+                except Exception as e:
+                    logger.warning(f"Error getting file info for {file_name}: {e}")
+        
+        # Make sure Creation Date is in headers if any documents have it
+        if any('Creation Date' in doc for doc in documents) and 'Creation Date' not in headers:
+            headers.append('Creation Date')
+        
+        # Make sure File Format is in headers if any documents have it
+        if any('File Format' in doc for doc in documents) and 'File Format' not in headers:
+            headers.append('File Format')
         
         return {
             "status": "success",

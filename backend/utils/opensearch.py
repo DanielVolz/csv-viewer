@@ -3,6 +3,7 @@ from config import settings
 import logging
 import re
 from pathlib import Path
+from datetime import datetime
 from typing import List, Dict, Any, Generator, Optional, Tuple
 from .csv_utils import read_csv_file
 
@@ -268,17 +269,32 @@ class OpenSearchConfig:
             # Handle Creation Date format specifically to ensure it matches the mapping
             if "Creation Date" in doc:
                 try:
-                    # Try to parse the date and reformat it to ensure yyyy-MM-dd format
-                    date_str = doc["Creation Date"]
-                    # Check if the date has a time component
-                    if " " in date_str:
-                        # If it contains a space, it likely has a time component
-                        # Extract just the date part (before the space)
-                        doc["Creation Date"] = date_str.split(" ")[0]
-                    logger.info(f"Formatted Creation Date for indexing: {doc['Creation Date']}")
+                    # Get the file's Linux creation date using stat command
+                    import subprocess
+                    
+                    # Use Linux stat command to get creation date
+                    process = subprocess.run(
+                        ["stat", "-c", "%w", file_path],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    creation_time_str = process.stdout.strip()
+                    # Parse the datetime string and format for indexing
+                    creation_date = creation_time_str.split()[0]  # Extract just the date part
+                    doc["Creation Date"] = creation_date
+                    logger.info(f"Formatted Linux Creation Date for indexing: {doc['Creation Date']}")
                 except Exception as e:
-                    logger.warning(f"Error formatting date: {e}, using original: {doc.get('Creation Date', '')}")
-            
+                    logger.warning(f"Error getting Linux creation date: {e}, falling back to modification time")
+                    try:
+                        # Fallback to modification time if stat command fails
+                        file_path_obj = Path(file_path)
+                        creation_timestamp = file_path_obj.stat().st_mtime
+                        creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
+                        doc["Creation Date"] = creation_date
+                    except Exception as inner_e:
+                        logger.warning(f"Error getting fallback date: {inner_e}, using original: {doc.get('Creation Date', '')}")
+
             # Convert all values to strings to avoid mapping errors
             doc = {k: str(v) for k, v in doc.items()}
 
