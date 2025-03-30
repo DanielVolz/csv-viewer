@@ -146,6 +146,7 @@ function FileTable() {
               <TableCell><Typography variant="subtitle1" noWrap><strong>File Name</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Status</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Format</strong></Typography></TableCell>
+              <TableCell><Typography variant="subtitle1" noWrap><strong>Entries</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Creation Date</strong></Typography></TableCell>
               <TableCell><Typography variant="subtitle1" noWrap><strong>Path</strong></Typography></TableCell>
             </TableRow>
@@ -211,6 +212,11 @@ function FileTable() {
                       variant="outlined"
                     />
                   )}
+                </TableCell>
+                <TableCell>
+                  <Typography>
+                    {file.line_count ? file.line_count.toLocaleString() : '0'} lines
+                  </Typography>
                 </TableCell>
                 <TableCell>
                   {file.date ? (

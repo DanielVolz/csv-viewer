@@ -23,11 +23,12 @@ router = APIRouter(
 )
 
 
-@router.get("/", response_model=List[FileModel])
+@router.get("/", response_model=List[dict])
 async def list_files():
     """
     List all available netspeed CSV files.
     Returns them sorted with most recent (netspeed.csv) first.
+    Also includes line count for each file.
     """
     try:
         # Get path to CSV files directory
@@ -37,11 +38,27 @@ async def list_files():
         files = []
         if csv_dir.exists():
             for file_path in csv_dir.glob("netspeed.csv*"):
-                files.append(FileModel.from_path(str(file_path)))
+                file_model = FileModel.from_path(str(file_path))
+                
+                # Count lines in the file (subtract 1 for header if file has content)
+                line_count = 0
+                try:
+                    with open(file_path, 'r') as f:
+                        line_count = sum(1 for _ in f)
+                        # Subtract 1 for header if file has content
+                        if line_count > 0:
+                            line_count -= 1
+                except Exception as e:
+                    logger.error(f"Error counting lines in {file_path}: {e}")
+                
+                # Convert to dict and add line count
+                file_dict = file_model.dict()
+                file_dict["line_count"] = line_count
+                files.append(file_dict)
         
         # Sort files: current first, then by date descending
         files.sort(
-            key=lambda f: (not f.is_current, f.date or datetime.max),
+            key=lambda f: (not f["is_current"], f["date"] or datetime.max),
             reverse=False
         )
         

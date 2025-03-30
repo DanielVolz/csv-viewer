@@ -76,24 +76,10 @@ class FileModel(BaseModel):
                     mtime = file_path_obj.stat().st_mtime
                     date = datetime.fromtimestamp(mtime)
             
-            # If modification time exists but for files with special naming patterns,
-            # we might want to use calculated dates instead in some cases
-            if name.startswith("netspeed.csv.") and name[13:].isdigit():
-                try:
-                    days_ago = int(name.split(".")[-1])
-                    date = datetime.now().replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    )
-                    # Subtract days to get the file's date
-                    date = date.fromtimestamp(
-                        date.timestamp() - (days_ago * 24 * 60 * 60)
-                    )
-                except (ValueError, IndexError):
-                    pass
         except Exception:
             # If any error occurs, just leave date as None
             pass
-        
+
         # Determine format based on file content or name patterns
         # Default to old format
         format_type = "old"
