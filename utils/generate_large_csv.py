@@ -231,11 +231,13 @@ def generate_large_csv(input_file, output_file, num_rows=17000, use_new_format=F
     # Write to output file
     try:
         with open(output_file, 'w', newline='') as f:
-            writer = csv.writer(f)
+            # Instead of using csv.writer, we'll write lines directly with a trailing semicolon
             for row in new_data:
-                writer.writerow(row)
+                # Join with semicolons and add trailing semicolon
+                line = ';'.join(row) + ';\n'
+                f.write(line)
         
-        print(f"Successfully generated {num_rows} rows in {output_file}")
+        print(f"Successfully generated {num_rows} rows in {output_file} with trailing semicolons")
         return True
     except Exception as e:
         print(f"Error writing output file: {e}")

@@ -69,9 +69,29 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             delimiter = ';' if ';' in content else ','
             logger.info(f"Detected delimiter '{delimiter}' for file {file_path}")
             
-            # Parse with the detected delimiter
-            csv_reader = csv.reader(csv_file, delimiter=delimiter)
-            all_rows = list(csv_reader)
+            # Custom CSV reader that handles trailing delimiters
+            class TrailingDelimiterReader:
+                def __init__(self, csv_file, delimiter):
+                    self.reader = csv.reader(csv_file, delimiter=delimiter)
+                    self.delimiter = delimiter
+                
+                def __iter__(self):
+                    return self
+                
+                def __next__(self):
+                    row = next(self.reader)
+                    # If the last element is empty and there was a trailing delimiter,
+                    # remove the last element
+                    if row and row[-1] == '':
+                        # Check if the original line ended with a delimiter by reconstructing it
+                        original_line = self.delimiter.join(row)
+                        if original_line.endswith(self.delimiter):
+                            return row[:-1]
+                    return row
+            
+            # Create the custom reader and process all rows
+            reader = TrailingDelimiterReader(csv_file, delimiter)
+            all_rows = list(reader)
             
             # Determine format based on number of columns
             if len(all_rows) == 0:

@@ -19,7 +19,8 @@ import {
   Select,
   MenuItem,
   FormControl,
-  InputLabel
+  InputLabel,
+  Chip
 } from '@mui/material';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -361,72 +362,100 @@ function CSVSearch({ previewLimit }) {
 
                               // Creation Date should already be in proper format from backend
                               let formattedDate = cellContent;
-
-return (
-                            <TableCell 
-                              key={`${index}-${header}`}
-                              onClick={() => {
-                                if (header === "MAC Address") {
-                                  // Copy to clipboard
-                                  navigator.clipboard.writeText(cellContent);
-                                  toast.info("MAC Address copied to clipboard!", {
-                                    position: "top-right",
-                                    autoClose: 3000,
-                                    hideProgressBar: false,
-                                    closeOnClick: true,
-                                    pauseOnHover: true,
-                                    draggable: true,
-                                    progress: undefined,
-                                  });
-                                  
-                                  // Search for the MAC address
-                                  setSearchTerm(cellContent);
-                                  lastSearchTermRef.current = cellContent;
-                                  searchAll(cellContent, includeHistorical, true).then(success => {
-                                    if (success) {
-                                      setHasSearched(true);
+                              
+                              return (
+                                <TableCell 
+                                  key={`${index}-${header}`}
+                                  onClick={() => {
+                                    if (header === "MAC Address") {
+                                      // Copy to clipboard
+                                      navigator.clipboard.writeText(cellContent);
+                                      toast.info("MAC Address copied to clipboard!", {
+                                        position: "top-right",
+                                        autoClose: 3000,
+                                        hideProgressBar: false,
+                                        closeOnClick: true,
+                                        pauseOnHover: true,
+                                        draggable: true,
+                                        progress: undefined,
+                                      });
+                                      
+                                      // Search for the MAC address
+                                      setSearchTerm(cellContent);
+                                      lastSearchTermRef.current = cellContent;
+                                      searchAll(cellContent, includeHistorical, true).then(success => {
+                                        if (success) {
+                                          setHasSearched(true);
+                                        }
+                                      });
+                                    } else if (header === "Switch Port") {
+                                      // Copy Switch Port name to clipboard
+                                      navigator.clipboard.writeText(cellContent);
+                                      toast.info("Switch Port name copied to clipboard!", {
+                                        position: "top-right",
+                                        autoClose: 3000,
+                                        hideProgressBar: false,
+                                        closeOnClick: true,
+                                        pauseOnHover: true,
+                                        draggable: true,
+                                        progress: undefined,
+                                      });
                                     }
-                                  });
-                                }
-                              }}
-                              style={{ cursor: header === "MAC Address" ? "pointer" : "default" }}
-                            >
-                              {header === "Creation Date" && cellContent ? (
-                                <Typography style={{ color: getDateColor(cellContent) }}>
-                                  {cellContent}
-                                </Typography>
-                              ) : 
-                                header === "File Name" ? (
-                                  <a 
-                                    href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
-                                    download
-                                    style={{ 
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      color: 'inherit', 
-                                      textDecoration: 'underline',
-                                      cursor: 'pointer'
-                                    }}
-                                  >
-                                    <FileDownloadIcon 
-                                      fontSize="small" 
-                                      color="primary" 
-                                      sx={{ mr: 1 }}
-                                    />
-                                    {cellContent}
-                                  </a>
-                                ) : header === "IP Address" ? (
-                                  <a href={`http://${cellContent}`} target="_blank" rel="noopener noreferrer">
-                                    {cellContent}
-                                  </a>
-                                ) : header === "Creation Date" ? (
-                                  <Typography style={{ color: getDateColor(cellContent) }}>
-                                    {formattedDate}
-                                  </Typography>
-                                ) : (
-                                  cellContent
-                                )}
-                            </TableCell>
+                                  }}
+                                  style={{ cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default" }}
+                                >
+                                  {header === "Creation Date" && cellContent ? (
+                                    <Typography style={{ color: getDateColor(cellContent) }}>
+                                      {cellContent}
+                                    </Typography>
+                                  ) : 
+                                    header === "File Name" ? (
+                                      <a 
+                                        href={`${API_BASE_URL}/api/files/download/${cellContent}`} 
+                                        download
+                                        style={{ 
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          color: 'inherit', 
+                                          textDecoration: 'underline',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        <FileDownloadIcon 
+                                          fontSize="small" 
+                                          color="primary" 
+                                          sx={{ mr: 1 }}
+                                        />
+                                        {cellContent}
+                                      </a>
+                                    ) : header === "IP Address" ? (
+                                      <a href={`http://${cellContent}`} target="_blank" rel="noopener noreferrer">
+                                        {cellContent}
+                                      </a>
+                                    ) : header === "Creation Date" ? (
+                                      <Typography style={{ color: getDateColor(cellContent) }}>
+                                        {formattedDate}
+                                      </Typography>
+                                    ) : (
+                                      cellContent
+                                    )}
+                                    {header === "Switch Port" && (
+                                      <Chip 
+                                        label="cisco"
+                                        size="small"
+                                        sx={{ 
+                                          ml: 0.5, 
+                                          backgroundColor: '#049FD9', 
+                                          color: 'white',
+                                          fontSize: '0.65rem',
+                                          height: '16px',
+                                          '& .MuiChip-label': {
+                                            padding: '0px 8px',
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                </TableCell>
                               );
                             })}
                           </TableRow>
@@ -468,9 +497,21 @@ return (
                                         setHasSearched(true);
                                       }
                                     });
+                                  } else if (header === "Switch Port") {
+                                    // Copy Switch Port name to clipboard
+                                    navigator.clipboard.writeText(cellContent);
+                                    toast.info("Switch Port name copied to clipboard!", {
+                                      position: "top-right",
+                                      autoClose: 3000,
+                                      hideProgressBar: false,
+                                      closeOnClick: true,
+                                      pauseOnHover: true,
+                                      draggable: true,
+                                      progress: undefined,
+                                    });
                                   }
                                 }}
-                                style={{ cursor: header === "MAC Address" ? "pointer" : "default" }}
+                                style={{ cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default" }}
                               >
                                 {header === "Creation Date" && cellContent ? (
                                   <Typography style={{ color: getDateColor(cellContent) }}>
@@ -506,6 +547,22 @@ return (
                                   </Typography>
                                 ) : (
                                   cellContent
+                                )}
+                                {header === "Switch Port" && (
+                                  <Chip 
+                                    label="cisco"
+                                    size="small"
+                                    sx={{ 
+                                      ml: 0.5, 
+                                      backgroundColor: '#049FD9', 
+                                      color: 'white',
+                                      fontSize: '0.65rem',
+                                      height: '16px',
+                                      '& .MuiChip-label': {
+                                        padding: '0px 8px',
+                                      }
+                                    }}
+                                  />
                                 )}
                               </TableCell>
                             );
@@ -550,9 +607,21 @@ return (
                                         setHasSearched(true);
                                       }
                                     });
+                                  } else if (header === "Switch Port") {
+                                    // Copy Switch Port name to clipboard
+                                    navigator.clipboard.writeText(cellContent);
+                                    toast.info("Switch Port name copied to clipboard!", {
+                                      position: "top-right",
+                                      autoClose: 3000,
+                                      hideProgressBar: false,
+                                      closeOnClick: true,
+                                      pauseOnHover: true,
+                                      draggable: true,
+                                      progress: undefined,
+                                    });
                                   }
                                 }}
-                                style={{ cursor: header === "MAC Address" ? "pointer" : "default" }}
+                                style={{ cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default" }}
                               >
                                 {header === "Creation Date" && cellContent ? (
                                   <Typography style={{ color: getDateColor(cellContent) }}>
@@ -583,6 +652,22 @@ return (
                                   </a>
                                 ) : (
                                   cellContent
+                                )}
+                                {header === "Switch Port" && (
+                                  <Chip 
+                                    label="cisco"
+                                    size="small"
+                                    sx={{ 
+                                      ml: 0.5, 
+                                      backgroundColor: '#049FD9', 
+                                      color: 'white',
+                                      fontSize: '0.65rem',
+                                      height: '16px',
+                                      '& .MuiChip-label': {
+                                        padding: '0px 8px',
+                                      }
+                                    }}
+                                  />
                                 )}
                               </TableCell>
                             );

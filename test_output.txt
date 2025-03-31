@@ -1,0 +1,13 @@
+Starting test for NETSPEED_FILES filtering...
+Maximum netspeed files to index: 2
+
+All files found:
+  - data/netspeed.csv
+  - data/netspeed.csv.0
+  - data/netspeed.csv.1
+  - data/netspeed.csv.2
+  - data/netspeed.csv.3
+
+Files that would be processed (limited by NETSPEED_FILES=2):
+  - data/netspeed.csv
+  - data/netspeed.csv.0

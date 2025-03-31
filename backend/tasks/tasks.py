@@ -1,3 +1,4 @@
+import os
 from celery import Celery
 import logging
 from pathlib import Path
@@ -69,24 +70,38 @@ def index_all_csv_files(directory_path: str) -> dict:
     logger.info(f"Indexing all CSV files in {directory_path}")
     
     try:
+        # Get the maximum number of netspeed files to index from the environment variable
+        max_netspeed_files = int(os.environ.get("NETSPEED_FILES", "2"))
+        logger.info(f"Maximum netspeed files to index: {max_netspeed_files}")
+
         # Find all CSV files including historical ones
         path = Path(directory_path)
-        
+
         # Use a list comprehension with multiple patterns to find all relevant files
         patterns = ["netspeed.csv", "netspeed.csv.*", "netspeed.csv_bak"]
         files = []
         for pattern in patterns:
-            files.extend(list(path.glob(pattern)))
-        
+            # Sort the glob results to ensure consistent ordering
+            glob_results = sorted(path.glob(pattern), key=lambda x: str(x))
+            files.extend(glob_results)
+
+        # Filter netspeed.csv.* files based on NETSPEED_FILES
+        netspeed_files = [f for f in files if "netspeed.csv" in str(f) and "netspeed.csv_bak" not in str(f)]
+        limited_netspeed_files = netspeed_files[:max_netspeed_files]
+
+        # Add back the netspeed.csv_bak files
+        other_files = [f for f in files if "netspeed.csv" not in str(f) or "netspeed.csv_bak" in str(f)]
+        files = limited_netspeed_files + other_files
+
         logger.info(f"Found {len(files)} files matching patterns: {patterns}")
-        
+
         if not files:
             return {
                 "status": "warning",
                 "message": f"No CSV files found in {directory_path}",
                 "directory": directory_path,
                 "files_processed": 0,
-                "total_documents": 0
+                "total_documents": 0,
             }
         
         # Process each file
