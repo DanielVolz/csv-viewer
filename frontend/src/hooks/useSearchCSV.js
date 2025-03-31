@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
-import { API_BASE_URL } from '../utils/apiConfig';
 
 // Define the desired column order - same as in useFilePreview.js
 const DESIRED_ORDER = [
@@ -48,7 +47,7 @@ function useSearchCSV() {
       setError(null);
       
       // The actual API call happens regardless of showToasts
-      const response = await axios.get(`${API_BASE_URL}/api/search/`, {
+      const response = await axios.get('/api/search/', {
         params: {
           query: searchTerm,
           field: null, // Always search in all fields

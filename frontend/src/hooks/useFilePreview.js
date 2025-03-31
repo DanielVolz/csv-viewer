@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
-import { API_BASE_URL } from '../utils/apiConfig';
 
 // Define the desired column order
 const DESIRED_ORDER = [
@@ -34,11 +33,11 @@ function useFilePreview(limit = 105) { // Changed default from 25 to 100
       try {
         setLoading(true);
         // Get file info to get the total count
-        const infoResponse = await axios.get(`${API_BASE_URL}/api/files/netspeed_info`);
+        const infoResponse = await axios.get('/api/files/netspeed_info');
         const fileInfo = infoResponse.data;
 
         // Call the backend API endpoint for preview data
-        const response = await axios.get(`${API_BASE_URL}/api/files/preview`, {
+        const response = await axios.get('/api/files/preview', {
           params: { limit }
         });
 

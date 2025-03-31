@@ -1,16 +1,8 @@
 /**
- * API configuration utility
- * Provides the base URL for API requests
+ * This file is kept for compatibility with existing imports.
+ * We are using relative URLs for all API requests so they work in all environments.
  */
 
-// Use environment variable if available, or fallback to detecting the current host
-const getBaseUrl = () => {
-  // Get the backend port from environment variables
-  const backendPort = process.env.REACT_APP_BACKEND_PORT || '8000';
-  
-  // When running in browser context, always use localhost with the backend port
-  // This fixes CORS issues when the frontend is running in a Docker container
-  return `http://localhost:${backendPort}`;
-};
-
-export const API_BASE_URL = getBaseUrl();
+// Export an empty string as API_BASE_URL to enable relative URLs
+// This works in both development and production environments
+export const API_BASE_URL = '';
