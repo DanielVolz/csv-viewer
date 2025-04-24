@@ -10,7 +10,7 @@ click-plugins==1.1.1
 click-repl==0.3.0
 opensearch-py==2.4.2
 fastapi==0.115.11
-h11==0.14.0
+h11==0.16.0
 idna==3.10
 kombu==5.5.0
 prompt_toolkit==3.0.50
