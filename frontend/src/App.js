@@ -7,19 +7,27 @@ import {
   Box,
   CssBaseline
 } from '@mui/material';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import Navigation from './components/Navigation';
 import HomePage from './pages/HomePage';
 import FilesPage from './pages/FilesPage';
-import SettingsPage from './pages/SettingsPageSimple';
+import SettingsPage from './pages/SettingsPageDnd';
 import DarkModeToggle from './components/DarkModeToggle';
-import { SettingsProvider } from './contexts/SettingsContext';
+import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 
-function App() {
+function AppContent() {
   const [currentTab, setCurrentTab] = useState('home');
+  const { setNavigationFunction } = useSettings();
 
   const handleTabChange = (event, newValue) => {
     setCurrentTab(newValue);
   };
+
+  // Register navigation function with settings context
+  React.useEffect(() => {
+    setNavigationFunction(handleTabChange);
+  }, [setNavigationFunction]);
 
   const renderContent = () => {
     switch (currentTab) {
@@ -34,7 +42,7 @@ function App() {
   };
 
   return (
-    <SettingsProvider>
+    <>
       <CssBaseline />
       <Box sx={{ 
         minHeight: '100vh',
@@ -78,7 +86,40 @@ function App() {
           {/* Page Content */}
           {renderContent()}
         </Container>
+
+        {/* Global Toast Container */}
+        <ToastContainer
+          position="top-right"
+          autoClose={3000}
+          hideProgressBar={false}
+          newestOnTop={true}
+          closeOnClick={true}
+          rtl={false}
+          pauseOnFocusLoss={true}
+          draggable={true}
+          pauseOnHover={true}
+          limit={5}
+          theme="colored"
+          style={{
+            marginTop: '60px' // Account for AppBar height
+          }}
+          toastStyle={{
+            borderRadius: '12px',
+            fontSize: '14px',
+            fontWeight: '500',
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+            backdropFilter: 'blur(10px)'
+          }}
+        />
       </Box>
+    </>
+  );
+}
+
+function App() {
+  return (
+    <SettingsProvider>
+      <AppContent />
     </SettingsProvider>
   );
 }

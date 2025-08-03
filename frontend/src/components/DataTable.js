@@ -27,7 +27,7 @@ function DataTable({
   onMacAddressClick,
   onSwitchPortClick 
 }) {
-  const { getEnabledColumnHeaders, sshUsername } = useSettings();
+  const { getEnabledColumnHeaders, sshUsername, navigateToSettings } = useSettings();
   
   // Get custom column configuration from settings
   const enabledHeaders = getEnabledColumnHeaders();
@@ -53,24 +53,191 @@ function DataTable({
     else return 'error.main';
   };
 
-  const handleCellClick = (header, content) => {
+  const copyToClipboard = async (text) => {
+    try {
+      // Try modern clipboard API first
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (error) {
+      console.warn('Clipboard API failed, falling back to legacy method:', error);
+    }
+    
+    // Fallback method using document.execCommand
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const result = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return result;
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      return false;
+    }
+  };
+
+  const convertToCiscoFormat = (port) => {
+    if (!port || typeof port !== 'string') {
+      console.log('Invalid port data:', port);
+      return port;
+    }
+    
+    console.log('Converting port:', port); // Debug log
+    
+    // Convert formats like "GigabitEthernet1/0/2/74" to "Gig 0/2/74"
+    const ciscoFormatRegex = /^GigabitEthernet(\d+)\/(\d+)\/(\d+)\/(\d+)$/i;
+    const match = port.match(ciscoFormatRegex);
+    
+    if (match) {
+      const [, , slot, module, portNum] = match;
+      const result = `Gig ${slot}/${module}/${portNum}`;
+      console.log('Converted to Cisco format:', result);
+      return result;
+    }
+    
+    // Try other common formats
+    // Format: "Gi1/0/2/74" or "Gi 1/0/2/74"
+    const shortGigRegex = /^Gi\s?(\d+)\/(\d+)\/(\d+)\/(\d+)$/i;
+    const shortMatch = port.match(shortGigRegex);
+    if (shortMatch) {
+      const [, , slot, module, portNum] = shortMatch;
+      const result = `Gig ${slot}/${module}/${portNum}`;
+      console.log('Converted short format to Cisco:', result);
+      return result;
+    }
+    
+    // If it's already in a short format, keep it
+    if (port.match(/^Gig\s+\d+\/\d+\/\d+$/i)) {
+      console.log('Already in correct Cisco format:', port);
+      return port;
+    }
+    
+    console.log('No conversion pattern matched, returning original:', port);
+    // If it doesn't match any expected format, return the original
+    return port;
+  };
+
+  const handleCellClick = async (header, content, rowData = null) => {
+    console.log('Cell clicked:', header, content, 'SSH Username:', sshUsername); // Debug log
+    
     if (header === "MAC Address" && onMacAddressClick) {
-      navigator.clipboard.writeText(content);
-      toast.success("Copied to clipboard");
+      const success = await copyToClipboard(content);
+      if (success) {
+        toast.success(`📋 MAC Address copied: ${content}`, {
+          autoClose: 3000,
+          pauseOnHover: true,
+          pauseOnFocusLoss: false
+        });
+      } else {
+        toast.error(`❌ Failed to copy MAC Address`, {
+          autoClose: 5000,
+          pauseOnHover: true,
+          pauseOnFocusLoss: false
+        });
+      }
       onMacAddressClick(content);
     } else if (header === "Switch Port" && onSwitchPortClick) {
-      navigator.clipboard.writeText(content);
-      toast.success("Copied to clipboard");
+      const success = await copyToClipboard(content);
+      if (success) {
+        toast.success(`📋 Switch Port copied: ${content}`, {
+          autoClose: 3000,
+          pauseOnHover: true,
+          pauseOnFocusLoss: false
+        });
+      } else {
+        toast.error(`❌ Failed to copy Switch Port`, {
+          autoClose: 5000,
+          pauseOnHover: true,
+          pauseOnFocusLoss: false
+        });
+      }
       onSwitchPortClick(content);
     } else if (header === "Switch Hostname" && content) {
+      console.log('Switch Hostname clicked, SSH Username:', sshUsername); // Debug log
       // SSH link functionality
-      if (sshUsername) {
+      if (sshUsername && sshUsername.trim() !== '') {
+        // First copy port in Cisco format if available (while we still have user activation)
+        let portCopySuccess = false;
+        let ciscoFormat = '';
+        
+        if (rowData && rowData["Switch Port"]) {
+          console.log('Switch Port data:', rowData["Switch Port"]); // Debug log
+          ciscoFormat = convertToCiscoFormat(rowData["Switch Port"]);
+          console.log('Cisco format:', ciscoFormat); // Debug log
+          
+          if (ciscoFormat && ciscoFormat.trim() !== '') {
+            portCopySuccess = await copyToClipboard(ciscoFormat);
+          }
+        }
+        
+        // Then open SSH link
         const sshUrl = `ssh://${sshUsername}@${content}`;
+        console.log('Opening SSH URL:', sshUrl); // Debug log
         window.open(sshUrl, '_blank');
-        toast.success("SSH link opened");
+        
+        // Show SSH link success
+        toast.success(`🔗 SSH link opened: ${sshUsername}@${content}`, {
+          autoClose: 3000,
+          pauseOnHover: true,
+          pauseOnFocusLoss: false
+        });
+        
+        // Show port copy result if port was available
+        if (rowData && rowData["Switch Port"] && ciscoFormat && ciscoFormat.trim() !== '') {
+          if (portCopySuccess) {
+            toast.success(`📋 Cisco port copied: ${ciscoFormat}`, {
+              autoClose: 3000,
+              pauseOnHover: true,
+              pauseOnFocusLoss: false
+            });
+          } else {
+            toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
+              autoClose: 5000,
+              pauseOnHover: true,
+              pauseOnFocusLoss: false
+            });
+          }
+        }
       } else {
-        navigator.clipboard.writeText(content);
-        toast.info("Hostname copied - Configure SSH username in Settings");
+        console.log('No SSH username, copying hostname to clipboard'); // Debug log
+        const success = await copyToClipboard(content);
+        
+        // Custom toast content with clickable link
+        const ToastContent = () => (
+          <div>
+            {success ? '📋 Hostname copied! ' : '❌ Failed to copy! '}
+            ⚠️ SSH username not configured!{' '}
+            <span 
+              onClick={() => {
+                navigateToSettings();
+                toast.dismiss(); // Close this toast
+              }}
+              style={{
+                color: '#4f46e5',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              Go to Settings
+            </span> to set your SSH username.
+          </div>
+        );
+
+        toast.error(<ToastContent />, {
+          autoClose: false,
+          closeOnClick: false,
+          hideProgressBar: true,
+          closeButton: true,
+          pauseOnHover: true
+        });
       }
     }
   };
@@ -122,30 +289,31 @@ function DataTable({
               color: theme => {
                 if (sshUsername) {
                   return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
+                } else {
+                  return theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00';
                 }
-                return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary';
               },
-              textDecoration: sshUsername ? 'underline' : 'none',
+              textDecoration: 'underline',
               '& .ssh-icon': {
                 color: theme => sshUsername 
                   ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
-                  : 'text.disabled'
+                  : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
               }
             }
           }}
         >
           {content}
-          {sshUsername && (
-            <Terminal 
-              className="ssh-icon"
-              sx={{ 
-                color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50',
-                fontSize: '14px',
-                ml: 0.5,
-                verticalAlign: 'middle'
-              }} 
-            />
-          )}
+          <Terminal 
+            className="ssh-icon"
+            sx={{ 
+              color: theme => sshUsername 
+                ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+              fontSize: '14px',
+              ml: 0.5,
+              verticalAlign: 'middle'
+            }} 
+          />
         </Typography>
       );
     }
@@ -308,7 +476,7 @@ function DataTable({
                     return (
                       <TableCell 
                         key={`${index}-${header}`}
-                        onClick={() => handleCellClick(header, cellContent)}
+                        onClick={() => handleCellClick(header, cellContent, row)}
                         sx={{ 
                           cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
                           whiteSpace: header === "Switch Port" ? "nowrap" : "normal",
@@ -326,10 +494,29 @@ function DataTable({
                               sx={{ 
                                 height: '20px',
                                 fontSize: '0.7rem',
-                                fontWeight: 600
+                                fontWeight: 600,
+                                cursor: 'pointer'
                               }}
                               color="primary"
                               variant="outlined"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                const ciscoFormat = convertToCiscoFormat(cellContent);
+                                const success = await copyToClipboard(ciscoFormat);
+                                if (success) {
+                                  toast.success(`📋 Cisco format copied: ${ciscoFormat}`, {
+                                    autoClose: 3000,
+                                    pauseOnHover: true,
+                                    pauseOnFocusLoss: false
+                                  });
+                                } else {
+                                  toast.error(`❌ Failed to copy Cisco format`, {
+                                    autoClose: 5000,
+                                    pauseOnHover: true,
+                                    pauseOnFocusLoss: false
+                                  });
+                                }
+                              }}
                             />
                           </Box>
                         ) : (
@@ -371,7 +558,7 @@ function DataTable({
                 return (
                   <TableCell 
                     key={header}
-                    onClick={() => handleCellClick(header, cellContent)}
+                    onClick={() => handleCellClick(header, cellContent, data)}
                     sx={{ 
                       cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
                       whiteSpace: header === "Switch Port" ? "nowrap" : "normal",
@@ -389,10 +576,29 @@ function DataTable({
                           sx={{ 
                             height: '20px',
                             fontSize: '0.7rem',
-                            fontWeight: 600
+                            fontWeight: 600,
+                            cursor: 'pointer'
                           }}
                           color="primary"
                           variant="outlined"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const ciscoFormat = convertToCiscoFormat(cellContent);
+                            const success = await copyToClipboard(ciscoFormat);
+                            if (success) {
+                              toast.success(`📋 Cisco format copied: ${ciscoFormat}`, {
+                                autoClose: 3000,
+                                pauseOnHover: true,
+                                pauseOnFocusLoss: false
+                              });
+                            } else {
+                              toast.error(`❌ Failed to copy Cisco format`, {
+                                autoClose: 5000,
+                                pauseOnHover: true,
+                                pauseOnFocusLoss: false
+                              });
+                            }
+                          }}
                         />
                       </Box>
                     ) : (

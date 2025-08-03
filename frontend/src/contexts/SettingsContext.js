@@ -34,6 +34,7 @@ export const useSettings = () => {
 export const SettingsProvider = ({ children }) => {
   const [sshUsername, setSshUsername] = useState('');
   const [columns, setColumns] = useState(DEFAULT_AVAILABLE_COLUMNS);
+  const [navigationCallback, setNavigationCallback] = useState(null);
 
   // Load settings from localStorage on mount
   useEffect(() => {
@@ -97,6 +98,18 @@ export const SettingsProvider = ({ children }) => {
     setSshUsername(username);
   };
 
+  // Set navigation callback function
+  const setNavigationFunction = (callback) => {
+    setNavigationCallback(() => callback);
+  };
+
+  // Navigate to settings
+  const navigateToSettings = () => {
+    if (navigationCallback) {
+      navigationCallback(null, 'settings');
+    }
+  };
+
   const value = {
     sshUsername,
     columns,
@@ -105,7 +118,9 @@ export const SettingsProvider = ({ children }) => {
     toggleColumn,
     reorderColumns,
     resetToDefault,
-    updateSshUsername
+    updateSshUsername,
+    setNavigationFunction,
+    navigateToSettings
   };
 
   return (

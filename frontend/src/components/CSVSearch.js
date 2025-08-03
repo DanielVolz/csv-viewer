@@ -22,8 +22,6 @@ import {
   Search,
   Clear
 } from '@mui/icons-material';
-import { ToastContainer } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import DataTable from './DataTable';
@@ -124,38 +122,6 @@ function CSVSearch({ previewLimit }) {
 
   return (
     <Box sx={{ mb: 4 }}>
-      <ToastContainer
-        position="top-center"
-        autoClose={2000}
-        hideProgressBar={true}
-        newestOnTop
-        closeOnClick
-        rtl={false}
-        pauseOnFocusLoss={false}
-        draggable={false}
-        pauseOnHover={false}
-        limit={1}
-        toastStyle={{
-          background: theme => theme.palette.mode === 'dark' 
-            ? '#1f2937' 
-            : '#ffffff',
-          border: theme => `1px solid ${theme.palette.mode === 'dark' 
-            ? '#374151' 
-            : '#e5e7eb'}`,
-          borderRadius: '8px',
-          color: theme => theme.palette.mode === 'dark' 
-            ? '#f9fafb' 
-            : '#1f2937',
-          boxShadow: theme => theme.palette.mode === 'dark'
-            ? '0 4px 6px -1px rgba(0, 0, 0, 0.3)'
-            : '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-          fontSize: '14px',
-          fontWeight: '500',
-          minHeight: '48px',
-          padding: '12px 16px'
-        }}
-      />
-
       {/* Search Section */}
       <Paper
         elevation={1}
