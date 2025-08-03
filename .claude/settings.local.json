@@ -8,5 +8,9 @@
       "Bash(docker logs:*)"
     ],
     "deny": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "csv-processor"
+  ],
+  "enableAllProjectMcpServers": true
 }

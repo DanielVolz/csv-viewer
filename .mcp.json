@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "csv-processor": {
+      "command": "python3",
+      "args": ["mcp_servers/csv_processor/server.py"],
+      "env": {
+        "DATA_DIR": "./data",
+        "PYTHONPATH": "."
+      }
+    }
+  }
+}
