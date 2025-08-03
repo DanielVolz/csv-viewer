@@ -12,7 +12,7 @@ import {
   Chip,
   alpha
 } from '@mui/material';
-import { Download } from '@mui/icons-material';
+import { Download, Terminal } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -27,7 +27,7 @@ function DataTable({
   onMacAddressClick,
   onSwitchPortClick 
 }) {
-  const { getEnabledColumnHeaders } = useSettings();
+  const { getEnabledColumnHeaders, sshUsername } = useSettings();
   
   // Get custom column configuration from settings
   const enabledHeaders = getEnabledColumnHeaders();
@@ -62,6 +62,16 @@ function DataTable({
       navigator.clipboard.writeText(content);
       toast.success("Copied to clipboard");
       onSwitchPortClick(content);
+    } else if (header === "Switch Hostname" && content) {
+      // SSH link functionality
+      if (sshUsername) {
+        const sshUrl = `ssh://${sshUsername}@${content}`;
+        window.open(sshUrl, '_blank');
+        toast.success("SSH link opened");
+      } else {
+        navigator.clipboard.writeText(content);
+        toast.info("Hostname copied - Configure SSH username in Settings");
+      }
     }
   };
 
@@ -90,6 +100,56 @@ function DataTable({
       );
     }
     
+    // Switch Hostname mit SSH Link
+    if (header === "Switch Hostname") {
+      return (
+        <Typography 
+          variant="body2"
+          component="span"
+          sx={{
+            textDecoration: sshUsername ? 'underline' : 'none',
+            color: theme => {
+              if (sshUsername) {
+                return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32';
+              }
+              return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary';
+            },
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5,
+            '&:hover': {
+              color: theme => {
+                if (sshUsername) {
+                  return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
+                }
+                return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary';
+              },
+              textDecoration: sshUsername ? 'underline' : 'none',
+              '& .ssh-icon': {
+                color: theme => sshUsername 
+                  ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
+                  : 'text.disabled'
+              }
+            }
+          }}
+        >
+          {content}
+          {sshUsername && (
+            <Terminal 
+              className="ssh-icon"
+              sx={{ 
+                color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50',
+                fontSize: '14px',
+                ml: 0.5,
+                verticalAlign: 'middle'
+              }} 
+            />
+          )}
+        </Typography>
+      );
+    }
+    
     // File Name mit Download
     if (header === "File Name") {
       return (
@@ -103,7 +163,7 @@ function DataTable({
             color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
             cursor: 'pointer',
             display: 'flex',
-            alignItems: 'flex-end',
+            alignItems: 'center',
             gap: 0.5,
             '&:hover': {
               color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
@@ -119,7 +179,8 @@ function DataTable({
             className="download-icon"
             sx={{ 
               color: 'text.disabled',
-              fontSize: '12px'
+              fontSize: '12px',
+              verticalAlign: 'middle'
             }} 
           />
         </Typography>
@@ -249,9 +310,9 @@ function DataTable({
                         key={`${index}-${header}`}
                         onClick={() => handleCellClick(header, cellContent)}
                         sx={{ 
-                          cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default",
+                          cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
                           whiteSpace: header === "Switch Port" ? "nowrap" : "normal",
-                          '&:hover': (header === "MAC Address" || header === "Switch Port") ? {
+                          '&:hover': (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? {
                             backgroundColor: theme => alpha(theme.palette.secondary.main, 0.1)
                           } : {}
                         }}
@@ -312,9 +373,9 @@ function DataTable({
                     key={header}
                     onClick={() => handleCellClick(header, cellContent)}
                     sx={{ 
-                      cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default",
+                      cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
                       whiteSpace: header === "Switch Port" ? "nowrap" : "normal",
-                      '&:hover': (header === "MAC Address" || header === "Switch Port") ? {
+                      '&:hover': (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? {
                         backgroundColor: theme => alpha(theme.palette.secondary.main, 0.1)
                       } : {}
                     }}

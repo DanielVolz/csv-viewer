@@ -104,7 +104,7 @@ function SettingsPageSimple() {
               value={tempSshUsername}
               onChange={(e) => setTempSshUsername(e.target.value)}
               placeholder="Enter your SSH username"
-              helperText="This username will be used for SSH connections to network devices"
+              helperText="This username will be used for SSH connections to network devices. Click Switch Hostname in tables to open SSH links."
               sx={{ flexGrow: 1 }}
             />
             <Button
@@ -303,6 +303,16 @@ function SettingsPageSimple() {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               SSH Username: <strong>{sshUsername || 'Not configured'}</strong>
             </Typography>
+            {sshUsername && (
+              <Typography variant="caption" color="success.main" sx={{ display: 'block', mt: 0.5 }}>
+                ✓ SSH links enabled - Click Switch Hostname in data tables to connect
+              </Typography>
+            )}
+            {!sshUsername && (
+              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+                ⚠ Configure SSH username to enable SSH links for Switch Hostname
+              </Typography>
+            )}
           </Box>
 
           <Box>
