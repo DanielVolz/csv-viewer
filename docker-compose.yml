@@ -100,6 +100,23 @@ services:
         soft: 65536
         hard: 65536
 
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2
+    container_name: opensearch-dashboards
+    ports:
+      - "${OPENSEARCH_DASHBOARDS_PORT}:5601"
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:${OPENSEARCH_PORT}"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    volumes:
+      - ./opensearch_dashboards.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
+    restart: unless-stopped
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
