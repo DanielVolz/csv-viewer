@@ -1,16 +1,10 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Box,
   TextField,
   Button,
   Typography,
   Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Alert,
   CircularProgress,
   FormControlLabel,
@@ -20,58 +14,26 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  Chip
+  InputAdornment,
+  IconButton,
+  Stack
 } from '@mui/material';
-import { ToastContainer, toast } from 'react-toastify';
+import { 
+  Search,
+  Clear
+} from '@mui/icons-material';
+import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import SearchIcon from '@mui/icons-material/Search';
-import ClearIcon from '@mui/icons-material/Clear';
-import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
+import DataTable from './DataTable';
 
-/**
- * Component for searching CSV files and displaying results
- */
 function CSVSearch({ previewLimit }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [includeHistorical, setIncludeHistorical] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
   const searchFieldRef = useRef(null);
-  
-  /**
-   * Returns color for date display based on how recent the date is:
-   * - Green for today's date
-   * - Orange for dates within the next two weeks (including future and past dates)
-   * - Red for dates older than 2 weeks in the past
-   */
-  const getDateColor = (dateString) => {
-    if (!dateString) return 'inherit';
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Reset time to start of day
-    
-    const fileDate = new Date(dateString);
-    fileDate.setHours(0, 0, 0, 0); // Reset time to start of day
-    
-    // Calculate difference in days
-    const diffTime = fileDate - today;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 0) {
-      // Today
-      return 'green';
-    } else if (diffDays > 0 && diffDays <= 14) {
-      // Future dates within next two weeks
-      return 'orange';
-    } else if (diffDays < 0 && diffDays >= -14) {
-      // Past dates within previous two weeks
-      return 'orange';
-    } else {
-      // Older dates (more than 2 weeks in the past)
-      return 'red';
-    }
-  };
+
   const {
     searchAll,
     results,
@@ -84,19 +46,13 @@ function CSVSearch({ previewLimit }) {
 
   const { previewData, loading: previewLoading, error: previewError } = useFilePreview(previewLimit);
 
-  // Track typing activity
   const typingTimeoutRef = useRef(null);
-  // Store last executed search term
   const lastSearchTermRef = useRef('');
-  // Track if user is in the middle of typing
   const [isTyping, setIsTyping] = useState(false);
 
-  // Function to actually execute search after user has stopped typing
   const executeSearch = useCallback((term) => {
-    // Only search if term is valid and different from last search
     if (term.length >= 3 && term !== lastSearchTermRef.current) {
       lastSearchTermRef.current = term;
-
       searchAll(term, includeHistorical, true).then(success => {
         if (success) {
           setHasSearched(true);
@@ -105,43 +61,45 @@ function CSVSearch({ previewLimit }) {
     }
   }, [includeHistorical, searchAll]);
 
-  // This function runs on every keystroke
+  const handleMacAddressClick = useCallback((macAddress) => {
+    setSearchTerm(macAddress);
+    lastSearchTermRef.current = macAddress;
+    searchAll(macAddress, includeHistorical, true).then(success => {
+      if (success) setHasSearched(true);
+    });
+  }, [includeHistorical, searchAll]);
+
+  const handleSwitchPortClick = useCallback((switchPort) => {
+    // Currently just copies to clipboard, but could trigger search
+    // Implementation can be extended later if needed
+  }, []);
+
   const handleInputChange = (e) => {
     const term = e.target.value;
     setSearchTerm(term);
     setIsTyping(true);
 
-    // Clear any existing typing timeout
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
 
     if (term === '') {
-      // If search term is empty, clear results
       setHasSearched(false);
       lastSearchTermRef.current = '';
       setIsTyping(false);
     } else if (term.length >= 3) {
-      // Set a timeout to execute search after user stops typing
-      // This approach is more reliable than debounce for preventing 
-      // intermediate searches
       typingTimeoutRef.current = setTimeout(() => {
         setIsTyping(false);
         executeSearch(term);
-      }, 1000); // 1-second delay after typing stops
+      }, 1000);
     }
   };
 
-  // Function to handle explicit search (button click or Enter)
   const handleSearch = () => {
     if (!searchTerm) return;
-
-    // Cancel any pending timeouts
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-
-    // Update the last search term and execute the search
     lastSearchTermRef.current = searchTerm;
     searchAll(searchTerm, includeHistorical, true).then(success => {
       if (success) {
@@ -150,11 +108,9 @@ function CSVSearch({ previewLimit }) {
     });
   };
 
-  // Function to clear the search field
   const handleClearSearch = () => {
     setSearchTerm('');
     setHasSearched(false);
-    // Focus on the search field after clearing
     if (searchFieldRef.current) {
       searchFieldRef.current.focus();
     }
@@ -169,516 +125,272 @@ function CSVSearch({ previewLimit }) {
   return (
     <Box sx={{ mb: 4 }}>
       <ToastContainer
-        position="top-right"
-        autoClose={3000}
-        hideProgressBar={false}
+        position="top-center"
+        autoClose={2000}
+        hideProgressBar={true}
         newestOnTop
         closeOnClick
         rtl={false}
-        pauseOnFocusLoss
-        draggable
-        pauseOnHover
+        pauseOnFocusLoss={false}
+        draggable={false}
+        pauseOnHover={false}
+        limit={1}
+        toastStyle={{
+          background: theme => theme.palette.mode === 'dark' 
+            ? '#1f2937' 
+            : '#ffffff',
+          border: theme => `1px solid ${theme.palette.mode === 'dark' 
+            ? '#374151' 
+            : '#e5e7eb'}`,
+          borderRadius: '8px',
+          color: theme => theme.palette.mode === 'dark' 
+            ? '#f9fafb' 
+            : '#1f2937',
+          boxShadow: theme => theme.palette.mode === 'dark'
+            ? '0 4px 6px -1px rgba(0, 0, 0, 0.3)'
+            : '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          fontSize: '14px',
+          fontWeight: '500',
+          minHeight: '48px',
+          padding: '12px 16px'
+        }}
       />
-      <Typography variant="h5" gutterBottom>
-        CSV Search
-      </Typography>
 
-      <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', position: 'relative' }}>
-            <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
-              <TextField
-                inputRef={searchFieldRef}
-                label="Search Term"
-                placeholder="Enter search term..."
-                variant="outlined"
-                fullWidth
-                value={searchTerm}
-                onChange={handleInputChange}
-                onKeyPress={handleKeyPress}
-                helperText="Search for any text across all fields in the CSV files"
-                sx={{ mr: 2 }}
+      {/* Search Section */}
+      <Paper
+        elevation={1}
+        sx={{
+          p: 3,
+          mb: 4,
+          borderRadius: 2,
+          border: '1px solid',
+          borderColor: 'divider'
+        }}
+      >
+        <Stack spacing={3}>
+          {/* Search Input */}
+          <TextField
+            inputRef={searchFieldRef}
+            fullWidth
+            variant="outlined"
+            placeholder="Search for IP addresses, MAC addresses, hostnames, etc..."
+            value={searchTerm}
+            onChange={handleInputChange}
+            onKeyPress={handleKeyPress}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                backgroundColor: theme => theme.palette.mode === 'dark' 
+                  ? '#111827' 
+                  : '#f8fafc',
+                '&:hover': {
+                  backgroundColor: theme => theme.palette.mode === 'dark' 
+                    ? '#0f172a' 
+                    : '#f1f5f9'
+                },
+                '&.Mui-focused': {
+                  backgroundColor: theme => theme.palette.mode === 'dark' 
+                    ? '#0f172a' 
+                    : '#f1f5f9'
+                }
+              }
+            }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search />
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    {isTyping && (
+                      <CircularProgress size={20} />
+                    )}
+                    {searchTerm && (
+                      <IconButton 
+                        onClick={handleClearSearch}
+                        size="small"
+                      >
+                        <Clear fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Box>
+                </InputAdornment>
+              ),
+            }}
+          />
+
+          {/* Action Bar */}
+          <Box sx={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 2
+          }}>
+            {/* Left Side - Controls */}
+            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={includeHistorical}
+                    onChange={(e) => setIncludeHistorical(e.target.checked)}
+                  />
+                }
+                label={
+                  <Typography variant="body2" fontWeight={500}>
+                    Include Historical Data
+                  </Typography>
+                }
               />
+            </Box>
+
+            {/* Right Side - Action Buttons */}
+            <Box sx={{ display: 'flex', gap: 2 }}>
               <Button
                 variant="contained"
-                color="primary"
                 onClick={handleSearch}
-                startIcon={<SearchIcon />}
-                sx={{ height: 56 }}
                 disabled={searchLoading || !searchTerm}
+                startIcon={searchLoading ? <CircularProgress size={20} /> : <Search />}
               >
-                Search
-              </Button>
-              <Button
-                variant="outlined"
-                color="secondary"
-                onClick={handleClearSearch}
-                startIcon={<ClearIcon />}
-                sx={{ height: 56, ml: 1 }}
-                disabled={searchLoading || !searchTerm}
-              >
-                Clear
+                {searchLoading ? 'Searching...' : 'Search'}
               </Button>
             </Box>
           </Box>
 
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={includeHistorical}
-                onChange={(e) => setIncludeHistorical(e.target.checked)}
-                color="primary"
-              />
-            }
-            label="Include historical files in search"
-          />
-        </Box>
+        </Stack>
       </Paper>
 
-      {/* Loading indicator */}
+      {/* Loading State */}
       {(searchLoading || previewLoading) && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>
-          <CircularProgress />
+        <Box sx={{ 
+          display: 'flex', 
+          flexDirection: 'column',
+          alignItems: 'center', 
+          gap: 2,
+          py: 6
+        }}>
+          <CircularProgress size={32} />
+          <Typography variant="body1" color="text.secondary">
+            {searchLoading ? 'Searching...' : 'Loading...'}
+          </Typography>
         </Box>
       )}
 
-      {/* Error message */}
+      {/* Error State */}
       {(searchError || previewError) && (
-        <Alert severity="error" sx={{ mb: 3 }}>
+        <Alert 
+          severity="error" 
+          sx={{ mb: 3 }}
+        >
           {searchError || previewError}
         </Alert>
       )}
 
-      {/* Results table - Show search results or preview data */}
+      {/* Results Section */}
       {!searchLoading && !previewLoading && (hasSearched ? results : previewData) && (
         <Box>
-          <Typography variant="h6" gutterBottom>
-            {hasSearched ? "Search Results" : "CSV File Preview"}
-          </Typography>
-
-          <Box sx={{ mb: 2 }}>
-            <Alert
-              severity={hasSearched ? (results?.success ? "success" : "info") : "info"}
-              sx={{ mb: 2 }}
-            >
-              {hasSearched ? results?.message : (previewData?.message || "Showing first 100 entries from the CSV file")}
-            </Alert>
-
-            {/* Pagination Controls */}
-            {hasSearched && results?.success && results?.pagination && (
-              <Box sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: 2
-              }}>
-                <Typography variant="body2">
-                  Showing {results.pagination.currentStart} to {results.pagination.currentEnd} of {results.pagination.totalItems} results
-                </Typography>
-
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
-                    <InputLabel id="page-size-label">Page Size</InputLabel>
-                    <Select
-                      labelId="page-size-label"
-                      value={pagination.pageSize}
-                      onChange={(e) => setPageSize(e.target.value)}
-                      label="Page Size"
-                    >
-                      <MenuItem value={10}>10</MenuItem>
-                      <MenuItem value={25}>25</MenuItem>
-                      <MenuItem value={50}>50</MenuItem>
-                      <MenuItem value={100}>100</MenuItem>
-                      <MenuItem value={250}>250</MenuItem>
-                    </Select>
-                  </FormControl>
-
-                  <Pagination
-                    count={pagination.totalPages}
-                    page={pagination.page}
-                    onChange={(e, page) => setPage(page)}
-                    color="primary"
-                    showFirstButton
-                    showLastButton
-                  />
+            {/* Results Header */}
+            <Box sx={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              mb: 3
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box>
+                  <Typography variant="h5" fontWeight={700}>
+                    {hasSearched ? "Search Results" : "Data Preview"}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {hasSearched 
+                      ? ""
+                      : "Latest entries from your CSV data"
+                    }
+                  </Typography>
                 </Box>
               </Box>
-            )}
-          </Box>
 
-          {((hasSearched && results?.data && results?.headers) ||
-            (!hasSearched && previewData?.data && previewData?.headers)) && (
-              <TableContainer
-                component={Paper}
-                sx={{
-                  margin: '20px 0',
-                  height: 'auto',
-                  maxHeight: 'none',
-                  overflow: 'auto',
-                  boxShadow: 3
-                }}
-              >
-                <Table sx={{ width: 'auto', tableLayout: 'fixed' }} aria-label="data table">
-                  <TableHead>
-                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
-                      {hasSearched && (
-                        <TableCell>
-                          <Typography variant="subtitle2">
-                            <strong>#</strong>
-                          </Typography>
-                        </TableCell>
-                      )}
-                      {(hasSearched ? results.headers : previewData.headers).map((header) => (
-                        <TableCell key={header}>
-                          <Typography variant="subtitle2">
-                            <strong>{header}</strong>
-                          </Typography>
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {hasSearched ? (
-                      results.data === null ? (
-                        <TableRow>
-                          <TableCell colSpan={results.headers.length + 1} align="center">
-                            No data found
-                          </TableCell>
-                        </TableRow>
-                      ) : Array.isArray(results.data) ? (
-                        results.data.map((row, index) => (
-                          <TableRow
-                            key={index}
-                            sx={{ '&:nth-of-type(odd)': { backgroundColor: '#fafafa' } }}
-                          >
-                            <TableCell>
-                              {index + 1}
-                            </TableCell>
-                            {results.headers.map((header) => {
-                              // Handle special formatting for specific columns
-                              let cellContent = row[header];
+            </Box>
 
-                              // Creation Date should already be in proper format from backend
-                              let formattedDate = cellContent;
-                              
-                              return (
-                                <TableCell 
-                                  key={`${index}-${header}`}
-                                  onClick={() => {
-                                    if (header === "MAC Address") {
-                                      // Copy to clipboard
-                                      navigator.clipboard.writeText(cellContent);
-                                      toast.info("MAC Address copied to clipboard!", {
-                                        position: "top-right",
-                                        autoClose: 3000,
-                                        hideProgressBar: false,
-                                        closeOnClick: true,
-                                        pauseOnHover: true,
-                                        draggable: true,
-                                        progress: undefined,
-                                      });
-                                      
-                                      // Search for the MAC address
-                                      setSearchTerm(cellContent);
-                                      lastSearchTermRef.current = cellContent;
-                                      searchAll(cellContent, includeHistorical, true).then(success => {
-                                        if (success) {
-                                          setHasSearched(true);
-                                        }
-                                      });
-                                    } else if (header === "Switch Port") {
-                                      // Copy Switch Port name to clipboard
-                                      navigator.clipboard.writeText(cellContent);
-                                      toast.info("Switch Port name copied to clipboard!", {
-                                        position: "top-right",
-                                        autoClose: 3000,
-                                        hideProgressBar: false,
-                                        closeOnClick: true,
-                                        pauseOnHover: true,
-                                        draggable: true,
-                                        progress: undefined,
-                                      });
-                                    }
-                                  }}
-                                  style={{ cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default" }}
-                                >
-                                  {header === "Creation Date" && cellContent ? (
-                                    <Typography style={{ color: getDateColor(cellContent) }}>
-                                      {cellContent}
-                                    </Typography>
-                                  ) : 
-                                    header === "File Name" ? (
-                                      <a 
-                                        href={`/api/files/download/${cellContent}`} 
-                                        download
-                                        style={{ 
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          color: 'inherit', 
-                                          textDecoration: 'underline',
-                                          cursor: 'pointer'
-                                        }}
-                                      >
-                                        <FileDownloadIcon 
-                                          fontSize="small" 
-                                          color="primary" 
-                                          sx={{ mr: 1 }}
-                                        />
-                                        {cellContent}
-                                      </a>
-                                    ) : header === "IP Address" ? (
-                                      <a href={`http://${cellContent}`} target="_blank" rel="noopener noreferrer">
-                                        {cellContent}
-                                      </a>
-                                    ) : header === "Creation Date" ? (
-                                      <Typography style={{ color: getDateColor(cellContent) }}>
-                                        {formattedDate}
-                                      </Typography>
-                                    ) : (
-                                      cellContent
-                                    )}
-                                    {header === "Switch Port" && (
-                                      <Chip 
-                                        label="cisco"
-                                        size="small"
-                                        sx={{ 
-                                          ml: 0.5, 
-                                          backgroundColor: '#049FD9', 
-                                          color: 'white',
-                                          fontSize: '0.65rem',
-                                          height: '16px',
-                                          '& .MuiChip-label': {
-                                            padding: '0px 8px',
-                                          }
-                                        }}
-                                      />
-                                    )}
-                                </TableCell>
-                              );
-                            })}
-                          </TableRow>
-                        ))
-                      ) : (
-                        <TableRow>
-                          <TableCell>
-                            1
-                          </TableCell>
-                          {results.headers.map((header) => {
-                            // Handle special formatting for specific columns
-                            let cellContent = results.data[header];
+            {/* Status Alert */}
+            <Alert
+              severity={hasSearched ? (results?.success ? "success" : "info") : "info"}
+              sx={{ mb: 3 }}
+            >
+              {hasSearched ? results?.message : (previewData?.message || "Showing latest entries from the CSV file")}
+            </Alert>
 
-                            // Creation Date should already be in proper format from backend
-                            let formattedDate = cellContent;
 
-                            return (
-                              <TableCell 
-                                key={header}
-                                onClick={() => {
-                                  if (header === "MAC Address") {
-                                    // Copy to clipboard
-                                    navigator.clipboard.writeText(cellContent);
-                                    toast.info("MAC Address copied to clipboard!", {
-                                      position: "top-right",
-                                      autoClose: 3000,
-                                      hideProgressBar: false,
-                                      closeOnClick: true,
-                                      pauseOnHover: true,
-                                      draggable: true,
-                                      progress: undefined,
-                                    });
-                                    
-                                    // Search for the MAC address
-                                    setSearchTerm(cellContent);
-                                    lastSearchTermRef.current = cellContent;
-                                    searchAll(cellContent, includeHistorical, true).then(success => {
-                                      if (success) {
-                                        setHasSearched(true);
-                                      }
-                                    });
-                                  } else if (header === "Switch Port") {
-                                    // Copy Switch Port name to clipboard
-                                    navigator.clipboard.writeText(cellContent);
-                                    toast.info("Switch Port name copied to clipboard!", {
-                                      position: "top-right",
-                                      autoClose: 3000,
-                                      hideProgressBar: false,
-                                      closeOnClick: true,
-                                      pauseOnHover: true,
-                                      draggable: true,
-                                      progress: undefined,
-                                    });
-                                  }
-                                }}
-                                style={{ cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default" }}
-                              >
-                                {header === "Creation Date" && cellContent ? (
-                                  <Typography style={{ color: getDateColor(cellContent) }}>
-                                    {cellContent}
-                                  </Typography>
-                                ) : 
-                                header === "File Name" ? (
-                                  <a 
-                                    href={`/api/files/download/${cellContent}`} 
-                                    download
-                                    style={{ 
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      color: 'inherit', 
-                                      textDecoration: 'underline',
-                                      cursor: 'pointer'
-                                    }}
-                                  >
-                                    <FileDownloadIcon 
-                                      fontSize="small" 
-                                      color="primary" 
-                                      sx={{ mr: 1 }}
-                                    />
-                                    {cellContent}
-                                  </a>
-                                ) : header === "IP Address" ? (
-                                  <a href={`http://${cellContent}`} target="_blank" rel="noopener noreferrer">
-                                    {cellContent}
-                                  </a>
-                                ) : header === "Creation Date" ? (
-                                  <Typography style={{ color: getDateColor(cellContent) }}>
-                                    {formattedDate}
-                                  </Typography>
-                                ) : (
-                                  cellContent
-                                )}
-                                {header === "Switch Port" && (
-                                  <Chip 
-                                    label="cisco"
-                                    size="small"
-                                    sx={{ 
-                                      ml: 0.5, 
-                                      backgroundColor: '#049FD9', 
-                                      color: 'white',
-                                      fontSize: '0.65rem',
-                                      height: '16px',
-                                      '& .MuiChip-label': {
-                                        padding: '0px 8px',
-                                      }
-                                    }}
-                                  />
-                                )}
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-                      )
-                    ) : (
-                      previewData.data.map((row, index) => (
-                        <TableRow
-                          key={index}
-                          sx={{ '&:nth-of-type(odd)': { backgroundColor: '#fafafa' } }}
+            {/* Unified Data Table */}
+            {((hasSearched && results?.data && results?.headers) ||
+              (!hasSearched && previewData?.data && previewData?.headers)) && (
+                <DataTable
+                  headers={hasSearched ? results.headers : previewData.headers}
+                  data={hasSearched ? results.data : previewData.data}
+                  showRowNumbers={hasSearched}
+                  onMacAddressClick={handleMacAddressClick}
+                  onSwitchPortClick={handleSwitchPortClick}
+                />
+              )}
+
+              {/* Pagination Controls - moved to bottom */}
+              {hasSearched && results?.success && results?.pagination && (
+                <Paper
+                  elevation={1}
+                  sx={{
+                    p: 2,
+                    mt: 3,
+                    borderRadius: 1,
+                    border: '1px solid',
+                    borderColor: 'divider'
+                  }}
+                >
+                  <Box sx={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 2
+                  }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Showing {results.pagination.currentStart} to {results.pagination.currentEnd} of {results.pagination.totalItems} results
+                    </Typography>
+
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                      <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
+                        <InputLabel>Page Size</InputLabel>
+                        <Select
+                          value={pagination.pageSize}
+                          onChange={(e) => setPageSize(e.target.value)}
+                          label="Page Size"
                         >
-                          {previewData.headers.map((header) => {
-                            // Handle special formatting for specific columns
-                            let cellContent = row[header];
+                          <MenuItem value={10}>10</MenuItem>
+                          <MenuItem value={25}>25</MenuItem>
+                          <MenuItem value={50}>50</MenuItem>
+                          <MenuItem value={100}>100</MenuItem>
+                          <MenuItem value={250}>250</MenuItem>
+                        </Select>
+                      </FormControl>
 
-                            // Creation Date should already be in proper format from backend
-                            let formattedDate = cellContent;
-
-                            return (
-                              <TableCell 
-                                key={`${index}-${header}`}
-                                onClick={() => {
-                                  if (header === "MAC Address") {
-                                    // Copy to clipboard
-                                    navigator.clipboard.writeText(cellContent);
-                                    toast.info("MAC Address copied to clipboard!", {
-                                      position: "top-right",
-                                      autoClose: 3000,
-                                      hideProgressBar: false,
-                                      closeOnClick: true,
-                                      pauseOnHover: true,
-                                      draggable: true,
-                                      progress: undefined,
-                                    });
-                                    
-                                    // Search for the MAC address
-                                    setSearchTerm(cellContent);
-                                    lastSearchTermRef.current = cellContent;
-                                    searchAll(cellContent, includeHistorical, true).then(success => {
-                                      if (success) {
-                                        setHasSearched(true);
-                                      }
-                                    });
-                                  } else if (header === "Switch Port") {
-                                    // Copy Switch Port name to clipboard
-                                    navigator.clipboard.writeText(cellContent);
-                                    toast.info("Switch Port name copied to clipboard!", {
-                                      position: "top-right",
-                                      autoClose: 3000,
-                                      hideProgressBar: false,
-                                      closeOnClick: true,
-                                      pauseOnHover: true,
-                                      draggable: true,
-                                      progress: undefined,
-                                    });
-                                  }
-                                }}
-                                style={{ cursor: (header === "MAC Address" || header === "Switch Port") ? "pointer" : "default" }}
-                              >
-                                {header === "Creation Date" && cellContent ? (
-                                  <Typography style={{ color: getDateColor(cellContent) }}>
-                                    {cellContent}
-                                  </Typography>
-                                ) : header === "File Name" ? (
-                                  <a 
-                                    href={`/api/files/download/${cellContent}`} 
-                                    download
-                                    style={{ 
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      color: 'inherit', 
-                                      textDecoration: 'underline',
-                                      cursor: 'pointer'
-                                    }}
-                                  >
-                                    <FileDownloadIcon 
-                                      fontSize="small" 
-                                      color="primary" 
-                                      sx={{ mr: 1 }}
-                                    />
-                                    {cellContent}
-                                  </a>
-                                ) : header === "IP Address" ? (
-                                  <a href={`http://${cellContent}`} target="_blank" rel="noopener noreferrer">
-                                    {cellContent}
-                                  </a>
-                                ) : (
-                                  cellContent
-                                )}
-                                {header === "Switch Port" && (
-                                  <Chip 
-                                    label="cisco"
-                                    size="small"
-                                    sx={{ 
-                                      ml: 0.5, 
-                                      backgroundColor: '#049FD9', 
-                                      color: 'white',
-                                      fontSize: '0.65rem',
-                                      height: '16px',
-                                      '& .MuiChip-label': {
-                                        padding: '0px 8px',
-                                      }
-                                    }}
-                                  />
-                                )}
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-        </Box>
+                      <Pagination
+                        count={pagination.totalPages}
+                        page={pagination.page}
+                        onChange={(e, page) => setPage(page)}
+                        color="primary"
+                        showFirstButton
+                        showLastButton
+                        sx={{
+                          '& .MuiPaginationItem-root': {
+                            borderRadius: 2
+                          }
+                        }}
+                      />
+                    </Box>
+                  </Box>
+                </Paper>
+              )}
+            </Box>
       )}
     </Box>
   );

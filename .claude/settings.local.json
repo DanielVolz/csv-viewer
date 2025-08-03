@@ -5,12 +5,14 @@
       "Bash(docker-compose:*)",
       "Bash(curl:*)",
       "Bash(grep:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "csv-processor"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

@@ -1,43 +1,82 @@
-import React from 'react';
-import { Container, AppBar, Toolbar, Typography, Divider } from '@mui/material';
-import FileTable from './components/FileTable';
-import CSVSearch from './components/CSVSearch';
-import FileInfoBox from './components/FileInfoBox';
+import React, { useState } from 'react';
+import { 
+  Container, 
+  AppBar, 
+  Toolbar, 
+  Typography, 
+  Box,
+  alpha,
+  CssBaseline
+} from '@mui/material';
+import Navigation from './components/Navigation';
+import HomePage from './pages/HomePage';
+import FilesPage from './pages/FilesPage';
 import DarkModeToggle from './components/DarkModeToggle';
 
 function App() {
+  const [currentTab, setCurrentTab] = useState('home');
+
+  const handleTabChange = (event, newValue) => {
+    setCurrentTab(newValue);
+  };
+
+  const renderContent = () => {
+    switch (currentTab) {
+      case 'files':
+        return <FilesPage />;
+      case 'home':
+      default:
+        return <HomePage />;
+    }
+  };
+
   return (
-    <div className="App">
-      <AppBar position="static" sx={{ marginBottom: 2 }}>
-        <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            CSV Data Viewer
-          </Typography>
-          <DarkModeToggle />
-        </Toolbar>
-      </AppBar>
-      <Container>
-        <main>
-          <Typography variant="h4" component="h1" gutterBottom>
-            CSV Data Viewer
-          </Typography>
-          <Typography variant="body1" paragraph>
-            View and search CSV files containing network data.
-          </Typography>
-          
-          {/* File Info Box */}
-          <FileInfoBox />
-          
-          {/* CSV Search */}
-          <CSVSearch />
-          
-          <Divider sx={{ my: 4 }} />
-          
-          {/* File List */}
-          <FileTable />
-        </main>
-      </Container>
-    </div>
+    <>
+      <CssBaseline />
+      <Box sx={{ 
+        minHeight: '100vh',
+        background: 'inherit',
+        position: 'relative'
+      }}>
+        {/* Header */}
+        <AppBar 
+          position="static" 
+          elevation={0}
+          sx={{ 
+            background: 'transparent',
+            backdropFilter: 'blur(20px)',
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+            mb: 4
+          }}
+        >
+          <Toolbar sx={{ py: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 4 }}>
+              <Typography 
+                variant="h6" 
+                component="h1" 
+                sx={{ 
+                  fontWeight: 600,
+                  color: 'text.primary'
+                }}
+              >
+                CSV Viewer
+              </Typography>
+              
+              <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
+            </Box>
+            
+            <DarkModeToggle />
+          </Toolbar>
+        </AppBar>
+
+        {/* Main Content */}
+        <Container maxWidth="xl" sx={{ pb: 4 }}>
+          {/* Page Content */}
+          {renderContent()}
+        </Container>
+      </Box>
+    </>
   );
 }
 

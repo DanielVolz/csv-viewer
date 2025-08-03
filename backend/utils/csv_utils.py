@@ -17,15 +17,16 @@ KNOWN_HEADERS = {
     ],
     14: [  # NEW format  
         "IP Address", "Line Number", "Serial Number", "Model Name", "MAC Address",
-        "MAC Address 2", "Subnet Mask", "Voice VLAN", "Switch Hostname", "Switch Port"
+        "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
+        "Switch Hostname", "Switch Port", "Speed 3", "Speed 4"
     ]
 }
 
 # Define the desired display order for columns (what Frontend should show)
 DESIRED_ORDER = [
     "#", "File Name", "Creation Date", "IP Address", "Line Number", "MAC Address",
-    "MAC Address 2", "Subnet Mask", "Voice VLAN", "Switch Hostname", "Switch Port",
-    "Serial Number", "Model Name"
+    "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
+    "Switch Hostname", "Switch Port", "Speed 3", "Speed 4", "Serial Number", "Model Name"
 ]
 
 
