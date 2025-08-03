@@ -1,10 +1,9 @@
 import React from 'react';
 import { 
   Tabs,
-  Tab,
-  Box
+  Tab
 } from '@mui/material';
-import { Home, Folder } from '@mui/icons-material';
+import { Home, Folder, Settings } from '@mui/icons-material';
 
 function Navigation({ currentTab, onTabChange }) {
   return (
@@ -37,6 +36,12 @@ function Navigation({ currentTab, onTabChange }) {
         icon={<Folder fontSize="small" />} 
         label="Files" 
         value="files"
+        iconPosition="start"
+      />
+      <Tab 
+        icon={<Settings fontSize="small" />} 
+        label="Settings" 
+        value="settings"
         iconPosition="start"
       />
     </Tabs>

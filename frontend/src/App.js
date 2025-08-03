@@ -5,13 +5,14 @@ import {
   Toolbar, 
   Typography, 
   Box,
-  alpha,
   CssBaseline
 } from '@mui/material';
 import Navigation from './components/Navigation';
 import HomePage from './pages/HomePage';
 import FilesPage from './pages/FilesPage';
+import SettingsPage from './pages/SettingsPageSimple';
 import DarkModeToggle from './components/DarkModeToggle';
+import { SettingsProvider } from './contexts/SettingsContext';
 
 function App() {
   const [currentTab, setCurrentTab] = useState('home');
@@ -24,6 +25,8 @@ function App() {
     switch (currentTab) {
       case 'files':
         return <FilesPage />;
+      case 'settings':
+        return <SettingsPage />;
       case 'home':
       default:
         return <HomePage />;
@@ -31,7 +34,7 @@ function App() {
   };
 
   return (
-    <>
+    <SettingsProvider>
       <CssBaseline />
       <Box sx={{ 
         minHeight: '100vh',
@@ -76,7 +79,7 @@ function App() {
           {renderContent()}
         </Container>
       </Box>
-    </>
+    </SettingsProvider>
   );
 }
 

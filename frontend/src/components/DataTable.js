@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import { Download } from '@mui/icons-material';
 import { toast } from 'react-toastify';
+import { useSettings } from '../contexts/SettingsContext';
 
 /**
  * Gemeinsame DataTable-Komponente für Preview und Suchergebnisse
@@ -26,6 +27,13 @@ function DataTable({
   onMacAddressClick,
   onSwitchPortClick 
 }) {
+  const { getEnabledColumnHeaders } = useSettings();
+  
+  // Get custom column configuration from settings
+  const enabledHeaders = getEnabledColumnHeaders();
+  
+  // Filter headers based on settings, but keep the original order from the settings
+  const filteredHeaders = enabledHeaders.filter(header => headers.includes(header));
   
   const getDateColor = (dateString) => {
     if (!dateString) return 'inherit';
@@ -175,7 +183,7 @@ function DataTable({
                 #
               </TableCell>
             )}
-            {headers.map((header) => (
+            {filteredHeaders.map((header) => (
               <TableCell key={header} sx={{ 
                 fontWeight: 600, 
                 fontSize: '0.85rem',
@@ -192,7 +200,7 @@ function DataTable({
           {Array.isArray(data) ? (
             data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={headers.length + (showRowNumbers ? 1 : 0)} align="center">
+                <TableCell colSpan={filteredHeaders.length + (showRowNumbers ? 1 : 0)} align="center">
                   <Box sx={{ py: 4 }}>
                     <Typography variant="h6" color="text.secondary">
                       No data found
@@ -234,7 +242,7 @@ function DataTable({
                       {index + 1}
                     </TableCell>
                   )}
-                  {headers.map((header) => {
+                  {filteredHeaders.map((header) => {
                     const cellContent = row[header];
                     return (
                       <TableCell 
@@ -297,7 +305,7 @@ function DataTable({
                   1
                 </TableCell>
               )}
-              {headers.map((header) => {
+              {filteredHeaders.map((header) => {
                 const cellContent = data[header];
                 return (
                   <TableCell 
