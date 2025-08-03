@@ -84,136 +84,124 @@ function DataTable({
   };
 
   const convertToCiscoFormat = (port) => {
-    if (!port || typeof port !== 'string') {
-      console.log('Invalid port data:', port);
+    if (!port || typeof port !== 'string' || port.length > 50) {
+      return port; // Skip very long strings
+    }
+    
+    // Fast check: if it starts with "Gig " already, return as-is
+    if (port.startsWith('Gig ')) {
       return port;
     }
     
-    console.log('Converting port:', port); // Debug log
-    
-    // Convert formats like "GigabitEthernet1/0/2/74" to "Gig 0/2/74"
-    const ciscoFormatRegex = /^GigabitEthernet(\d+)\/(\d+)\/(\d+)\/(\d+)$/i;
-    const match = port.match(ciscoFormatRegex);
-    
-    if (match) {
-      const [, , slot, module, portNum] = match;
-      const result = `Gig ${slot}/${module}/${portNum}`;
-      console.log('Converted to Cisco format:', result);
-      return result;
+    // Fast conversion for most common format
+    if (port.startsWith('GigabitEthernet')) {
+      const parts = port.split('/');
+      if (parts.length === 4) {
+        const slot = parts[1];
+        const module = parts[2]; 
+        const portNum = parts[3];
+        return `Gig ${slot}/${module}/${portNum}`;
+      }
     }
     
-    // Try other common formats
-    // Format: "Gi1/0/2/74" or "Gi 1/0/2/74"
-    const shortGigRegex = /^Gi\s?(\d+)\/(\d+)\/(\d+)\/(\d+)$/i;
-    const shortMatch = port.match(shortGigRegex);
-    if (shortMatch) {
-      const [, , slot, module, portNum] = shortMatch;
-      const result = `Gig ${slot}/${module}/${portNum}`;
-      console.log('Converted short format to Cisco:', result);
-      return result;
+    // Fast conversion for short format
+    if (port.startsWith('Gi')) {
+      const parts = port.substring(2).split('/');
+      if (parts.length === 4) {
+        const slot = parts[1];
+        const module = parts[2];
+        const portNum = parts[3];
+        return `Gig ${slot}/${module}/${portNum}`;
+      }
     }
     
-    // If it's already in a short format, keep it
-    if (port.match(/^Gig\s+\d+\/\d+\/\d+$/i)) {
-      console.log('Already in correct Cisco format:', port);
-      return port;
-    }
-    
-    console.log('No conversion pattern matched, returning original:', port);
-    // If it doesn't match any expected format, return the original
     return port;
   };
 
-  const handleCellClick = async (header, content, rowData = null) => {
-    console.log('Cell clicked:', header, content, 'SSH Username:', sshUsername); // Debug log
+  const handleCellClick = (header, content, rowData = null) => {
     
     if (header === "MAC Address" && onMacAddressClick) {
-      const success = await copyToClipboard(content);
-      if (success) {
-        toast.success(`📋 MAC Address copied: ${content}`, {
-          autoClose: 3000,
-          pauseOnHover: true,
-          pauseOnFocusLoss: false
-        });
-      } else {
-        toast.error(`❌ Failed to copy MAC Address`, {
-          autoClose: 5000,
-          pauseOnHover: true,
-          pauseOnFocusLoss: false
-        });
-      }
+      // Start search immediately without waiting for clipboard
       onMacAddressClick(content);
+      
+      // Show immediate feedback
+      toast.success(`📋 Copying: ${content}`, {
+        autoClose: 1000,
+        pauseOnHover: false,
+        pauseOnFocusLoss: false
+      });
+      
+      // Copy to clipboard in background
+      copyToClipboard(content).then(success => {
+        if (!success) {
+          toast.error(`❌ Copy failed`, {
+            autoClose: 2000,
+            pauseOnHover: true,
+            pauseOnFocusLoss: false
+          });
+        }
+      });
     } else if (header === "Switch Port" && onSwitchPortClick) {
-      const success = await copyToClipboard(content);
-      if (success) {
-        toast.success(`📋 Switch Port copied: ${content}`, {
-          autoClose: 3000,
-          pauseOnHover: true,
-          pauseOnFocusLoss: false
-        });
-      } else {
-        toast.error(`❌ Failed to copy Switch Port`, {
-          autoClose: 5000,
-          pauseOnHover: true,
-          pauseOnFocusLoss: false
-        });
-      }
+      // Start search immediately without waiting for clipboard
       onSwitchPortClick(content);
+      
+      // Show immediate feedback
+      toast.success(`📋 Copying: ${content.length > 30 ? content.substring(0, 30) + '...' : content}`, {
+        autoClose: 1000,
+        pauseOnHover: false,
+        pauseOnFocusLoss: false
+      });
+      
+      // Copy to clipboard in background
+      copyToClipboard(content).then(success => {
+        if (!success) {
+          toast.error(`❌ Copy failed`, {
+            autoClose: 2000,
+            pauseOnHover: true,
+            pauseOnFocusLoss: false
+          });
+        }
+      });
     } else if (header === "Switch Hostname" && content) {
-      console.log('Switch Hostname clicked, SSH Username:', sshUsername); // Debug log
       // SSH link functionality
       if (sshUsername && sshUsername.trim() !== '') {
-        // First copy port in Cisco format if available (while we still have user activation)
-        let portCopySuccess = false;
-        let ciscoFormat = '';
-        
-        if (rowData && rowData["Switch Port"]) {
-          console.log('Switch Port data:', rowData["Switch Port"]); // Debug log
-          ciscoFormat = convertToCiscoFormat(rowData["Switch Port"]);
-          console.log('Cisco format:', ciscoFormat); // Debug log
-          
-          if (ciscoFormat && ciscoFormat.trim() !== '') {
-            portCopySuccess = await copyToClipboard(ciscoFormat);
-          }
-        }
-        
-        // Then open SSH link
+        // Open SSH link immediately
         const sshUrl = `ssh://${sshUsername}@${content}`;
-        console.log('Opening SSH URL:', sshUrl); // Debug log
-        window.open(sshUrl, '_blank');
+        window.location.href = sshUrl;
         
-        // Show SSH link success
+        // Show SSH link success immediately
         toast.success(`🔗 SSH link opened: ${sshUsername}@${content}`, {
-          autoClose: 3000,
+          autoClose: 2000,
           pauseOnHover: true,
           pauseOnFocusLoss: false
         });
         
-        // Show port copy result if port was available
-        if (rowData && rowData["Switch Port"] && ciscoFormat && ciscoFormat.trim() !== '') {
-          if (portCopySuccess) {
-            toast.success(`📋 Cisco port copied: ${ciscoFormat}`, {
-              autoClose: 3000,
-              pauseOnHover: true,
-              pauseOnFocusLoss: false
-            });
-          } else {
-            toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
-              autoClose: 5000,
-              pauseOnHover: true,
-              pauseOnFocusLoss: false
+        // Copy port in background if available
+        if (rowData && rowData["Switch Port"]) {
+          const ciscoFormat = convertToCiscoFormat(rowData["Switch Port"]);
+          if (ciscoFormat && ciscoFormat.trim() !== '') {
+            copyToClipboard(ciscoFormat).then(success => {
+              if (success) {
+                toast.success(`📋 Cisco port copied: ${ciscoFormat}`, {
+                  autoClose: 2000,
+                  pauseOnHover: true,
+                  pauseOnFocusLoss: false
+                });
+              } else {
+                toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
+                  autoClose: 3000,
+                  pauseOnHover: true,
+                  pauseOnFocusLoss: false
+                });
+              }
             });
           }
         }
       } else {
-        console.log('No SSH username, copying hostname to clipboard'); // Debug log
-        const success = await copyToClipboard(content);
-        
-        // Custom toast content with clickable link
+        // Show warning immediately, copy in background
         const ToastContent = () => (
           <div>
-            {success ? '📋 Hostname copied! ' : '❌ Failed to copy! '}
-            ⚠️ SSH username not configured!{' '}
+            📋 Hostname copied! ⚠️ SSH username not configured!{' '}
             <span 
               onClick={() => {
                 navigateToSettings();
@@ -237,6 +225,11 @@ function DataTable({
           hideProgressBar: true,
           closeButton: true,
           pauseOnHover: true
+        });
+
+        // Copy hostname in background
+        copyToClipboard(content).catch(() => {
+          // Silent fail - hostname copy is secondary
         });
       }
     }
@@ -499,23 +492,27 @@ function DataTable({
                               }}
                               color="primary"
                               variant="outlined"
-                              onClick={async (e) => {
+                              onClick={(e) => {
                                 e.stopPropagation();
+                                
+                                // Show immediate feedback
                                 const ciscoFormat = convertToCiscoFormat(cellContent);
-                                const success = await copyToClipboard(ciscoFormat);
-                                if (success) {
-                                  toast.success(`📋 Cisco format copied: ${ciscoFormat}`, {
-                                    autoClose: 3000,
-                                    pauseOnHover: true,
-                                    pauseOnFocusLoss: false
-                                  });
-                                } else {
-                                  toast.error(`❌ Failed to copy Cisco format`, {
-                                    autoClose: 5000,
-                                    pauseOnHover: true,
-                                    pauseOnFocusLoss: false
-                                  });
-                                }
+                                toast.success(`📋 Copying: ${ciscoFormat}`, {
+                                  autoClose: 1000,
+                                  pauseOnHover: false,
+                                  pauseOnFocusLoss: false
+                                });
+                                
+                                // Copy in background
+                                copyToClipboard(ciscoFormat).then(success => {
+                                  if (!success) {
+                                    toast.error(`❌ Copy failed`, {
+                                      autoClose: 2000,
+                                      pauseOnHover: true,
+                                      pauseOnFocusLoss: false
+                                    });
+                                  }
+                                });
                               }}
                             />
                           </Box>
@@ -581,23 +578,27 @@ function DataTable({
                           }}
                           color="primary"
                           variant="outlined"
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.stopPropagation();
+                            
+                            // Show immediate feedback
                             const ciscoFormat = convertToCiscoFormat(cellContent);
-                            const success = await copyToClipboard(ciscoFormat);
-                            if (success) {
-                              toast.success(`📋 Cisco format copied: ${ciscoFormat}`, {
-                                autoClose: 3000,
-                                pauseOnHover: true,
-                                pauseOnFocusLoss: false
-                              });
-                            } else {
-                              toast.error(`❌ Failed to copy Cisco format`, {
-                                autoClose: 5000,
-                                pauseOnHover: true,
-                                pauseOnFocusLoss: false
-                              });
-                            }
+                            toast.success(`📋 Copying: ${ciscoFormat}`, {
+                              autoClose: 1000,
+                              pauseOnHover: false,
+                              pauseOnFocusLoss: false
+                            });
+                            
+                            // Copy in background
+                            copyToClipboard(ciscoFormat).then(success => {
+                              if (!success) {
+                                toast.error(`❌ Copy failed`, {
+                                  autoClose: 2000,
+                                  pauseOnHover: true,
+                                  pauseOnFocusLoss: false
+                                });
+                              }
+                            });
                           }}
                         />
                       </Box>
