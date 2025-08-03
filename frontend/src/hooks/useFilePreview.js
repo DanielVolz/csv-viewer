@@ -2,22 +2,6 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
-// Define the desired column order
-const DESIRED_ORDER = [
-  "#",
-  "File Name",
-  "Creation Date",
-  "IP Address",
-  "Line Number",
-  "MAC Address",
-  "Subnet Mask",
-  "Voice VLAN",
-  "Switch Hostname",
-  "Switch Port",
-  "Serial Number",
-  "Model Name"
-];
-
 /**
  * Custom hook for fetching a preview of the current CSV file from the backend API
  * @param {number} limit - Maximum number of entries to fetch
@@ -44,25 +28,9 @@ function useFilePreview(limit = 105) { // Changed default from 25 to 100
         // Get the original data
         const originalData = response.data;
 
-        // Apply the desired column order
-        const filteredHeaders = DESIRED_ORDER.filter(header =>
-          originalData.headers.includes(header)
-        );
-
-        // Create new data rows with only the desired columns in the specified order
-        const filteredData = originalData.data.map(row => {
-          const newRow = {};
-          filteredHeaders.forEach(header => {
-            newRow[header] = row[header];
-          });
-          return newRow;
-        });
-
-        // Set the filtered data with the line count from the info endpoint
+        // Use headers and data as provided by backend (backend controls what's displayed)
         setPreviewData({
           ...originalData,
-          headers: filteredHeaders,
-          data: filteredData,
           line_count: fileInfo.line_count || 0
         });
 
@@ -79,7 +47,7 @@ function useFilePreview(limit = 105) { // Changed default from 25 to 100
         setPreviewData({
           success: false,
           message: 'Error connecting to backend',
-          headers: DESIRED_ORDER,
+          headers: [],
           data: []
         });
       } finally {

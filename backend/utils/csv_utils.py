@@ -9,25 +9,87 @@ from typing import List, Dict, Tuple, Optional, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Define headers formats
-NEW_HEADERS = [
-    "IP Address", "Line Number", "Serial Number", "Model Name", "MAC Address",
-    "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-    "Switch Hostname", "Switch Port", "Speed 3", "Speed 4"
-]
+# Define base headers for different known formats (without Speed columns)
+KNOWN_HEADERS = {
+    11: [  # OLD format
+        "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2",
+        "Switch Hostname", "Switch Port"
+    ],
+    14: [  # NEW format  
+        "IP Address", "Line Number", "Serial Number", "Model Name", "MAC Address",
+        "MAC Address 2", "Subnet Mask", "Voice VLAN", "Switch Hostname", "Switch Port"
+    ]
+}
 
-OLD_HEADERS = [
-    "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2",
-    "Speed 1", "Speed 2", "Switch Hostname", "Switch Port", "Speed 3", "Speed 4"
-]
-
-
-# Define the desired display order for columns
+# Define the desired display order for columns (what Frontend should show)
 DESIRED_ORDER = [
     "#", "File Name", "Creation Date", "IP Address", "Line Number", "MAC Address",
-    "Subnet Mask", "Voice VLAN", "Switch Hostname", "Switch Port",
+    "MAC Address 2", "Subnet Mask", "Voice VLAN", "Switch Hostname", "Switch Port",
     "Serial Number", "Model Name"
 ]
+
+
+def generate_headers(column_count: int) -> List[str]:
+    """
+    Generate headers for a CSV file based on column count.
+    
+    Args:
+        column_count: Number of columns in the CSV file
+        
+    Returns:
+        List of header names
+    """
+    # Check if we have predefined headers for this column count
+    if column_count in KNOWN_HEADERS:
+        return KNOWN_HEADERS[column_count].copy()
+    
+    # For unknown column counts, use known headers as base and extend
+    base_headers = []
+    
+    # Use the largest known format as base
+    if column_count >= 14:
+        base_headers = KNOWN_HEADERS[14].copy()
+    elif column_count >= 11:
+        base_headers = KNOWN_HEADERS[11].copy()
+    else:
+        # For very small column counts, create generic headers
+        base_headers = []
+    
+    # Extend with generic column names if needed
+    while len(base_headers) < column_count:
+        base_headers.append(f"Column {len(base_headers) + 1}")
+    
+    # Truncate if we have too many headers
+    return base_headers[:column_count]
+
+
+def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Filter headers and data to show only desired columns in frontend.
+    
+    Args:
+        headers: List of all available headers
+        data: List of data dictionaries
+        
+    Returns:
+        Tuple of (filtered_headers, filtered_data)
+    """
+    # Filter headers to only include desired columns
+    display_headers = []
+    for header in DESIRED_ORDER:
+        if header in headers:
+            display_headers.append(header)
+    
+    # Filter data to only include displayed columns
+    filtered_data = []
+    for row in data:
+        filtered_row = {}
+        for header in display_headers:
+            if header in row:
+                filtered_row[header] = row[header]
+        filtered_data.append(filtered_row)
+    
+    return display_headers, filtered_data
 
 
 def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -97,57 +159,58 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             if len(all_rows) == 0:
                 logger.warning(f"Empty file: {file_path}")
                 return DESIRED_ORDER, []
-            # Detect format based on number of columns in first few data rows
+            
+            # Detect column count from first few data rows
             num_rows_to_check = min(5, len(all_rows))  # Check up to 5 rows
+            
+            # Find the most common column count
+            column_counts = [len(row) for row in all_rows[:num_rows_to_check] if len(row) > 0]
+            
+            if not column_counts:
+                logger.warning(f"No valid rows found in {file_path}")
+                return DESIRED_ORDER, []
+            
+            # Use the most common column count
+            most_common_count = max(set(column_counts), key=column_counts.count)
             
             # Log the actual column counts for debugging
             for i, row in enumerate(all_rows[:num_rows_to_check]):
                 logger.info(f"Row {i+1} in {file_path} has {len(row)} columns")
             
-            # Count rows that match the new format column count
-            new_format_count = sum(1 for row in all_rows[:num_rows_to_check] if len(row) == 14)
-            logger.info(f"New format count: {new_format_count}/{num_rows_to_check}")
+            logger.info(f"Detected {most_common_count} columns for {file_path}")
             
-            # Use new format if ANY row has 14 columns (since semicolon is correctly used)
-            if new_format_count > 0:
-                logger.info(f"Using NEW format headers for {file_path}")
-                file_headers = NEW_HEADERS
-            else:
-                logger.info(f"Using OLD format headers for {file_path}")
-                file_headers = OLD_HEADERS
+            # Generate headers based on detected column count
+            file_headers = generate_headers(most_common_count)
+            logger.info(f"Generated headers for {file_path}: {file_headers}")
             
             # Process rows
             for idx, row in enumerate(all_rows, 1):  # Start counting from 1
-                # Skip rows with too few columns (likely header rows or corrupted data)
-                if len(row) < 2:  # Skip empty or nearly empty rows
-                    logger.warning(
-                        f"Skipping row {idx} in {file_path} - nearly empty row with {len(row)} columns"
-                    )
+                # Skip empty rows
+                if len(row) == 0:
+                    logger.warning(f"Skipping empty row {idx} in {file_path}")
                     continue
-                    
-                # If the column count is too low, check if this might be a malformed file
-                # If there's a significant mismatch (less than half the expected columns), 
-                # we'll skip this row to prevent data corruption
-                if len(row) < len(file_headers) / 2:
-                    logger.warning(
-                        f"Skipping row {idx} in {file_path} due to column mismatch. Expected {len(file_headers)}, got {len(row)}."
-                    )
-                    continue
-                    
-                # For rows with enough columns but not matching exactly, pad or truncate
-                processed_row = row
+                
+                # Handle rows with different column counts gracefully
+                processed_row = row.copy()
+                
+                # If row has fewer columns than expected, pad with empty strings
                 if len(row) < len(file_headers):
-                    # Pad the row with empty strings
                     processed_row = row + [''] * (len(file_headers) - len(row))
-                    logger.warning(
-                        f"Row {idx} in {file_path} has fewer columns than expected. Expected {len(file_headers)}, got {len(row)}. Padding with empty values."
+                    logger.info(
+                        f"Row {idx} in {file_path} has {len(row)} columns, expected {len(file_headers)}. Padded with empty values."
                     )
+                
+                # If row has more columns than expected, extend headers dynamically
                 elif len(row) > len(file_headers):
-                    # Truncate the row
-                    processed_row = row[:len(file_headers)]
-                    logger.warning(
-                        f"Row {idx} in {file_path} has more columns than expected. Expected {len(file_headers)}, got {len(row)}. Truncating extra values."
+                    # Extend headers for this file to accommodate extra columns
+                    extra_columns_needed = len(row) - len(file_headers)
+                    for i in range(extra_columns_needed):
+                        file_headers.append(f"Column {len(file_headers) + 1}")
+                    
+                    logger.info(
+                        f"Row {idx} in {file_path} has {len(row)} columns, expected {len(file_headers) - extra_columns_needed}. Extended headers to accommodate extra columns."
                     )
+                    processed_row = row  # Use the full row as-is
                 
                 # Create a dictionary with the appropriate headers
                 row_dict = dict(zip(file_headers, processed_row))
@@ -158,10 +221,35 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                 # Add row number as string to match other values
                 row_dict["#"] = str(idx)
                 
-                rows.append(row_dict)
+                # Filter row to only include desired columns for consistent data structure
+                filtered_row = {}
+                for header in DESIRED_ORDER:
+                    if header in row_dict:
+                        filtered_row[header] = row_dict[header]
+                
+                rows.append(filtered_row)
         
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
-        return DESIRED_ORDER, rows
+        
+        # Create headers list for frontend display (filtered for known columns only)
+        if rows:
+            # Get all unique headers from the rows
+            all_headers = set()
+            for row in rows:
+                all_headers.update(row.keys())
+            
+            # Build final headers list with only desired columns (for frontend display)
+            display_headers = []
+            for header in DESIRED_ORDER:
+                if header in all_headers:
+                    display_headers.append(header)
+            
+            # Note: We don't include "Column X" headers in frontend display
+            # But they remain in the data for search functionality
+            
+            return display_headers, rows
+        else:
+            return DESIRED_ORDER, rows
     
     except Exception as e:
         logger.error(f"Error reading CSV file {file_path}: {e}")

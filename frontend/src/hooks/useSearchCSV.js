@@ -2,21 +2,6 @@ import { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
-// Define the desired column order - same as in useFilePreview.js
-const DESIRED_ORDER = [
-  "File Name",
-  "Creation Date",
-  "IP Address",
-  "Line Number",
-  "MAC Address",
-  "Subnet Mask",
-  "Voice VLAN",
-  "Switch Hostname",
-  "Switch Port",
-  "Serial Number",
-  "Model Name"
-];
-
 /**
  * Custom hook for searching CSV files in the backend API
  * @returns {Object} { searchAll, results, loading, error, pagination }
@@ -59,31 +44,9 @@ function useSearchCSV() {
       // Get the original data
       const originalData = response.data;
       
-      // Apply the desired column order if there's data
+      // Use data as provided by backend (backend controls what's displayed)
       if (originalData.success && Array.isArray(originalData.data) && originalData.data.length > 0) {
-        // Determine all available columns from the first row
-        const availableColumns = Object.keys(originalData.data[0]);
-        
-        // Filter the desired columns that are actually present in the data
-        const filteredHeaders = DESIRED_ORDER.filter(header => 
-          availableColumns.includes(header)
-        );
-        
-        // Create new data rows with only the desired columns in the specified order
-        const filteredData = originalData.data.map(row => {
-          const newRow = {};
-          filteredHeaders.forEach(header => {
-            newRow[header] = row[header];
-          });
-          return newRow;
-        });
-        
-        // Set the filtered data
-        setResults({
-          ...originalData,
-          headers: filteredHeaders,
-          data: filteredData
-        });
+        setResults(originalData);
       } else {
       // If no data or error, just set the original response
       setResults(originalData);

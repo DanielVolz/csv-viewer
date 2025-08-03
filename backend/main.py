@@ -3,6 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api import search, files
 from config import settings
+from utils.file_watcher import start_file_watcher, stop_file_watcher
+import atexit
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
@@ -23,6 +30,32 @@ app.add_middleware(
 # Include routers
 app.include_router(search.router)
 app.include_router(files.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start file watcher on application startup."""
+    try:
+        logger.info("Starting file watcher...")
+        start_file_watcher("/app/data")
+        logger.info("File watcher started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start file watcher: {e}")
+
+
+@app.on_event("shutdown") 
+async def shutdown_event():
+    """Stop file watcher on application shutdown."""
+    try:
+        logger.info("Stopping file watcher...")
+        stop_file_watcher()
+        logger.info("File watcher stopped successfully")
+    except Exception as e:
+        logger.error(f"Error stopping file watcher: {e}")
+
+
+# Register cleanup function for unexpected shutdowns
+atexit.register(stop_file_watcher)
 
 
 @app.get("/")

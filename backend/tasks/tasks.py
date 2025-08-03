@@ -104,12 +104,17 @@ def index_all_csv_files(directory_path: str) -> dict:
                 "total_documents": 0,
             }
         
+        # Process files in optimized order: current file first, then historical files
+        current_files = [f for f in files if f.name == "netspeed.csv"]
+        historical_files = [f for f in files if f.name != "netspeed.csv"]
+        ordered_files = current_files + sorted(historical_files, key=lambda x: x.name)
+        
         # Process each file
         results = []
         total_documents = 0
         
-        for file_path in files:
-            # Process synchronously in this task to avoid task queue overload
+        for i, file_path in enumerate(ordered_files):
+            logger.info(f"Processing file {i+1}/{len(ordered_files)}: {file_path}")
             try:
                 success, count = opensearch_config.index_csv_file(str(file_path))
                 total_documents += count
@@ -119,6 +124,7 @@ def index_all_csv_files(directory_path: str) -> dict:
                     "success": success,
                     "count": count
                 })
+                logger.info(f"Completed {file_path}: {count} documents indexed")
             except Exception as e:
                 logger.error(f"Error indexing {file_path}: {e}")
                 results.append({
@@ -216,19 +222,17 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
                 except Exception as e:
                     logger.warning(f"Error getting file info for {file_name}: {e}")
         
-        # Make sure Creation Date is in headers if any documents have it
-        if any('Creation Date' in doc for doc in documents) and 'Creation Date' not in headers:
-            headers.append('Creation Date')
+        # Apply same column filtering as Preview API for consistency
+        from utils.csv_utils import filter_display_columns
         
-        # Make sure File Format is in headers if any documents have it
-        if any('File Format' in doc for doc in documents) and 'File Format' not in headers:
-            headers.append('File Format')
+        # Filter headers and data to match display preferences
+        filtered_headers, filtered_documents = filter_display_columns(headers, documents)
         
         return {
             "status": "success",
-            "message": f"Found {len(documents)} results for '{query}'",
-            "headers": headers,
-            "data": documents
+            "message": f"Found {len(filtered_documents)} results for '{query}'",
+            "headers": filtered_headers,
+            "data": filtered_documents
         }
     except Exception as e:
         logger.error(f"Error searching for '{query}': {e}")

@@ -40,6 +40,7 @@ class OpenSearchConfig:
 
         self.index_mappings = {
             "mappings": {
+                "dynamic": "true",  # Allow dynamic field mapping
                 "properties": {
                     "File Name": self.keyword_type,
                     "Creation Date": {
@@ -60,12 +61,31 @@ class OpenSearchConfig:
                     "Speed 2": self.keyword_type,
                     "Speed 3": self.keyword_type,
                     "Speed 4": self.keyword_type,
-                }
+                },
+                "dynamic_templates": [
+                    {
+                        "strings_as_keywords": {
+                            "match_mapping_type": "string",
+                            "match": "Column *",
+                            "mapping": {
+                                "type": "text",
+                                "fields": {
+                                    "keyword": {"type": "keyword"}
+                                }
+                            }
+                        }
+                    }
+                ]
             },
             "settings": {
                 "number_of_shards": 1,
-                "number_of_replicas": 0,
-                "max_result_window": 20000  # Increase from default 10000
+                "number_of_replicas": 0,  # No replicas for faster indexing
+                "max_result_window": 20000,  # Increase from default 10000
+                "refresh_interval": "30s",  # Slower refresh for faster indexing
+                "index": {
+                    "translog.durability": "async",  # Faster writes
+                    "translog.sync_interval": "30s"
+                }
             }
         }
 
@@ -251,7 +271,7 @@ class OpenSearchConfig:
 
     def generate_actions(self, index_name: str, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """
-        Generate actions for bulk indexing.
+        Generate actions for bulk indexing (optimized version).
 
         Args:
             index_name: Name of the index to index into
@@ -262,45 +282,50 @@ class OpenSearchConfig:
         """
         _, rows = read_csv_file(file_path)
 
+        # Get file creation date ONCE per file, not per row
+        file_creation_date = None
+        try:
+            # Get the file's Linux creation date using stat command
+            import subprocess
+            
+            # Use Linux stat command to get creation date
+            process = subprocess.run(
+                ["stat", "-c", "%w", file_path],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            creation_time_str = process.stdout.strip()
+            # Parse the datetime string and format for indexing
+            file_creation_date = creation_time_str.split()[0]  # Extract just the date part
+            logger.info(f"File creation date for {file_path}: {file_creation_date}")
+        except Exception as e:
+            logger.warning(f"Error getting Linux creation date: {e}, falling back to modification time")
+            try:
+                # Fallback to modification time if stat command fails
+                file_path_obj = Path(file_path)
+                creation_timestamp = file_path_obj.stat().st_mtime
+                file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
+            except Exception as inner_e:
+                logger.warning(f"Error getting fallback date: {inner_e}")
+
+        # Import DESIRED_ORDER for consistent column filtering
+        from utils.csv_utils import DESIRED_ORDER
+        
         for row in rows:
             # Clean up data as needed (handle nulls, etc.)
             doc = {k: (v if v else "") for k, v in row.items()}
             
-            # Handle Creation Date format specifically to ensure it matches the mapping
-            if "Creation Date" in doc:
-                try:
-                    # Get the file's Linux creation date using stat command
-                    import subprocess
-                    
-                    # Use Linux stat command to get creation date
-                    process = subprocess.run(
-                        ["stat", "-c", "%w", file_path],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    creation_time_str = process.stdout.strip()
-                    # Parse the datetime string and format for indexing
-                    creation_date = creation_time_str.split()[0]  # Extract just the date part
-                    doc["Creation Date"] = creation_date
-                    logger.info(f"Formatted Linux Creation Date for indexing: {doc['Creation Date']}")
-                except Exception as e:
-                    logger.warning(f"Error getting Linux creation date: {e}, falling back to modification time")
-                    try:
-                        # Fallback to modification time if stat command fails
-                        file_path_obj = Path(file_path)
-                        creation_timestamp = file_path_obj.stat().st_mtime
-                        creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
-                        doc["Creation Date"] = creation_date
-                    except Exception as inner_e:
-                        logger.warning(f"Error getting fallback date: {inner_e}, using original: {doc.get('Creation Date', '')}")
+            # Use the pre-calculated file creation date
+            if "Creation Date" in doc and file_creation_date:
+                doc["Creation Date"] = file_creation_date
 
-            # Convert all values to strings to avoid mapping errors
-            doc = {k: str(v) for k, v in doc.items()}
+            # Index all available columns (no filtering at index level)
+            final_doc = {k: str(v) for k, v in doc.items()}
 
             yield {
                 "_index": index_name,
-                "_source": doc
+                "_source": final_doc
             }
 
     def index_csv_file(self, file_path: str) -> Tuple[bool, int]:
@@ -321,12 +346,18 @@ class OpenSearchConfig:
             if not self.create_index(index_name):
                 return False, 0
 
-            # Bulk index documents
+            # Bulk index documents with optimized settings
             success, failed = helpers.bulk(
                 self.client,
                 self.generate_actions(index_name, file_path),
-                refresh=True  # Make documents immediately available for search
+                chunk_size=1000,  # Process in chunks of 1000 docs
+                max_chunk_bytes=10 * 1024 * 1024,  # 10MB chunks
+                request_timeout=60,  # 60 second timeout
+                refresh=False  # Don't refresh after every bulk operation (faster)
             )
+            
+            # Refresh only once at the end
+            self.client.indices.refresh(index=index_name)
 
             logger.info(f"Indexed {success} documents into {index_name}")
             if failed:
@@ -374,6 +405,7 @@ class OpenSearchConfig:
 
         if field:
             # Field-specific search with both exact and partial matching
+            from utils.csv_utils import DESIRED_ORDER
             return {
                 "query": {
                     "bool": {
@@ -388,6 +420,7 @@ class OpenSearchConfig:
                         "minimum_should_match": 1
                     }
                 },
+                "_source": DESIRED_ORDER,
                 "size": size
             }
         else:
@@ -479,6 +512,10 @@ class OpenSearchConfig:
             # Log the final query for debugging
             logger.info(f"Final search query: {search_query}")
             
+            # Add _source filtering to only return desired columns
+            from utils.csv_utils import DESIRED_ORDER
+            search_query["_source"] = DESIRED_ORDER
+            
             return search_query
 
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False,
@@ -521,11 +558,23 @@ class OpenSearchConfig:
             # Deduplicate documents
             unique_documents = self._deduplicate_documents(documents)
             
-            # Get headers (fields)
-            headers = sorted(set().union(*(doc.keys() for doc in unique_documents))) if unique_documents else []
+            # Apply display column filtering for consistency
+            from utils.csv_utils import DESIRED_ORDER
+            
+            # Filter documents to only include desired columns
+            filtered_documents = []
+            for doc in unique_documents:
+                filtered_doc = {}
+                for header in DESIRED_ORDER:
+                    if header in doc:
+                        filtered_doc[header] = doc[header]
+                filtered_documents.append(filtered_doc)
+            
+            # Use only desired headers that exist in the filtered data
+            headers = [h for h in DESIRED_ORDER if any(h in doc for doc in filtered_documents)]
 
-            logger.info(f"Found {len(unique_documents)} unique results for query '{query}' from {len(documents)} total matches")
-            return headers, unique_documents
+            logger.info(f"Found {len(filtered_documents)} unique results for query '{query}' from {len(documents)} total matches")
+            return headers, filtered_documents
 
         except Exception as e:
             logger.error(f"Error searching for '{query}': {e}")

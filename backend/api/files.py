@@ -56,11 +56,24 @@ async def list_files():
                 file_dict["line_count"] = line_count
                 files.append(file_dict)
         
-        # Sort files: current first, then by date descending
-        files.sort(
-            key=lambda f: (not f["is_current"], f["date"] or datetime.max),
-            reverse=False
-        )
+        # Sort files: netspeed.csv first, then netspeed.csv.0, netspeed.csv.1, etc.
+        def sort_key(f):
+            name = f["name"]
+            if name == "netspeed.csv":
+                return (0, 0)  # Always first
+            elif name.startswith("netspeed.csv."):
+                try:
+                    # Extract number after the dot (e.g., "netspeed.csv.1" -> 1)
+                    suffix = name.split("netspeed.csv.")[1]
+                    return (1, int(suffix))
+                except (IndexError, ValueError):
+                    # If parsing fails, put at end
+                    return (2, 999)
+            else:
+                # Other files at the end
+                return (3, 0)
+        
+        files.sort(key=sort_key)
         
         return files
         
