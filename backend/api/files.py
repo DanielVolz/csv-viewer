@@ -111,6 +111,9 @@ async def get_netspeed_info():
         # Format date consistently 
         creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
+        # Get file modification time for change detection
+        modification_time = current_file.stat().st_mtime
+
         # Count lines (subtract 1 for header)
         with open(current_file, 'r') as f:
             line_count = sum(1 for _ in f) - 1
@@ -119,7 +122,8 @@ async def get_netspeed_info():
             "success": True,
             "message": "Netspeed.csv file information retrieved successfully",
             "date": creation_date,
-            "line_count": line_count
+            "line_count": line_count,
+            "last_modified": modification_time
         }
         return JSONResponse(content=result)
         

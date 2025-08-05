@@ -36,6 +36,7 @@ const FileInfoBox = ({ compact = false }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastFileSignature, setLastFileSignature] = useState(null);
 
   const fetchFileInfo = async () => {
     try {
@@ -44,8 +45,25 @@ const FileInfoBox = ({ compact = false }) => {
       const data = response.data;
       
       if (data.success) {
-        setFileInfo(data);
-        setError(null);
+        // Create a signature to detect file changes using modification time and line count
+        const newSignature = `${data.last_modified}-${data.line_count}`;
+        
+        // Only update if the file has actually changed
+        if (lastFileSignature === null || lastFileSignature !== newSignature) {
+          setFileInfo(data);
+          setLastFileSignature(newSignature);
+          setError(null);
+          
+          // Log file change for debugging
+          if (lastFileSignature !== null) {
+            console.log('File updated:', { 
+              previous: lastFileSignature, 
+              current: newSignature,
+              date: data.date,
+              records: data.line_count
+            });
+          }
+        }
       } else {
         setError(data.message || 'Failed to fetch file information');
       }
@@ -65,8 +83,9 @@ const FileInfoBox = ({ compact = false }) => {
 
   useEffect(() => {
     fetchFileInfo();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchFileInfo, 30000);
+    // Check for file changes every 60 seconds (increased from 30 seconds)
+    // Only updates display when file actually changes
+    const interval = setInterval(fetchFileInfo, 60000);
     return () => clearInterval(interval);
   }, []);
 
