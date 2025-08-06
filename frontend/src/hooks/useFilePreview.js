@@ -7,7 +7,7 @@ import { toast } from 'react-toastify';
  * @param {number} limit - Maximum number of entries to fetch
  * @returns {Object} { previewData, loading, error }
  */
-function useFilePreview(limit = 105) { // Changed default from 25 to 100
+function useFilePreview() { // Removed limit parameter to prevent re-renders
   const [previewData, setPreviewData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -22,7 +22,7 @@ function useFilePreview(limit = 105) { // Changed default from 25 to 100
 
         // Call the backend API endpoint for preview data
         const response = await axios.get('/api/files/preview', {
-          params: { limit }
+          params: { limit: 105 } // Fixed limit to prevent re-renders
         });
 
         // Get the original data
@@ -56,7 +56,7 @@ function useFilePreview(limit = 105) { // Changed default from 25 to 100
     };
 
     fetchPreview();
-  }, [limit]);
+  }, []); // Empty dependency array - only run once on mount
 
   return { previewData, loading, error };
 }

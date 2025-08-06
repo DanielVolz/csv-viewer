@@ -18,7 +18,7 @@ import {
   IconButton,
   Stack
 } from '@mui/material';
-import { 
+import {
   Search,
   Clear
 } from '@mui/icons-material';
@@ -26,7 +26,7 @@ import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import DataTable from './DataTable';
 
-function CSVSearch({ previewLimit }) {
+function CSVSearch() {
   const [searchTerm, setSearchTerm] = useState('');
   const [includeHistorical, setIncludeHistorical] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
@@ -42,7 +42,7 @@ function CSVSearch({ previewLimit }) {
     setPageSize
   } = useSearchCSV();
 
-  const { previewData, loading: previewLoading, error: previewError } = useFilePreview(previewLimit);
+  const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
 
   const typingTimeoutRef = useRef(null);
   const lastSearchTermRef = useRef('');
@@ -72,7 +72,7 @@ function CSVSearch({ previewLimit }) {
     // Implementation can be extended later if needed
   }, []);
 
-  const handleInputChange = (e) => {
+  const handleInputChange = useCallback((e) => {
     const term = e.target.value;
     setSearchTerm(term);
     setIsTyping(true);
@@ -91,9 +91,9 @@ function CSVSearch({ previewLimit }) {
         executeSearch(term);
       }, 1000);
     }
-  };
+  }, [executeSearch]);
 
-  const handleSearch = () => {
+  const handleSearch = useCallback(() => {
     if (!searchTerm) return;
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -104,21 +104,21 @@ function CSVSearch({ previewLimit }) {
         setHasSearched(true);
       }
     });
-  };
+  }, [searchTerm, includeHistorical, searchAll]);
 
-  const handleClearSearch = () => {
+  const handleClearSearch = useCallback(() => {
     setSearchTerm('');
     setHasSearched(false);
     if (searchFieldRef.current) {
       searchFieldRef.current.focus();
     }
-  };
+  }, []);
 
-  const handleKeyPress = (e) => {
+  const handleKeyPress = useCallback((e) => {
     if (e.key === 'Enter') {
       handleSearch();
     }
-  };
+  }, [handleSearch]);
 
   return (
     <Box sx={{ mb: 4 }}>
@@ -145,18 +145,12 @@ function CSVSearch({ previewLimit }) {
             onKeyPress={handleKeyPress}
             sx={{
               '& .MuiOutlinedInput-root': {
-                backgroundColor: theme => theme.palette.mode === 'dark' 
-                  ? '#111827' 
-                  : '#f8fafc',
+                backgroundColor: 'background.paper',
                 '&:hover': {
-                  backgroundColor: theme => theme.palette.mode === 'dark' 
-                    ? '#0f172a' 
-                    : '#f1f5f9'
+                  backgroundColor: 'background.default'
                 },
                 '&.Mui-focused': {
-                  backgroundColor: theme => theme.palette.mode === 'dark' 
-                    ? '#0f172a' 
-                    : '#f1f5f9'
+                  backgroundColor: 'background.default'
                 }
               }
             }}
@@ -173,7 +167,7 @@ function CSVSearch({ previewLimit }) {
                       <CircularProgress size={20} />
                     )}
                     {searchTerm && (
-                      <IconButton 
+                      <IconButton
                         onClick={handleClearSearch}
                         size="small"
                       >
@@ -187,9 +181,9 @@ function CSVSearch({ previewLimit }) {
           />
 
           {/* Action Bar */}
-          <Box sx={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
+          <Box sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
             flexWrap: 'wrap',
             gap: 2
@@ -229,137 +223,197 @@ function CSVSearch({ previewLimit }) {
 
       {/* Loading State */}
       {(searchLoading || previewLoading) && (
-        <Box sx={{ 
-          display: 'flex', 
+        <Box sx={{
+          display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center', 
+          alignItems: 'center',
           gap: 2,
           py: 6
         }}>
           <CircularProgress size={32} />
           <Typography variant="body1" color="text.secondary">
-            {searchLoading ? 'Searching...' : 'Loading...'}
+            {searchLoading ? 'Searching...' : 'Loading preview...'}
           </Typography>
         </Box>
       )}
 
       {/* Error State */}
       {(searchError || previewError) && (
-        <Alert 
-          severity="error" 
+        <Alert
+          severity="error"
           sx={{ mb: 3 }}
         >
           {searchError || previewError}
         </Alert>
       )}
 
-      {/* Results Section */}
-      {!searchLoading && !previewLoading && (hasSearched ? results : previewData) && (
-        <Box>
-            {/* Results Header */}
-            <Box sx={{ 
-              display: 'flex', 
-              justifyContent: 'space-between', 
-              alignItems: 'center',
-              mb: 3
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Box>
-                  <Typography variant="h5" fontWeight={700}>
-                    {hasSearched ? "Search Results" : "Data Preview"}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {hasSearched 
-                      ? ""
-                      : "Latest entries from your CSV data"
-                    }
-                  </Typography>
+      {/* Welcome Message or Preview - Show when no search has been performed */}
+      {!searchLoading && !previewLoading && !hasSearched && (
+        <>
+          {previewData && previewData.data ? (
+            <Box>
+              {/* Preview Header */}
+              <Box sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                mb: 3
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Box>
+                    <Typography variant="h5" fontWeight={700}>
+                      Data Preview
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Latest entries from netspeed.csv
+                    </Typography>
+                  </Box>
                 </Box>
               </Box>
 
-            </Box>
+              {/* Status Alert */}
+              <Alert
+                severity="info"
+                sx={{ mb: 3 }}
+              >
+                {previewData?.message || "Showing latest entries from the CSV file"}
+              </Alert>
 
-            {/* Status Alert */}
-            <Alert
-              severity={hasSearched ? (results?.success ? "success" : "info") : "info"}
-              sx={{ mb: 3 }}
+              {/* Preview Data Table */}
+              <DataTable
+                headers={previewData.headers}
+                data={previewData.data}
+                showRowNumbers={false}
+                onMacAddressClick={handleMacAddressClick}
+                onSwitchPortClick={handleSwitchPortClick}
+              />
+            </Box>
+          ) : (
+            <Paper
+              elevation={1}
+              sx={{
+                p: 4,
+                textAlign: 'center',
+                borderRadius: 2,
+                border: '1px solid',
+                borderColor: 'divider'
+              }}
             >
-              {hasSearched ? results?.message : (previewData?.message || "Showing latest entries from the CSV file")}
-            </Alert>
+              <Typography variant="h6" gutterBottom>
+                Ready to Search
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Enter a search term above to find records in the CSV data.
+                You can search for IP addresses, MAC addresses, switch ports, or any other data.
+              </Typography>
+            </Paper>
+          )}
+        </>
+      )}
 
-
-            {/* Unified Data Table */}
-            {((hasSearched && results?.data && results?.headers) ||
-              (!hasSearched && previewData?.data && previewData?.headers)) && (
-                <DataTable
-                  headers={hasSearched ? results.headers : previewData.headers}
-                  data={hasSearched ? results.data : previewData.data}
-                  showRowNumbers={hasSearched}
-                  onMacAddressClick={handleMacAddressClick}
-                  onSwitchPortClick={handleSwitchPortClick}
-                />
-              )}
-
-              {/* Pagination Controls - moved to bottom */}
-              {hasSearched && results?.success && results?.pagination && (
-                <Paper
-                  elevation={1}
-                  sx={{
-                    p: 2,
-                    mt: 3,
-                    borderRadius: 1,
-                    border: '1px solid',
-                    borderColor: 'divider'
-                  }}
-                >
-                  <Box sx={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: 2
-                  }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Showing {results.pagination.currentStart} to {results.pagination.currentEnd} of {results.pagination.totalItems} results
-                    </Typography>
-
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
-                        <InputLabel>Page Size</InputLabel>
-                        <Select
-                          value={pagination.pageSize}
-                          onChange={(e) => setPageSize(e.target.value)}
-                          label="Page Size"
-                        >
-                          <MenuItem value={10}>10</MenuItem>
-                          <MenuItem value={25}>25</MenuItem>
-                          <MenuItem value={50}>50</MenuItem>
-                          <MenuItem value={100}>100</MenuItem>
-                          <MenuItem value={250}>250</MenuItem>
-                        </Select>
-                      </FormControl>
-
-                      <Pagination
-                        count={pagination.totalPages}
-                        page={pagination.page}
-                        onChange={(e, page) => setPage(page)}
-                        color="primary"
-                        showFirstButton
-                        showLastButton
-                        sx={{
-                          '& .MuiPaginationItem-root': {
-                            borderRadius: 2
-                          }
-                        }}
-                      />
-                    </Box>
-                  </Box>
-                </Paper>
-              )}
+      {/* Results Section - Only show when user has searched */}
+      {!searchLoading && hasSearched && results && (
+        <Box>
+          {/* Results Header */}
+          <Box sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            mb: 3
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box>
+                <Typography variant="h5" fontWeight={700}>
+                  Search Results
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {/* Results description */}
+                </Typography>
+              </Box>
             </Box>
+
+          </Box>
+
+          {/* Status Alert */}
+          <Alert
+            severity={results?.success ? "success" : "info"}
+            sx={{ mb: 3 }}
+          >
+            {results?.message}
+          </Alert>
+
+
+          {/* Search Results Data Table */}
+          {results?.data && results?.headers && (
+            <DataTable
+              headers={results.headers}
+              data={results.data}
+              showRowNumbers={true}
+              onMacAddressClick={handleMacAddressClick}
+              onSwitchPortClick={handleSwitchPortClick}
+            />
+          )}
+
+          {/* Pagination Controls - moved to bottom */}
+          {results?.success && results?.pagination && (
+            <Paper
+              elevation={1}
+              sx={{
+                p: 2,
+                mt: 3,
+                borderRadius: 1,
+                border: '1px solid',
+                borderColor: 'divider'
+              }}
+            >
+              <Box sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 2
+              }}>
+                <Typography variant="body2" color="text.secondary">
+                  Showing {results.pagination.currentStart} to {results.pagination.currentEnd} of {results.pagination.totalItems} results
+                </Typography>
+
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <FormControl variant="outlined" size="small" sx={{ minWidth: 120 }}>
+                    <InputLabel>Page Size</InputLabel>
+                    <Select
+                      value={pagination.pageSize}
+                      onChange={(e) => setPageSize(e.target.value)}
+                      label="Page Size"
+                    >
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                      <MenuItem value={100}>100</MenuItem>
+                      <MenuItem value={250}>250</MenuItem>
+                    </Select>
+                  </FormControl>
+
+                  <Pagination
+                    count={pagination.totalPages}
+                    page={pagination.page}
+                    onChange={(e, page) => setPage(page)}
+                    color="primary"
+                    showFirstButton
+                    showLastButton
+                    sx={{
+                      '& .MuiPaginationItem-root': {
+                        borderRadius: 2
+                      }
+                    }}
+                  />
+                </Box>
+              </Box>
+            </Paper>
+          )}
+        </Box>
       )}
     </Box>
   );
 }
 
-export default CSVSearch;
+export default React.memo(CSVSearch);

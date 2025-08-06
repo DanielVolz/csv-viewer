@@ -1,69 +1,46 @@
-import React, { useState, useEffect } from 'react';
-import { 
+import React, { useState, useEffect, useCallback } from 'react';
+import {
   Card,
   CardContent,
-  Typography, 
-  Box, 
-  CircularProgress, 
+  Typography,
+  Box,
+  CircularProgress,
   Avatar,
   Chip,
-  Stack,
-  alpha,
   Fade,
-  LinearProgress,
   IconButton,
-  Tooltip,
-  Divider,
   Paper
 } from '@mui/material';
 import {
-  Info,
-  Storage,
-  Schedule,
-  DataUsage,
-  TrendingUp,
-  Speed,
   Refresh,
-  CheckCircle,
-  Warning,
-  Analytics,
-  CloudSync
+  Warning
 } from '@mui/icons-material';
 import axios from 'axios';
 
-const FileInfoBox = ({ compact = false }) => {
+const FileInfoBox = React.memo(({ compact = false }) => {
   const [fileInfo, setFileInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [lastFileSignature, setLastFileSignature] = useState(null);
+  const isFetchingRef = React.useRef(false);
 
-  const fetchFileInfo = async () => {
+  const fetchFileInfo = useCallback(async () => {
+    // Prevent multiple simultaneous requests
+    if (isFetchingRef.current) {
+      return;
+    }
+
     try {
+      isFetchingRef.current = true;
       setLoading(true);
+
       const response = await axios.get('/api/files/netspeed_info');
       const data = response.data;
-      
+
       if (data.success) {
-        // Create a signature to detect file changes using modification time and line count
-        const newSignature = `${data.last_modified}-${data.line_count}`;
-        
-        // Only update if the file has actually changed
-        if (lastFileSignature === null || lastFileSignature !== newSignature) {
-          setFileInfo(data);
-          setLastFileSignature(newSignature);
-          setError(null);
-          
-          // Log file change for debugging
-          if (lastFileSignature !== null) {
-            console.log('File updated:', { 
-              previous: lastFileSignature, 
-              current: newSignature,
-              date: data.date,
-              records: data.line_count
-            });
-          }
-        }
+        setFileInfo(data);
+        setError(null);
+        console.log('File info loaded:', data.date, 'Records:', data.line_count);
       } else {
         setError(data.message || 'Failed to fetch file information');
       }
@@ -71,9 +48,10 @@ const FileInfoBox = ({ compact = false }) => {
       setError('Error fetching file information');
       console.error('Error fetching file info:', err);
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
     }
-  };
+  }, []); // No dependencies needed
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -82,25 +60,28 @@ const FileInfoBox = ({ compact = false }) => {
   };
 
   useEffect(() => {
+    // Only fetch file info once on component mount
+    // File info will only update when component is remounted (e.g., page refresh)
     fetchFileInfo();
-    // Check for file changes every 60 seconds (increased from 30 seconds)
-    // Only updates display when file actually changes
-    const interval = setInterval(fetchFileInfo, 60000);
-    return () => clearInterval(interval);
-  }, []);
+
+    // NO INTERVAL - File info is static until page refresh
+    // The daily netspeed.csv is loaded at 7:00 AM, user can refresh page to see new data
+  }, [fetchFileInfo]);
 
   if (loading) {
     return (
       <Fade in>
-        <Card 
+        <Card
           elevation={0}
           sx={{
-            background: theme => alpha(theme.palette.background.paper, 0.8),
+            bgcolor: 'background.paper',
             backdropFilter: 'blur(20px)',
-            border: theme => `1px solid ${alpha(theme.palette.divider, 0.1)}`,
+            border: 1,
+            borderColor: 'divider',
             borderRadius: 4,
             p: 3,
-            textAlign: 'center'
+            textAlign: 'center',
+            opacity: 0.9
           }}
         >
           <CircularProgress size={40} thickness={4} />
@@ -114,12 +95,14 @@ const FileInfoBox = ({ compact = false }) => {
 
   if (error) {
     return (
-      <Card 
+      <Card
         elevation={0}
         sx={{
-          background: theme => `linear-gradient(135deg, ${alpha(theme.palette.error.main, 0.1)}, ${alpha(theme.palette.error.main, 0.05)})`,
-          border: theme => `1px solid ${alpha(theme.palette.error.main, 0.2)}`,
-          borderRadius: 4
+          bgcolor: 'error.light',
+          border: 1,
+          borderColor: 'error.main',
+          borderRadius: 4,
+          opacity: 0.1
         }}
       >
         <CardContent sx={{ p: 3, textAlign: 'center' }}>
@@ -142,10 +125,11 @@ const FileInfoBox = ({ compact = false }) => {
             disabled={refreshing}
             sx={{
               mt: 1,
-              background: theme => alpha(theme.palette.error.main, 0.1),
+              bgcolor: 'error.light',
               '&:hover': {
-                background: theme => alpha(theme.palette.error.main, 0.2),
-              }
+                bgcolor: 'error.main',
+              },
+              opacity: 0.7
             }}
           >
             <Refresh />
@@ -167,8 +151,8 @@ const FileInfoBox = ({ compact = false }) => {
           background: 'background.paper'
         }}
       >
-        <Box sx={{ 
-          display: 'flex', 
+        <Box sx={{
+          display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
@@ -198,7 +182,7 @@ const FileInfoBox = ({ compact = false }) => {
   }
 
   return (
-    <Card 
+    <Card
       elevation={1}
       sx={{
         background: 'background.paper',
@@ -210,8 +194,8 @@ const FileInfoBox = ({ compact = false }) => {
     >
       <CardContent sx={{ p: 3 }}>
         {/* Header */}
-        <Box sx={{ 
-          display: 'flex', 
+        <Box sx={{
+          display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           mb: 3
@@ -237,10 +221,10 @@ const FileInfoBox = ({ compact = false }) => {
         </Box>
 
         {/* Simple Stats Grid */}
-        <Box sx={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
-          gap: 2 
+        <Box sx={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: 2
         }}>
           <Box>
             <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -250,7 +234,7 @@ const FileInfoBox = ({ compact = false }) => {
               netspeed.csv
             </Typography>
           </Box>
-          
+
           <Box>
             <Typography variant="body2" color="text.secondary" gutterBottom>
               Created
@@ -259,7 +243,7 @@ const FileInfoBox = ({ compact = false }) => {
               {fileInfo?.date || 'Unknown'}
             </Typography>
           </Box>
-          
+
           <Box>
             <Typography variant="body2" color="text.secondary" gutterBottom>
               Total Records
@@ -268,7 +252,7 @@ const FileInfoBox = ({ compact = false }) => {
               {fileInfo?.line_count?.toLocaleString() || '0'}
             </Typography>
           </Box>
-          
+
           <Box>
             <Typography variant="body2" color="text.secondary" gutterBottom>
               Status
@@ -281,6 +265,6 @@ const FileInfoBox = ({ compact = false }) => {
       </CardContent>
     </Card>
   );
-};
+});
 
 export default FileInfoBox;

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 
 // Default available columns (from the CSV data structure)
 const DEFAULT_AVAILABLE_COLUMNS = [
@@ -62,55 +62,55 @@ export const SettingsProvider = ({ children }) => {
   }, [sshUsername, columns]);
 
   // Get enabled columns in order
-  const getEnabledColumns = () => {
+  const getEnabledColumns = useCallback(() => {
     return columns.filter(col => col.enabled);
-  };
+  }, [columns]);
 
   // Get enabled column headers as array
-  const getEnabledColumnHeaders = () => {
+  const getEnabledColumnHeaders = useCallback(() => {
     return columns.filter(col => col.enabled).map(col => col.id);
-  };
+  }, [columns]);
 
   // Update column enabled status
-  const toggleColumn = (columnId) => {
+  const toggleColumn = useCallback((columnId) => {
     setColumns(prev => prev.map(col => 
       col.id === columnId ? { ...col, enabled: !col.enabled } : col
     ));
-  };
+  }, []);
 
   // Reorder columns
-  const reorderColumns = (startIndex, endIndex) => {
+  const reorderColumns = useCallback((startIndex, endIndex) => {
     setColumns(prev => {
       const result = Array.from(prev);
       const [removed] = result.splice(startIndex, 1);
       result.splice(endIndex, 0, removed);
       return result;
     });
-  };
+  }, []);
 
   // Reset to default configuration
-  const resetToDefault = () => {
+  const resetToDefault = useCallback(() => {
     setColumns(DEFAULT_AVAILABLE_COLUMNS);
-  };
+  }, []);
 
   // Update SSH username
-  const updateSshUsername = (username) => {
+  const updateSshUsername = useCallback((username) => {
     setSshUsername(username);
-  };
+  }, []);
 
   // Set navigation callback function
-  const setNavigationFunction = (callback) => {
+  const setNavigationFunction = useCallback((callback) => {
     setNavigationCallback(() => callback);
-  };
+  }, []);
 
   // Navigate to settings
-  const navigateToSettings = () => {
+  const navigateToSettings = useCallback(() => {
     if (navigationCallback) {
       navigationCallback(null, 'settings');
     }
-  };
+  }, [navigationCallback]);
 
-  const value = {
+  const value = useMemo(() => ({
     sshUsername,
     columns,
     getEnabledColumns,
@@ -121,7 +121,18 @@ export const SettingsProvider = ({ children }) => {
     updateSshUsername,
     setNavigationFunction,
     navigateToSettings
-  };
+  }), [
+    sshUsername,
+    columns,
+    getEnabledColumns,
+    getEnabledColumnHeaders,
+    toggleColumn,
+    reorderColumns,
+    resetToDefault,
+    updateSshUsername,
+    setNavigationFunction,
+    navigateToSettings
+  ]);
 
   return (
     <SettingsContext.Provider value={value}>
