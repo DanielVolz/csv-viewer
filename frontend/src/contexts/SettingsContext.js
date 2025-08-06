@@ -73,7 +73,7 @@ export const SettingsProvider = ({ children }) => {
 
   // Update column enabled status
   const toggleColumn = useCallback((columnId) => {
-    setColumns(prev => prev.map(col => 
+    setColumns(prev => prev.map(col =>
       col.id === columnId ? { ...col, enabled: !col.enabled } : col
     ));
   }, []);

@@ -285,29 +285,64 @@ class OpenSearchConfig:
         # Get file creation date ONCE per file, not per row
         file_creation_date = None
         try:
-            # Get the file's Linux creation date using stat command
-            import subprocess
+            # Use FileModel to get the proper date calculation
+            from models.file import FileModel
+            file_model = FileModel.from_path(file_path)
             
-            # Use Linux stat command to get creation date
-            process = subprocess.run(
-                ["stat", "-c", "%w", file_path],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            creation_time_str = process.stdout.strip()
-            # Parse the datetime string and format for indexing
-            file_creation_date = creation_time_str.split()[0]  # Extract just the date part
-            logger.info(f"File creation date for {file_path}: {file_creation_date}")
+            if file_model.date:
+                file_creation_date = file_model.date.strftime('%Y-%m-%d')
+                logger.info(f"Using FileModel date for {file_path}: {file_creation_date}")
+            else:
+                # Fallback to manual calculation if FileModel fails
+                file_name = Path(file_path).name.lower()
+                if file_name.startswith("netspeed.csv"):
+                    from datetime import datetime, timedelta
+                    
+                    # Get today's date
+                    today = datetime.now().date()
+                    
+                    if file_name == "netspeed.csv":
+                        # Current file = today
+                        file_creation_date = today.strftime('%Y-%m-%d')
+                    elif file_name.startswith("netspeed.csv."):
+                        try:
+                            # Extract number after the dot (e.g., "netspeed.csv.1" -> 1)
+                            suffix = file_name.split("netspeed.csv.")[1]
+                            days_back = int(suffix)
+                            
+                            # Special handling for .0 file - it should be 1 day back (yesterday)
+                            if days_back == 0:
+                                days_back = 1
+                            else:
+                                # For .1, .2, etc. add 1 more day since .0 is already yesterday
+                                days_back = days_back + 1
+                                
+                            # Calculate date: today minus days_back
+                            file_date = today - timedelta(days=days_back)
+                            file_creation_date = file_date.strftime('%Y-%m-%d')
+                            logger.info(f"Calculated fallback date for {file_path}: {file_creation_date} (today - {days_back} days)")
+                        except (IndexError, ValueError) as e:
+                            logger.warning(f"Error parsing netspeed file suffix '{file_name}': {e}")
+                            # Final fallback to filesystem timestamp
+                            file_path_obj = Path(file_path)
+                            creation_timestamp = file_path_obj.stat().st_mtime
+                            file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
+                else:
+                    # For non-netspeed files, use filesystem timestamp
+                    file_path_obj = Path(file_path)
+                    creation_timestamp = file_path_obj.stat().st_mtime
+                    file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
+                    
         except Exception as e:
-            logger.warning(f"Error getting Linux creation date: {e}, falling back to modification time")
+            logger.warning(f"Error getting file creation date for {file_path}: {e}, using filesystem fallback")
             try:
-                # Fallback to modification time if stat command fails
+                # Final fallback to filesystem timestamp
                 file_path_obj = Path(file_path)
                 creation_timestamp = file_path_obj.stat().st_mtime
                 file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
             except Exception as inner_e:
                 logger.warning(f"Error getting fallback date: {inner_e}")
+                file_creation_date = datetime.now().strftime('%Y-%m-%d')
 
         # Import DESIRED_ORDER for consistent column filtering
         from utils.csv_utils import DESIRED_ORDER
@@ -387,6 +422,28 @@ class OpenSearchConfig:
         # Convert back to list
         return list(deduplicated.values())
 
+    def _deduplicate_documents_preserve_order(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Deduplicate documents based on MAC address and file name while preserving sort order.
+
+        Args:
+            documents: List of documents to deduplicate (should be pre-sorted)
+
+        Returns:
+            List[Dict[str, Any]]: Deduplicated list of documents in original order
+        """
+        seen_keys = set()
+        unique_documents = []
+        
+        for doc in documents:
+            key = f"{doc.get('MAC Address', '')}-{doc.get('File Name', '')}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_documents.append(doc)
+        
+        logger.info(f"Deduplicated {len(documents)} documents to {len(unique_documents)} unique documents")
+        return unique_documents
+
     def _build_query_body(self, query: str, field: Optional[str] = None, 
                         size: int = 20000) -> Dict[str, Any]:
         """
@@ -421,7 +478,19 @@ class OpenSearchConfig:
                     }
                 },
                 "_source": DESIRED_ORDER,
-                "size": size
+                "size": size,
+                "sort": [
+                    {
+                        "Creation Date": {
+                            "order": "desc"
+                        }
+                    },
+                    {
+                        "_score": {
+                            "order": "desc"
+                        }
+                    }
+                ]
             }
         else:
             # General search across all fields with improved partial matching
@@ -516,6 +585,20 @@ class OpenSearchConfig:
             from utils.csv_utils import DESIRED_ORDER
             search_query["_source"] = DESIRED_ORDER
             
+            # Add simple sorting by Creation Date (we'll do file name sorting client-side)
+            search_query["sort"] = [
+                {
+                    "Creation Date": {
+                        "order": "desc"
+                    }
+                },
+                {
+                    "_score": {
+                        "order": "desc"
+                    }
+                }
+            ]
+            
             return search_query
 
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False,
@@ -555,8 +638,44 @@ class OpenSearchConfig:
             hits = response["hits"]["hits"]
             documents = [hit["_source"] for hit in hits]
 
-            # Deduplicate documents
-            unique_documents = self._deduplicate_documents(documents)
+            # Log the raw documents from OpenSearch for debugging
+            logger.info(f"Raw documents from OpenSearch (first 10):")
+            for i, doc in enumerate(documents[:10]):
+                logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - {doc.get('Creation Date', 'unknown')} - MAC: {doc.get('MAC Address', 'unknown')}")
+
+            # Deduplicate documents while preserving sort order
+            unique_documents = self._deduplicate_documents_preserve_order(documents)
+            
+            # Sort the deduplicated documents by file name priority, then by Creation Date
+            def get_file_priority(doc):
+                file_name = doc.get('File Name', '')
+                
+                if file_name == 'netspeed.csv':
+                    return (0, 0)  # Always first
+                elif file_name.startswith('netspeed.csv.'):
+                    try:
+                        suffix = file_name.split('netspeed.csv.')[1]
+                        file_number = int(suffix)
+                        # Group netspeed files together, then sort by file number
+                        # Use padding to ensure proper numeric order: 0, 1, 2, 3, ..., 10, 11, etc.
+                        return (1, file_number)
+                    except (IndexError, ValueError):
+                        return (999, 999)
+                else:
+                    return (1000, 0)
+            
+            try:
+                # Sort by file name priority: netspeed.csv first, then .0, .1, .2, etc.
+                unique_documents.sort(key=get_file_priority)
+                logger.info(f"Sorted {len(unique_documents)} unique documents by file name priority")
+                
+                # Debug: Log first 15 sorted documents to see the order
+                for i, doc in enumerate(unique_documents[:15]):
+                    priority = get_file_priority(doc)
+                    logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - Priority: {priority}")
+                    
+            except Exception as e:
+                logger.warning(f"Error sorting documents by file name priority: {e}")
             
             # Apply display column filtering for consistency
             from utils.csv_utils import DESIRED_ORDER

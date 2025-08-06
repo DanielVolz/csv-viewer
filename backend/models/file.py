@@ -40,44 +40,86 @@ class FileModel(BaseModel):
         name = file_path.split("/")[-1]
         is_current = name == "netspeed.csv"
         
-        # Get date for all files
+        # Get date for netspeed files based on filename pattern
         date = None
         try:
-            file_path_obj = Path(file_path)
-            if file_path_obj.exists():
-                try:
-                    # Use Linux stat command to get creation date (birth time)
-                    # Using %w instead of %y to get creation time, not modification time
-                    process = subprocess.run(
-                        ["stat", "-c", "%w", file_path],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    creation_time_str = process.stdout.strip()
-                    logging.getLogger(__name__).info(f"Raw creation time from stat: {creation_time_str}")
-                    
-                    # Extract just the date part (YYYY-MM-DD) from the timestamp
-                    date_part = creation_time_str.split()[0]
-                    logging.getLogger(__name__).info(f"Extracted date part: {date_part}")
-                    
+            if name.startswith("netspeed.csv"):
+                from datetime import datetime, timedelta
+                
+                # Get today's date
+                today = datetime.now().date()
+                
+                if name == "netspeed.csv":
+                    # Current file = today
+                    date = datetime.combine(today, datetime.min.time())
+                elif name.startswith("netspeed.csv."):
                     try:
-                        # Parse the simple date format
-                        date = datetime.strptime(date_part, "%Y-%m-%d")
-                        logging.getLogger(__name__).info(f"Successfully parsed date: {date}")
-                    except ValueError as ve:
-                        logging.getLogger(__name__).warning(f"Error parsing extracted date part: {ve}")
-                        # Fallback to modification time if date parsing fails
+                        # Extract number after the dot (e.g., "netspeed.csv.1" -> 1)
+                        suffix = name.split("netspeed.csv.")[1]
+                        days_back = int(suffix)
+                        
+                        # Special handling for .0 file - it should be 1 day back (yesterday)
+                        if days_back == 0:
+                            days_back = 1
+                        else:
+                            # For .1, .2, etc. add 1 more day since .0 is already yesterday
+                            days_back = days_back + 1
+                            
+                        # Calculate date: today minus days_back
+                        file_date = today - timedelta(days=days_back)
+                        date = datetime.combine(file_date, datetime.min.time())
+                        logging.getLogger(__name__).info(f"Calculated date for {name}: {date} (today - {days_back} days)")
+                    except (IndexError, ValueError) as e:
+                        logging.getLogger(__name__).warning(f"Error parsing netspeed file suffix '{name}': {e}")
+                        # Fallback to filesystem timestamp
+                        file_path_obj = Path(file_path)
+                        if file_path_obj.exists():
+                            mtime = file_path_obj.stat().st_mtime
+                            date = datetime.fromtimestamp(mtime)
+                else:
+                    # For other netspeed files (like netspeed.csv_bak), use filesystem timestamp
+                    file_path_obj = Path(file_path)
+                    if file_path_obj.exists():
                         mtime = file_path_obj.stat().st_mtime
                         date = datetime.fromtimestamp(mtime)
-                        logging.getLogger(__name__).info(f"Using fallback modification time: {date}")
-                except subprocess.CalledProcessError:
-                    # Fallback to modification time if stat fails
-                    mtime = file_path_obj.stat().st_mtime
-                    date = datetime.fromtimestamp(mtime)
+            else:
+                # For non-netspeed files, use filesystem timestamp
+                file_path_obj = Path(file_path)
+                if file_path_obj.exists():
+                    try:
+                        # Use Linux stat command to get creation date (birth time)
+                        # Using %w instead of %y to get creation time, not modification time
+                        process = subprocess.run(
+                            ["stat", "-c", "%w", file_path],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        creation_time_str = process.stdout.strip()
+                        logging.getLogger(__name__).info(f"Raw creation time from stat: {creation_time_str}")
+                        
+                        # Extract just the date part (YYYY-MM-DD) from the timestamp
+                        date_part = creation_time_str.split()[0]
+                        logging.getLogger(__name__).info(f"Extracted date part: {date_part}")
+                        
+                        try:
+                            # Parse the simple date format
+                            date = datetime.strptime(date_part, "%Y-%m-%d")
+                            logging.getLogger(__name__).info(f"Successfully parsed date: {date}")
+                        except ValueError as ve:
+                            logging.getLogger(__name__).warning(f"Error parsing extracted date part: {ve}")
+                            # Fallback to modification time if date parsing fails
+                            mtime = file_path_obj.stat().st_mtime
+                            date = datetime.fromtimestamp(mtime)
+                            logging.getLogger(__name__).info(f"Using fallback modification time: {date}")
+                    except subprocess.CalledProcessError:
+                        # Fallback to modification time if stat fails
+                        mtime = file_path_obj.stat().st_mtime
+                        date = datetime.fromtimestamp(mtime)
             
-        except Exception:
+        except Exception as e:
             # If any error occurs, just leave date as None
+            logging.getLogger(__name__).error(f"Error calculating date for {file_path}: {e}")
             pass
 
         # Determine format based on file content or name patterns

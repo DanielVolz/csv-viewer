@@ -180,47 +180,56 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
             # Check if the document has a file name
             if 'File Name' in doc:
                 file_name = doc['File Name']
-                # Create a file model to get the date info
-                try:
-                    file_path = f"/app/data/{file_name}"
-                    # Get a complete FileModel to get the correct date
-                    from models.file import FileModel
-                    file_model = FileModel.from_path(file_path)
-                    
-                    # Use the date from FileModel which already handles all the details correctly
-                    if file_model.date:
-                        doc['Creation Date'] = file_model.date.strftime('%Y-%m-%d')
-                    else:
-                        # Fallback if date is not available
-                        import subprocess
-                        from pathlib import Path
-                        from datetime import datetime
+                
+                # Only add Creation Date if it's missing from the document
+                if 'Creation Date' not in doc or not doc['Creation Date']:
+                    # Create a file model to get the date info
+                    try:
+                        file_path = f"/app/data/{file_name}"
+                        # Get a complete FileModel to get the correct date
+                        from models.file import FileModel
+                        file_model = FileModel.from_path(file_path)
                         
-                        try:
-                            # Match the same stat command used in FileModel.from_path
-                            process = subprocess.run(
-                                ["stat", "-c", "%w", file_path],
-                                capture_output=True,
-                                text=True,
-                                check=True
-                            )
-                            creation_time_str = process.stdout.strip()
-                            # Extract just the date part (YYYY-MM-DD) from the timestamp
-                            date_part = creation_time_str.split()[0]
-                            doc['Creation Date'] = date_part
-                        except subprocess.CalledProcessError:
-                            # Fallback to modification time if stat fails
-                            file_path_obj = Path(file_path)
-                            mtime = file_path_obj.stat().st_mtime
-                            date = datetime.fromtimestamp(mtime)
-                            doc['Creation Date'] = date.strftime('%Y-%m-%d')
-                    
-                    # For file format, still use FileModel
-                    from models.file import FileModel
-                    file_model = FileModel.from_path(file_path)
-                    doc['File Format'] = file_model.format
-                except Exception as e:
-                    logger.warning(f"Error getting file info for {file_name}: {e}")
+                        # Use the date from FileModel which already handles all the details correctly
+                        if file_model.date:
+                            doc['Creation Date'] = file_model.date.strftime('%Y-%m-%d')
+                        else:
+                            # Fallback if date is not available
+                            import subprocess
+                            from pathlib import Path
+                            from datetime import datetime
+                            
+                            try:
+                                # Match the same stat command used in FileModel.from_path
+                                process = subprocess.run(
+                                    ["stat", "-c", "%w", file_path],
+                                    capture_output=True,
+                                    text=True,
+                                    check=True
+                                )
+                                creation_time_str = process.stdout.strip()
+                                # Extract just the date part (YYYY-MM-DD) from the timestamp
+                                date_part = creation_time_str.split()[0]
+                                doc['Creation Date'] = date_part
+                            except subprocess.CalledProcessError:
+                                # Fallback to modification time if stat fails
+                                file_path_obj = Path(file_path)
+                                mtime = file_path_obj.stat().st_mtime
+                                date = datetime.fromtimestamp(mtime)
+                                doc['Creation Date'] = date.strftime('%Y-%m-%d')
+                    except Exception as e:
+                        logger.warning(f"Error getting file info for {file_name}: {e}")
+                
+                # For file format, always add it if missing
+                if 'File Format' not in doc:
+                    try:
+                        file_path = f"/app/data/{file_name}"
+                        from models.file import FileModel
+                        file_model = FileModel.from_path(file_path)
+                        doc['File Format'] = file_model.format
+                    except Exception as e:
+                        logger.warning(f"Error getting file format for {file_name}: {e}")
+                        doc['File Format'] = 'unknown'
         
         # Apply same column filtering as Preview API for consistency
         from utils.csv_utils import filter_display_columns
