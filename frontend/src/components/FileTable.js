@@ -87,9 +87,9 @@ function FileTable() {
       />
 
       {/* Header Section */}
-      <Box sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
+      <Box sx={{
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
         mb: 3
       }}>
@@ -124,9 +124,9 @@ function FileTable() {
                 const status = getFileStatus(file);
                 return (
                   <TableRow key={index} hover>
-                    <TableCell>
-                      <Typography 
-                        variant="body2" 
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
+                      <Typography
+                        variant="body2"
                         fontWeight={500}
                         component="a"
                         href={`/api/files/download/${file.name}`}
@@ -147,7 +147,7 @@ function FileTable() {
                         {file.name}
                       </Typography>
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
                       <Chip
                         label={status.label}
                         color={status.color}
@@ -155,12 +155,12 @@ function FileTable() {
                         variant="outlined"
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
                       <Typography variant="body2">
                         {file.date ? new Date(file.date).toLocaleDateString() : '-'}
                       </Typography>
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
                       <Typography variant="body2">
                         {file.line_count ? file.line_count.toLocaleString() : '-'}
                       </Typography>

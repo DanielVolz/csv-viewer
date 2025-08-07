@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from tasks.tasks import index_csv
+from tasks.tasks import index_csv, index_all_csv_files
 from utils.opensearch import opensearch_config
 
 # Configure logging
@@ -18,6 +18,23 @@ class CSVFileHandler(FileSystemEventHandler):
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         self.current_csv_path = self.data_dir / "netspeed.csv"
+        self.last_reindex_time = 0
+        self.reindex_cooldown = 30  # 30 seconds cooldown between reindexing
+        
+    def _is_netspeed_file(self, file_path: Path) -> bool:
+        """Check if the file is a netspeed CSV file."""
+        return (file_path.name == "netspeed.csv" or 
+                file_path.name.startswith("netspeed.csv.") and
+                file_path.suffix == '' and  # netspeed.csv.0, .1, etc. have no extension
+                file_path.name.replace("netspeed.csv.", "").isdigit())
+    
+    def _should_trigger_reindex(self) -> bool:
+        """Check if we should trigger reindexing (cooldown check)."""
+        current_time = time.time()
+        if current_time - self.last_reindex_time > self.reindex_cooldown:
+            self.last_reindex_time = current_time
+            return True
+        return False
         
     def on_created(self, event):
         """Handle file creation events."""
@@ -26,10 +43,11 @@ class CSVFileHandler(FileSystemEventHandler):
             
         file_path = Path(event.src_path)
         
-        # Check if netspeed.csv was created/replaced
-        if file_path.name == "netspeed.csv":
-            logger.info(f"New netspeed.csv detected: {file_path}")
-            self._handle_new_netspeed_csv(str(file_path))
+        # Check if any netspeed file was created
+        if self._is_netspeed_file(file_path):
+            logger.info(f"New netspeed file detected: {file_path}")
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("created", str(file_path))
     
     def on_modified(self, event):
         """Handle file modification events."""
@@ -38,38 +56,69 @@ class CSVFileHandler(FileSystemEventHandler):
             
         file_path = Path(event.src_path)
         
-        # Check if netspeed.csv was modified
-        if file_path.name == "netspeed.csv":
-            logger.info(f"netspeed.csv modified: {file_path}")
+        # Check if any netspeed file was modified
+        if self._is_netspeed_file(file_path):
+            logger.info(f"netspeed file modified: {file_path}")
             # Wait a moment to ensure file is completely written
             time.sleep(2)
-            self._handle_new_netspeed_csv(str(file_path))
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("modified", str(file_path))
     
-    def _handle_new_netspeed_csv(self, file_path: str):
+    def on_moved(self, event):
+        """Handle file move/rename events."""
+        if event.is_directory:
+            return
+            
+        src_path = Path(event.src_path)
+        dest_path = Path(event.dest_path)
+        
+        # Check if any netspeed file was moved/renamed
+        if (self._is_netspeed_file(src_path) or self._is_netspeed_file(dest_path)):
+            logger.info(f"netspeed file moved/renamed: {src_path} -> {dest_path}")
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("moved", f"{src_path} -> {dest_path}")
+    
+    def on_deleted(self, event):
+        """Handle file deletion events.""" 
+        if event.is_directory:
+            return
+            
+        file_path = Path(event.src_path)
+        
+        # Check if any netspeed file was deleted
+        if self._is_netspeed_file(file_path):
+            logger.info(f"netspeed file deleted: {file_path}")
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("deleted", str(file_path))
+    
+    def _handle_netspeed_files_change(self, event_type: str, file_info: str):
         """
-        Handle new or updated netspeed.csv file.
+        Handle changes to netspeed files by triggering full reindexing.
         
         Args:
-            file_path: Path to the netspeed.csv file
+            event_type: Type of file system event (created, modified, moved, deleted)
+            file_info: Information about the file(s) involved
         """
         try:
-            logger.info("Processing new netspeed.csv file...")
+            logger.info(f"Processing netspeed files change ({event_type}): {file_info}")
             
-            # Step 1: Delete existing netspeed.csv index to avoid stale data
-            logger.info("Cleaning up existing netspeed.csv index...")
-            index_name = opensearch_config.get_index_name(file_path)
-            if opensearch_config.delete_index(index_name):
-                logger.info(f"Successfully deleted index: {index_name}")
-            else:
-                logger.warning(f"Could not delete index: {index_name}")
+            # Step 1: Clean up all existing netspeed indices
+            logger.info("Cleaning up all existing netspeed indices...")
             
-            # Step 2: Trigger reindexing of the new file
-            logger.info("Triggering reindexing of new netspeed.csv...")
-            task = index_csv.delay(file_path)
-            logger.info(f"Reindexing task started with ID: {task.id}")
+            # Delete all netspeed_* indices
+            try:
+                indices_deleted = opensearch_config.cleanup_indices_by_pattern("netspeed_*")
+                logger.info(f"Successfully cleaned up {indices_deleted} netspeed indices")
+            except Exception as e:
+                logger.warning(f"Error cleaning up indices: {e}")
+            
+            # Step 2: Trigger full reindexing of all CSV files
+            logger.info("Triggering full reindexing of all netspeed files...")
+            task = index_all_csv_files.delay(str(self.data_dir))
+            logger.info(f"Full reindexing task started with ID: {task.id}")
             
         except Exception as e:
-            logger.error(f"Error handling new netspeed.csv: {e}")
+            logger.error(f"Error handling netspeed files change: {e}")
 
 
 class FileWatcher:

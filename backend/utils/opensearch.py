@@ -235,6 +235,42 @@ class OpenSearchConfig:
             logger.error(f"Error deleting index {index_name}: {e}")
             return False
 
+    def cleanup_indices_by_pattern(self, pattern: str) -> int:
+        """
+        Delete all indices matching a pattern.
+        
+        Args:
+            pattern: Pattern to match index names (e.g., "netspeed_*")
+            
+        Returns:
+            int: Number of indices deleted
+        """
+        try:
+            # Get all indices matching the pattern
+            response = self.client.indices.get(index=pattern, ignore=[404])
+            
+            if not response or response == {}:
+                logger.info(f"No indices found matching pattern: {pattern}")
+                return 0
+            
+            indices_to_delete = list(response.keys())
+            deleted_count = 0
+            
+            for index_name in indices_to_delete:
+                try:
+                    self.client.indices.delete(index=index_name)
+                    logger.info(f"Successfully deleted index: {index_name}")
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error deleting index {index_name}: {e}")
+            
+            logger.info(f"Deleted {deleted_count} indices matching pattern: {pattern}")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up indices with pattern {pattern}: {e}")
+            return 0
+
     def update_index_settings(self, index_name: str) -> bool:
         """
         Update settings for an existing index.

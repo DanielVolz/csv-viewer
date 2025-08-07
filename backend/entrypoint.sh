@@ -14,6 +14,12 @@ CELERY_PID=$!
 sleep 3
 echo "Celery worker started"
 
+# Start the daily scheduler in the background
+echo "Starting daily reindexing scheduler..."
+python scheduler.py &
+SCHEDULER_PID=$!
+echo "Daily scheduler started"
+
 # Start FastAPI application in the background
 echo "Starting FastAPI application..."
 # Use BACKEND_PORT from environment or default to 8000

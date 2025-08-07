@@ -251,3 +251,58 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
             "headers": [],
             "data": []
         }
+
+
+@app.task(name='tasks.morning_reindex')
+def morning_reindex(directory_path: str = "/app/data") -> dict:
+    """
+    Task to perform morning reindexing at 7:00 AM.
+    This ensures that new netspeed.csv files and renamed historical files are properly indexed.
+    
+    Args:
+        directory_path: Path to the directory containing CSV files
+        
+    Returns:
+        dict: A dictionary containing the reindexing results
+    """
+    logger.info("Starting morning reindexing at 7:00 AM...")
+    
+    try:
+        # Step 1: Clean up all existing netspeed indices
+        logger.info("Cleaning up all existing netspeed indices...")
+        
+        # Delete all netspeed_* indices
+        try:
+            indices_deleted = opensearch_config.cleanup_indices_by_pattern("netspeed_*")
+            logger.info(f"Successfully cleaned up {indices_deleted} netspeed indices")
+        except Exception as e:
+            logger.warning(f"Error cleaning up indices: {e}")
+        
+        # Step 2: Trigger full reindexing of all CSV files
+        logger.info("Triggering full reindexing of all netspeed files...")
+        result = index_all_csv_files(directory_path)
+        
+        if result.get("status") == "success":
+            logger.info(f"Morning reindexing completed successfully: {result.get('message')}")
+            return {
+                "status": "success",
+                "message": f"Morning reindexing completed: {result.get('message')}",
+                "timestamp": "07:00",
+                "files_processed": result.get("files_processed", 0),
+                "total_documents": result.get("total_documents", 0)
+            }
+        else:
+            logger.error(f"Morning reindexing failed: {result.get('message')}")
+            return {
+                "status": "error",
+                "message": f"Morning reindexing failed: {result.get('message')}",
+                "timestamp": "07:00"
+            }
+            
+    except Exception as e:
+        logger.error(f"Error during morning reindexing: {e}")
+        return {
+            "status": "error",
+            "message": f"Morning reindexing error: {str(e)}",
+            "timestamp": "07:00"
+        }

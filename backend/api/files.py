@@ -8,7 +8,7 @@ import subprocess
 
 from models.file import FileModel
 from config import settings
-from utils.csv_utils import read_csv_file
+from utils.csv_utils import read_csv_file, DESIRED_ORDER
 from tasks.tasks import index_all_csv_files, app
 from celery import current_app
 
@@ -270,4 +270,90 @@ async def download_file(filename: str):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to download file: {str(e)}"
+        )
+
+
+@router.get("/columns")
+async def get_available_columns():
+    """
+    Get the available columns from the current CSV format.
+    
+    Returns:
+        List of column definitions with id, label, and default enabled state
+    """
+    try:
+        # Use DESIRED_ORDER from csv_utils which defines the current 16-column format
+        available_columns = []
+        
+        # Define default enabled state for each column
+        # Note: Speed 1 and Speed 2 are excluded from settings (always hidden)
+        default_enabled = {
+            "#": True,
+            "File Name": True,
+            "Creation Date": True,
+            "IP Address": True,
+            "Line Number": True,
+            "MAC Address": True,
+            "MAC Address 2": False,
+            "Subnet Mask": False,
+            "Voice VLAN": True,
+            "Switch Hostname": True,
+            "Switch Port": True,
+            "Speed Switch-Port": False,
+            "Speed PC-Port": False,
+            "Serial Number": True,
+            "Model Name": True
+        }
+        
+        # Build column definitions from DESIRED_ORDER, but only include columns that should be in settings
+        for column_id in DESIRED_ORDER:
+            # Only include columns that are defined in default_enabled (excludes Speed 1, Speed 2)
+            if column_id in default_enabled:
+                available_columns.append({
+                    "id": column_id,
+                    "label": column_id,
+                    "enabled": default_enabled[column_id]
+                })
+        
+        return {
+            "success": True,
+            "columns": available_columns,
+            "message": f"Retrieved {len(available_columns)} available columns"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting available columns: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get available columns"
+        )
+
+
+@router.get("/trigger_morning_reindex")
+async def trigger_morning_reindex():
+    """
+    Manually trigger the morning reindexing process.
+    This can be used for testing or manual execution of the 7:00 AM reindexing.
+    
+    Returns:
+        Dictionary with the status of the reindexing task
+    """
+    try:
+        from tasks.tasks import morning_reindex
+        
+        # Trigger the morning reindexing task
+        task = morning_reindex.delay()
+        
+        return {
+            "success": True,
+            "message": "Morning reindexing task has been triggered",
+            "task_id": task.id,
+            "timestamp": "manual_trigger"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error triggering morning reindexing task: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to trigger morning reindexing task"
         )
