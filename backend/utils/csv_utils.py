@@ -193,20 +193,14 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             
             logger.info(f"Detected {most_common_count} columns for {file_path}")
             
-            # Generate headers based on detected column count
-            file_headers = generate_headers(most_common_count)
-            logger.info(f"Generated headers for {file_path}: {file_headers}")
+            # Generate headers based on detected column count (we'll use 16-column format as standard)
+            file_headers = KNOWN_HEADERS[16].copy()
+            logger.info(f"Using 16-column standard headers for {file_path}: {file_headers}")
             
-            # Normalize to 16-column format for consistent processing
-            # All new files use 16 columns (with KEM columns that may be empty)
-            if most_common_count < 16:
-                logger.info(f"Normalizing {file_path} from {most_common_count} to 16 columns (adding missing KEM columns)")
-                file_headers = KNOWN_HEADERS[16].copy()
-                normalize_to_16_columns = True
-            else:
-                normalize_to_16_columns = False
+            # All files will be normalized to 16-column format for consistent processing
+            logger.info(f"Processing {file_path} with mixed format support (per-row normalization)")
             
-            # Process rows
+            # Process rows with per-row format detection
             for idx, row in enumerate(all_rows, 1):  # Start counting from 1
                 # Skip empty rows
                 if len(row) == 0:
@@ -215,46 +209,61 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                 
                 # Clean row data
                 cleaned_row = [cell.strip() for cell in row]
+                original_length = len(cleaned_row)
                 
-                # Normalize to 16-column format if needed
-                if normalize_to_16_columns:
-                    if len(cleaned_row) == 14:
-                        # 14-column format: insert empty KEM columns at positions 4 and 5
+                # Per-row format detection and normalization to 16 columns
+                if original_length == 14:
+                    # 14-column format: insert empty KEM columns at positions 4 and 5
+                    normalized_row = (
+                        cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
+                        ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
+                        cleaned_row[4:]          # MAC Address onwards (original positions 4-13 → new positions 6-15)
+                    )
+                    cleaned_row = normalized_row
+                    logger.debug(f"Row {idx}: Normalized 14-col to 16-col format")
+                    
+                elif original_length == 15:
+                    # 15-column format: need to determine if position 4 is KEM or MAC Address
+                    col4_value = cleaned_row[4].strip() if len(cleaned_row) > 4 else ""
+                    
+                    if col4_value in ["KEM", "KEM1", "KEM2"]:
+                        # Position 4 is KEM, insert empty KEM 2 at position 5
+                        normalized_row = (
+                            cleaned_row[:5] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3), KEM (4)
+                            [""] +                   # Empty KEM 2 (5)
+                            cleaned_row[5:]          # MAC Address onwards (original positions 5-14 → new positions 6-15)
+                        )
+                        logger.debug(f"Row {idx}: Normalized 15-col with KEM at pos4 to 16-col format")
+                    else:
+                        # Position 4 is MAC Address, insert empty KEM columns before it
                         normalized_row = (
                             cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
                             ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
-                            cleaned_row[4:]          # MAC Address onwards (6-15)
+                            cleaned_row[4:]          # MAC Address onwards (original positions 4-14 → new positions 6-15)
                         )
-                        cleaned_row = normalized_row
-                        logger.debug(f"Normalized 14-col row {idx} to 16-col format")
+                        logger.debug(f"Row {idx}: Normalized 15-col with MAC at pos4 to 16-col format")
                     
-                    elif len(cleaned_row) == 15:
-                        # 15-column format: insert empty KEM 2 column at position 5
-                        # Check if position 4 contains KEM data
-                        if len(cleaned_row) > 4 and cleaned_row[4] in ["KEM", "KEM1", "KEM2", ""]:
-                            # Position 4 is KEM, add empty KEM 2 at position 5
-                            normalized_row = (
-                                cleaned_row[:5] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3), KEM (4)
-                                [""] +                   # Empty KEM 2 (5)
-                                cleaned_row[5:]          # MAC Address onwards (6-15)
-                            )
-                        else:
-                            # Position 4 is MAC Address, insert KEM columns before it
-                            normalized_row = (
-                                cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
-                                ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
-                                cleaned_row[4:]          # MAC Address onwards (6-15)
-                            )
-                        cleaned_row = normalized_row
-                        logger.debug(f"Normalized 15-col row {idx} to 16-col format")
+                    cleaned_row = normalized_row
+                    
+                elif original_length == 16:
+                    # Already 16 columns, no normalization needed
+                    logger.debug(f"Row {idx}: Already 16-col format, no normalization needed")
+                    
+                else:
+                    # Unexpected column count, pad or truncate to 16 columns
+                    if original_length < 16:
+                        cleaned_row.extend([''] * (16 - original_length))
+                        logger.debug(f"Row {idx}: Padded {original_length}-col to 16-col format")
+                    else:
+                        cleaned_row = cleaned_row[:16]
+                        logger.debug(f"Row {idx}: Truncated {original_length}-col to 16-col format")
                 
-                # Ensure we have exactly 16 columns
-                if len(cleaned_row) < 16:
-                    # Pad with empty strings
-                    cleaned_row.extend([''] * (16 - len(cleaned_row)))
-                elif len(cleaned_row) > 16:
-                    # Truncate excess columns
-                    cleaned_row = cleaned_row[:16]
+                # Ensure we have exactly 16 columns after normalization
+                if len(cleaned_row) != 16:
+                    if len(cleaned_row) < 16:
+                        cleaned_row.extend([''] * (16 - len(cleaned_row)))
+                    else:
+                        cleaned_row = cleaned_row[:16]
                 
                 # Create a dictionary with the 16-column headers
                 row_dict = dict(zip(file_headers, cleaned_row))
