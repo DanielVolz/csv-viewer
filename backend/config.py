@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "CSV Data Viewer"
 
     # File Settings
-    CSV_FILES_DIR: str = "/app/data"
+    CSV_FILES_DIR: str = "/app/data"  # Default, can be overridden by environment variable
 
     # Database Settings
     REDIS_URL: str = "redis://redis:{REDIS_PORT}"
@@ -46,6 +46,11 @@ def get_settings() -> Settings:
     # Set PORT from environment variable BACKEND_PORT with fallback to 8000
     import os
     settings.PORT = int(os.environ.get("BACKEND_PORT", 8000))
+    
+    # Set CSV_FILES_DIR from environment variable with fallback to default
+    # Note: This should be the container path, not the host path
+    # Host path is mapped via docker volume: ${CSV_FILES_DIR}:/app/data
+    settings.CSV_FILES_DIR = "/app/data"
     
     # Format Redis and OpenSearch URLs with environment variables
     redis_port = os.environ.get("REDIS_PORT", 6379)

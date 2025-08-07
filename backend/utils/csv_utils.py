@@ -9,24 +9,35 @@ from typing import List, Dict, Tuple, Optional, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Define base headers for different known formats (without Speed columns)
+# Define base headers for different known formats
 KNOWN_HEADERS = {
     11: [  # OLD format
         "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2",
         "Switch Hostname", "Switch Port"
     ],
-    14: [  # NEW format  
+    14: [  # OLD format without KEM
         "IP Address", "Line Number", "Serial Number", "Model Name", "MAC Address",
         "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
-        "Switch Hostname", "Switch Port", "Speed 3", "Speed 4"
+        "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+    ],
+    15: [  # TRANSITION format with 1 KEM column
+        "IP Address", "Line Number", "Serial Number", "Model Name", "KEM",
+        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
+        "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+    ],
+    16: [  # NEW STANDARD format with KEM columns (current and future files)
+        "IP Address", "Line Number", "Serial Number", "Model Name", "KEM", "KEM 2",
+        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
+        "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
     ]
 }
 
 # Define the desired display order for columns (what Frontend should show)
+# KEM and KEM 2 are included in backend processing but merged into Line Number for display
 DESIRED_ORDER = [
-    "#", "File Name", "Creation Date", "IP Address", "Line Number", "MAC Address",
-    "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
-    "Switch Hostname", "Switch Port", "Speed 3", "Speed 4", "Serial Number", "Model Name"
+    "#", "File Name", "Creation Date", "IP Address", "Line Number",
+    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2", 
+    "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port", "Serial Number", "Model Name"
 ]
 
 
@@ -48,7 +59,9 @@ def generate_headers(column_count: int) -> List[str]:
     base_headers = []
     
     # Use the largest known format as base
-    if column_count >= 14:
+    if column_count >= 16:
+        base_headers = KNOWN_HEADERS[16].copy()
+    elif column_count >= 14:
         base_headers = KNOWN_HEADERS[14].copy()
     elif column_count >= 11:
         base_headers = KNOWN_HEADERS[11].copy()
@@ -184,6 +197,15 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             file_headers = generate_headers(most_common_count)
             logger.info(f"Generated headers for {file_path}: {file_headers}")
             
+            # Normalize to 16-column format for consistent processing
+            # All new files use 16 columns (with KEM columns that may be empty)
+            if most_common_count < 16:
+                logger.info(f"Normalizing {file_path} from {most_common_count} to 16 columns (adding missing KEM columns)")
+                file_headers = KNOWN_HEADERS[16].copy()
+                normalize_to_16_columns = True
+            else:
+                normalize_to_16_columns = False
+            
             # Process rows
             for idx, row in enumerate(all_rows, 1):  # Start counting from 1
                 # Skip empty rows
@@ -191,38 +213,73 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                     logger.warning(f"Skipping empty row {idx} in {file_path}")
                     continue
                 
-                # Handle rows with different column counts gracefully
-                processed_row = row.copy()
+                # Clean row data
+                cleaned_row = [cell.strip() for cell in row]
                 
-                # If row has fewer columns than expected, pad with empty strings
-                if len(row) < len(file_headers):
-                    processed_row = row + [''] * (len(file_headers) - len(row))
-                    logger.info(
-                        f"Row {idx} in {file_path} has {len(row)} columns, expected {len(file_headers)}. Padded with empty values."
-                    )
-                
-                # If row has more columns than expected, extend headers dynamically
-                elif len(row) > len(file_headers):
-                    # Extend headers for this file to accommodate extra columns
-                    extra_columns_needed = len(row) - len(file_headers)
-                    for i in range(extra_columns_needed):
-                        file_headers.append(f"Column {len(file_headers) + 1}")
+                # Normalize to 16-column format if needed
+                if normalize_to_16_columns:
+                    if len(cleaned_row) == 14:
+                        # 14-column format: insert empty KEM columns at positions 4 and 5
+                        normalized_row = (
+                            cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
+                            ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
+                            cleaned_row[4:]          # MAC Address onwards (6-15)
+                        )
+                        cleaned_row = normalized_row
+                        logger.debug(f"Normalized 14-col row {idx} to 16-col format")
                     
-                    logger.info(
-                        f"Row {idx} in {file_path} has {len(row)} columns, expected {len(file_headers) - extra_columns_needed}. Extended headers to accommodate extra columns."
-                    )
-                    processed_row = row  # Use the full row as-is
+                    elif len(cleaned_row) == 15:
+                        # 15-column format: insert empty KEM 2 column at position 5
+                        # Check if position 4 contains KEM data
+                        if len(cleaned_row) > 4 and cleaned_row[4] in ["KEM", "KEM1", "KEM2", ""]:
+                            # Position 4 is KEM, add empty KEM 2 at position 5
+                            normalized_row = (
+                                cleaned_row[:5] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3), KEM (4)
+                                [""] +                   # Empty KEM 2 (5)
+                                cleaned_row[5:]          # MAC Address onwards (6-15)
+                            )
+                        else:
+                            # Position 4 is MAC Address, insert KEM columns before it
+                            normalized_row = (
+                                cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
+                                ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
+                                cleaned_row[4:]          # MAC Address onwards (6-15)
+                            )
+                        cleaned_row = normalized_row
+                        logger.debug(f"Normalized 15-col row {idx} to 16-col format")
                 
-                # Create a dictionary with the appropriate headers
-                row_dict = dict(zip(file_headers, processed_row))
+                # Ensure we have exactly 16 columns
+                if len(cleaned_row) < 16:
+                    # Pad with empty strings
+                    cleaned_row.extend([''] * (16 - len(cleaned_row)))
+                elif len(cleaned_row) > 16:
+                    # Truncate excess columns
+                    cleaned_row = cleaned_row[:16]
+                
+                # Create a dictionary with the 16-column headers
+                row_dict = dict(zip(file_headers, cleaned_row))
+                
+                # Merge KEM information into Line Number for display (but keep KEM columns in data)
+                line_number = row_dict.get("Line Number", "")
+                kem_info_parts = []
+                
+                if row_dict.get("KEM", "").strip():
+                    kem_info_parts.append(row_dict["KEM"].strip())
+                    
+                if row_dict.get("KEM 2", "").strip():
+                    kem_info_parts.append(row_dict["KEM 2"].strip())
+                
+                # Merge KEM info into Line Number for display
+                if kem_info_parts:
+                    kem_info = " " + " ".join(kem_info_parts)
+                    row_dict["Line Number"] = f"{line_number}{kem_info}".strip()
                 
                 # Add file name, creation date, and row number
                 row_dict["File Name"] = file_name
-                row_dict["Creation Date"] = creation_date  # Make sure this has only the date part
-                # Add row number as string to match other values
+                row_dict["Creation Date"] = creation_date
                 row_dict["#"] = str(idx)
                 
-                # Filter row to only include desired columns for consistent data structure
+                # Filter row to only include desired columns for consistent frontend display
                 filtered_row = {}
                 for header in DESIRED_ORDER:
                     if header in row_dict:

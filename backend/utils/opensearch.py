@@ -48,7 +48,7 @@ class OpenSearchConfig:
                         "format": "yyyy-MM-dd"
                     },
                     "IP Address": {"type": "ip"},
-                    "Line Number": self.keyword_type,
+                    "Line Number": self.text_with_keyword,  # Now contains KEM info
                     "MAC Address": self.text_with_keyword,
                     "MAC Address 2": self.text_with_keyword,
                     "Serial Number": self.keyword_type,
@@ -59,8 +59,8 @@ class OpenSearchConfig:
                     "Switch Port": self.keyword_type,
                     "Speed 1": self.keyword_type,
                     "Speed 2": self.keyword_type,
-                    "Speed 3": self.keyword_type,
-                    "Speed 4": self.keyword_type,
+                    "Speed Switch-Port": self.keyword_type,
+                    "Speed PC-Port": self.keyword_type,
                 },
                 "dynamic_templates": [
                     {
@@ -286,13 +286,17 @@ class OpenSearchConfig:
         file_creation_date = None
         try:
             # Use FileModel to get the proper date calculation
-            from models.file import FileModel
-            file_model = FileModel.from_path(file_path)
-            
-            if file_model.date:
-                file_creation_date = file_model.date.strftime('%Y-%m-%d')
-                logger.info(f"Using FileModel date for {file_path}: {file_creation_date}")
-            else:
+            try:
+                from models.file import FileModel
+                file_model = FileModel.from_path(file_path)
+                
+                if file_model.date:
+                    file_creation_date = file_model.date.strftime('%Y-%m-%d')
+                    logger.info(f"Using FileModel date for {file_path}: {file_creation_date}")
+                else:
+                    raise ValueError("FileModel returned no date")
+            except (ImportError, ValueError) as model_error:
+                logger.warning(f"FileModel not available for {file_path}: {model_error}, using fallback calculation")
                 # Fallback to manual calculation if FileModel fails
                 file_name = Path(file_path).name.lower()
                 if file_name.startswith("netspeed.csv"):
@@ -329,6 +333,7 @@ class OpenSearchConfig:
                             file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
                 else:
                     # For non-netspeed files, use filesystem timestamp
+                    from datetime import datetime
                     file_path_obj = Path(file_path)
                     creation_timestamp = file_path_obj.stat().st_mtime
                     file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
@@ -337,11 +342,13 @@ class OpenSearchConfig:
             logger.warning(f"Error getting file creation date for {file_path}: {e}, using filesystem fallback")
             try:
                 # Final fallback to filesystem timestamp
+                from datetime import datetime
                 file_path_obj = Path(file_path)
                 creation_timestamp = file_path_obj.stat().st_mtime
                 file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
             except Exception as inner_e:
                 logger.warning(f"Error getting fallback date: {inner_e}")
+                from datetime import datetime
                 file_creation_date = datetime.now().strftime('%Y-%m-%d')
 
         # Import DESIRED_ORDER for consistent column filtering
