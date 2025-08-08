@@ -360,6 +360,8 @@ async def trigger_morning_reindex():
         )
 
 
+
+
 @router.get("/index/status")
 async def get_index_status():
     """Return last indexing state (files, totals, timestamps)."""

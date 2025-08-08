@@ -1,4 +1,7 @@
 import React from 'react';
+// Prefer real PNG logo; fallback to SVG if needed
+import kemIconPng from '../assets/kem/kem_logo.png';
+import kemIconSvg from '../assets/kem/kem.svg';
 import {
   Box,
   Typography,
@@ -10,15 +13,18 @@ import {
   TableRow,
   Paper,
   Chip,
+  Tooltip,
   alpha
 } from '@mui/material';
 import { Download, Terminal } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
+const kemIcon = kemIconPng || kemIconSvg;
+
 /**
- * Gemeinsame DataTable-Komponente für Preview und Suchergebnisse
- * Eliminiert Code-Duplikation und sorgt für konsistente Darstellung
+ * Unified DataTable component for preview and search results
+ * Eliminates duplication and ensures consistent presentation
  */
 function DataTable({
   headers,
@@ -84,38 +90,33 @@ function DataTable({
   };
 
   const convertToCiscoFormat = (port) => {
-    if (!port || typeof port !== 'string' || port.length > 50) {
-      return port; // Skip very long strings
-    }
+    if (!port || typeof port !== 'string') return port;
+    const p = port.trim();
+    // Already shortened
+    if (p.startsWith('Gig ') || p.startsWith('Fas ')) return p;
 
-    // Fast check: if it starts with "Gig " already, return as-is
-    if (port.startsWith('Gig ')) {
-      return port;
+    // GigabitEthernet full form
+    if (p.startsWith('GigabitEthernet')) {
+      const remainder = p.substring('GigabitEthernet'.length);
+      return (`Gig ${remainder}`).replace(/\s+/g, ' ').trim();
     }
-
-    // Fast conversion for most common format
-    if (port.startsWith('GigabitEthernet')) {
-      const parts = port.split('/');
-      if (parts.length === 4) {
-        const slot = parts[1];
-        const module = parts[2];
-        const portNum = parts[3];
-        return `Gig ${slot}/${module}/${portNum}`;
-      }
+    // FastEthernet full form
+    if (p.startsWith('FastEthernet')) {
+      const remainder = p.substring('FastEthernet'.length);
+      return (`Fas ${remainder}`).replace(/\s+/g, ' ').trim();
     }
+    // Short forms like Gi1/0/32 or Fa1/0/32
+    if (/^Gi\d/.test(p)) return p.replace(/^Gi/, 'Gig ');
+    if (/^Fa\d/.test(p)) return p.replace(/^Fa/, 'Fas ');
+    return p;
+  };
 
-    // Fast conversion for short format
-    if (port.startsWith('Gi')) {
-      const parts = port.substring(2).split('/');
-      if (parts.length === 4) {
-        const slot = parts[1];
-        const module = parts[2];
-        const portNum = parts[3];
-        return `Gig ${slot}/${module}/${portNum}`;
-      }
-    }
-
-    return port;
+  const formatMacDotted = (mac) => {
+    if (!mac || typeof mac !== 'string') return mac;
+    // Remove separators
+    const cleaned = mac.replace(/[^A-Fa-f0-9]/g, '').toLowerCase();
+    if (cleaned.length !== 12) return mac; // Not a standard MAC
+    return `${cleaned.slice(0,4)}.${cleaned.slice(4,8)}.${cleaned.slice(8,12)}`;
   };
 
   const handleCellClick = (header, content, rowData = null) => {
@@ -235,116 +236,125 @@ function DataTable({
     }
   };
 
-  const renderCellContent = (header, content, isArray = false) => {
+  const renderCellContent = (header, content, isArray = false, rowData = null) => {
     // IP Address mit Link
     if (header === "IP Address") {
       return (
-        <Typography
-          variant="body2"
-          component="a"
-          href={`http://${content}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          sx={{
-            textDecoration: 'underline',
-            color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
-            cursor: 'pointer',
-            '&:hover': {
-              color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-              textDecoration: 'underline'
-            }
-          }}
-        >
-          {content}
-        </Typography>
+        <Tooltip arrow placement="top" title={`Open http://${content}`}>
+          <Typography
+            variant="body2"
+            component="a"
+            href={`http://${content}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              textDecoration: 'underline',
+              color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+              cursor: 'pointer',
+              '&:hover': {
+                color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                textDecoration: 'underline'
+              }
+            }}
+          >
+            {content}
+          </Typography>
+        </Tooltip>
       );
     }
 
     // Switch Hostname mit SSH Link
     if (header === "Switch Hostname") {
+      const title = sshUsername
+        ? `Open SSH ${sshUsername}@${content}`
+        : 'Copy hostname (SSH username not set)';
       return (
-        <Typography
-          variant="body2"
-          component="span"
-          sx={{
-            textDecoration: sshUsername ? 'underline' : 'none',
-            color: theme => {
-              if (sshUsername) {
-                return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32';
-              }
-              return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary';
-            },
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 0.5,
-            '&:hover': {
+        <Tooltip arrow placement="top" title={title}>
+          <Typography
+            variant="body2"
+            component="span"
+            sx={{
+              textDecoration: sshUsername ? 'underline' : 'none',
               color: theme => {
                 if (sshUsername) {
-                  return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
-                } else {
-                  return theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00';
+                  return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32';
                 }
+                return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary';
               },
-              textDecoration: 'underline',
-              '& .ssh-icon': {
-                color: theme => sshUsername
-                  ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
-                  : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              '&:hover': {
+                color: theme => {
+                  if (sshUsername) {
+                    return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
+                  } else {
+                    return theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00';
+                  }
+                },
+                textDecoration: 'underline',
+                '& .ssh-icon': {
+                  color: theme => sshUsername
+                    ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
+                    : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
+                }
               }
-            }
-          }}
-        >
-          {content}
-          <Terminal
-            className="ssh-icon"
-            sx={{
-              color: theme => sshUsername
-                ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
-                : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
-              fontSize: '14px',
-              ml: 0.5,
-              verticalAlign: 'middle'
             }}
-          />
-        </Typography>
+          >
+            {content}
+            <Terminal
+              className="ssh-icon"
+              sx={{
+                color: theme => sshUsername
+                  ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                  : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                fontSize: '14px',
+                ml: 0.5,
+                verticalAlign: 'middle'
+              }}
+            />
+          </Typography>
+        </Tooltip>
       );
     }
 
     // File Name mit Download
     if (header === "File Name") {
       return (
-        <Typography
-          variant="body2"
-          component="a"
-          href={`/api/files/download/${content}`}
-          download
-          sx={{
-            textDecoration: 'underline',
-            color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 0.5,
-            '&:hover': {
-              color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-              textDecoration: 'underline',
-              '& .download-icon': {
-                color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary'
-              }
-            }
-          }}
-        >
-          {content}
-          <Download
-            className="download-icon"
+        <Tooltip arrow placement="top" title={`Download ${content}`}>        
+          <Typography
+            variant="body2"
+            component="a"
+            href={`/api/files/download/${content}`}
+            download
             sx={{
-              color: 'text.disabled',
-              fontSize: '12px',
-              verticalAlign: 'middle'
+              textDecoration: 'underline',
+              color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              '&:hover': {
+                color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                textDecoration: 'underline',
+                '& .download-icon': {
+                  color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary'
+                }
+              }
             }}
-          />
-        </Typography>
+          >
+            {content}
+            <Download
+              className="download-icon"
+              sx={{
+                color: 'text.disabled',
+                fontSize: '12px',
+                verticalAlign: 'middle'
+              }}
+            />
+          </Typography>
+        </Tooltip>
       );
     }
 
@@ -358,6 +368,44 @@ function DataTable({
         }}>
           {content}
         </Typography>
+      );
+    }
+
+    // Line Number with KEM replacement logic (KEM / KEM 2 merged earlier into Line Number)
+    if (header === 'Line Number' && content) {
+      // Detect KEM tokens appended (they were appended with spaces, e.g. "1001 KEM" or "1001 KEM KEM2")
+      const parts = String(content).split(/\s+/).filter(Boolean);
+      const kemCount = parts.filter(p => p.toUpperCase().startsWith('KEM')).length;
+      // Base line number is first numeric/token not starting with KEM
+      const base = parts.filter(p => !p.toUpperCase().startsWith('KEM')).join(' ');
+      return (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Typography variant="body2" sx={{
+            color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+            fontWeight: 400
+          }}>{base}</Typography>
+          {kemCount > 0 && (
+            <Tooltip arrow placement="top" title={`${kemCount} KEM module${kemCount>1?'s':''}`}> 
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+              {Array.from({ length: kemCount }).map((_, i) => (
+                <img
+                  key={i}
+                  src={kemIcon}
+                  alt={`KEM module ${i + 1}`}
+                  style={{
+                    width: 20,
+                    height: 12,
+                    objectFit: 'contain',
+                    display: 'block',
+                    opacity: 0.95,
+                    filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.4))'
+                  }}
+                />
+              ))}
+              </Box>
+            </Tooltip>
+          )}
+        </Box>
       );
     }
 
@@ -483,40 +531,58 @@ function DataTable({
                         {header === "Switch Port" ? (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             {renderCellContent(header, cellContent, true)}
-                            <Chip
-                              label="cisco"
-                              size="small"
-                              sx={{
-                                height: '20px',
-                                fontSize: '0.7rem',
-                                fontWeight: 600,
-                                cursor: 'pointer'
-                              }}
-                              color="primary"
-                              variant="outlined"
-                              onClick={(e) => {
-                                e.stopPropagation();
-
-                                // Show immediate feedback
-                                const ciscoFormat = convertToCiscoFormat(cellContent);
-                                toast.success(`📋 Copying: ${ciscoFormat}`, {
-                                  autoClose: 1000,
-                                  pauseOnHover: false,
-                                  pauseOnFocusLoss: false
-                                });
-
-                                // Copy in background
-                                copyToClipboard(ciscoFormat).then(success => {
-                                  if (!success) {
-                                    toast.error(`❌ Copy failed`, {
-                                      autoClose: 2000,
-                                      pauseOnHover: true,
-                                      pauseOnFocusLoss: false
-                                    });
-                                  }
-                                });
-                              }}
-                            />
+                            <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
+                              <Chip
+                                label="Cisco"
+                                size="small"
+                                sx={{
+                                  height: '20px',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  bgcolor: '#00bceb',
+                                  color: '#fff',
+                                  '&:hover': { bgcolor: '#00acd0' },
+                                  letterSpacing: '0.5px'
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const ciscoFormat = convertToCiscoFormat(cellContent);
+                                  toast.success(`📋 ${ciscoFormat}`, { autoClose: 1000 });
+                                  copyToClipboard(ciscoFormat).catch(() => {
+                                    toast.error('❌ Copy failed', { autoClose: 2000 });
+                                  });
+                                }}
+                              />
+                            </Tooltip>
+                          </Box>
+                        ) : header === "MAC Address" ? (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {renderCellContent(header, cellContent, true)}
+                            <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
+                              <Chip
+                                label="Cisco"
+                                size="small"
+                                sx={{
+                                  height: '20px',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  bgcolor: '#00bceb',
+                                  color: '#fff',
+                                  '&:hover': { bgcolor: '#00acd0' },
+                                  letterSpacing: '0.5px'
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const formatted = formatMacDotted(cellContent);
+                                  toast.success(`📋 ${formatted}`, { autoClose: 1000 });
+                                  copyToClipboard(formatted).catch(() => {
+                                    toast.error('❌ Copy failed', { autoClose: 2000 });
+                                  });
+                                }}
+                              />
+                            </Tooltip>
                           </Box>
                         ) : (
                           renderCellContent(header, cellContent, true)
@@ -569,40 +635,58 @@ function DataTable({
                     {header === "Switch Port" ? (
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         {renderCellContent(header, cellContent, false)}
-                        <Chip
-                          label="cisco"
-                          size="small"
-                          sx={{
-                            height: '20px',
-                            fontSize: '0.7rem',
-                            fontWeight: 600,
-                            cursor: 'pointer'
-                          }}
-                          color="primary"
-                          variant="outlined"
-                          onClick={(e) => {
-                            e.stopPropagation();
-
-                            // Show immediate feedback
-                            const ciscoFormat = convertToCiscoFormat(cellContent);
-                            toast.success(`📋 Copying: ${ciscoFormat}`, {
-                              autoClose: 1000,
-                              pauseOnHover: false,
-                              pauseOnFocusLoss: false
-                            });
-
-                            // Copy in background
-                            copyToClipboard(ciscoFormat).then(success => {
-                              if (!success) {
-                                toast.error(`❌ Copy failed`, {
-                                  autoClose: 2000,
-                                  pauseOnHover: true,
-                                  pauseOnFocusLoss: false
-                                });
-                              }
-                            });
-                          }}
-                        />
+                        <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
+                          <Chip
+                            label="Cisco"
+                            size="small"
+                            sx={{
+                              height: '20px',
+                              fontSize: '0.7rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              bgcolor: '#00bceb',
+                              color: '#fff',
+                              '&:hover': { bgcolor: '#00acd0' },
+                              letterSpacing: '0.5px'
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const ciscoFormat = convertToCiscoFormat(cellContent);
+                              toast.success(`📋 ${ciscoFormat}`, { autoClose: 1000 });
+                              copyToClipboard(ciscoFormat).catch(() => {
+                                toast.error('❌ Copy failed', { autoClose: 2000 });
+                              });
+                            }}
+                          />
+                        </Tooltip>
+                      </Box>
+                    ) : header === "MAC Address" ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {renderCellContent(header, cellContent, false)}
+                        <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
+                          <Chip
+                            label="Cisco"
+                            size="small"
+                            sx={{
+                              height: '20px',
+                              fontSize: '0.7rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              bgcolor: '#00bceb',
+                              color: '#fff',
+                              '&:hover': { bgcolor: '#00acd0' },
+                              letterSpacing: '0.5px'
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const formatted = formatMacDotted(cellContent);
+                              toast.success(`📋 ${formatted}`, { autoClose: 1000 });
+                              copyToClipboard(formatted).catch(() => {
+                                toast.error('❌ Copy failed', { autoClose: 2000 });
+                              });
+                            }}
+                          />
+                        </Tooltip>
                       </Box>
                     ) : (
                       renderCellContent(header, cellContent, false)
