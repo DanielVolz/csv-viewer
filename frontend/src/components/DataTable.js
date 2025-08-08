@@ -738,4 +738,4 @@ function DataTable({
   );
 }
 
-export default DataTable;
+export default React.memo(DataTable);

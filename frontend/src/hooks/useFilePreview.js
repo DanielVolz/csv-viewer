@@ -17,10 +17,12 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
     const timeoutRef = { current: null };
     let timedOut = false;
     let mounted = true;
+  console.debug('[useFilePreview] effect start');
 
     const fetchPreview = async () => {
       try {
-        setLoading(true);
+  setLoading(true);
+  console.debug('[useFilePreview] fetchPreview START');
         // Safety timeout (15s)
         timeoutRef.current = setTimeout(() => {
           if (!timedOut && mounted) {
@@ -29,22 +31,31 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
           }
         }, 15000);
 
-        const infoResponse = await axios.get('/api/files/netspeed_info', { signal: abortController.signal });
+  const infoResponse = await axios.get('/api/files/netspeed_info', { signal: abortController.signal });
+  console.debug('[useFilePreview] netspeed_info response', infoResponse.data);
         const fileInfo = infoResponse.data;
 
         const response = await axios.get('/api/files/preview', {
           params: { limit: 105 },
           signal: abortController.signal
         });
+        console.debug('[useFilePreview] preview response meta', {
+          success: response.data?.success,
+          message: response.data?.message,
+          headersLen: Array.isArray(response.data?.headers) ? response.data.headers.length : null,
+          rows: Array.isArray(response.data?.data) ? response.data.data.length : null
+        });
 
         // Get the original data
         const originalData = response.data;
 
         // Use headers and data as provided by backend (backend controls what's displayed)
-        setPreviewData({
+  const nextData = {
           ...originalData,
           line_count: fileInfo.line_count || 0
-        });
+  };
+  console.debug('[useFilePreview] setPreviewData', nextData);
+  setPreviewData(nextData);
 
         setError(null);
       } catch (err) {
@@ -69,6 +80,7 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
         if (mounted) {
           clearTimeout(timeoutRef.current);
           setLoading(false);
+          console.debug('[useFilePreview] fetchPreview END', { timedOut, success: previewData?.success });
         }
       }
     };
@@ -78,6 +90,7 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
       mounted = false;
       clearTimeout(timeoutRef.current);
       abortController.abort();
+      console.debug('[useFilePreview] cleanup');
     };
   }, []); // Empty dependency array - only run once on mount
 

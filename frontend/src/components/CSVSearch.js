@@ -26,6 +26,42 @@ import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import DataTable from './DataTable';
 
+// Preview block extracted to reduce re-renders while typing
+const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick }) {
+  if (!previewData || !previewData.data) return null;
+  return (
+    <Box>
+      <Box sx={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        mb: 3
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box>
+            <Typography variant="h5" fontWeight={700}>
+              Data Preview
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Latest entries from netspeed.csv
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+      <Alert severity="info" sx={{ mb: 3 }}>
+        {previewData?.message || "Showing latest entries from the CSV file"}
+      </Alert>
+      <DataTable
+        headers={previewData.headers}
+        data={previewData.data}
+        showRowNumbers={false}
+        onMacAddressClick={handleMacAddressClick}
+        onSwitchPortClick={handleSwitchPortClick}
+      />
+    </Box>
+  );
+});
+
 function CSVSearch() {
   const [searchTerm, setSearchTerm] = useState('');
   const [includeHistorical, setIncludeHistorical] = useState(true);
@@ -44,25 +80,73 @@ function CSVSearch() {
 
   const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
   const missingPreview = !previewLoading && previewData && previewData.success === false && (previewData.message || '').toLowerCase().includes('not found');
-  const initializing = previewLoading && !previewData; // first-time load
-  const searchBlocked = missingPreview || initializing; // block while initializing or missing file
-  const [previewStuck, setPreviewStuck] = useState(false);
+  // Block only while actively loading initial preview OR when file definitely missing
+  const searchBlocked = previewLoading || missingPreview; // rename conceptually: execution blocked, not input
+
+  // Debug: detailed logging + transition tracking
+  const prevRef = useRef({});
+  useEffect(() => {
+    const prev = prevRef.current;
+    const current = {
+      previewLoading,
+      previewData_success: previewData?.success,
+      previewData_message: previewData?.message,
+      previewHasHeaders: Array.isArray(previewData?.headers),
+      previewHeadersLen: Array.isArray(previewData?.headers) ? previewData.headers.length : null,
+      previewRows: Array.isArray(previewData?.data) ? previewData.data.length : null,
+      missingPreview,
+      searchBlocked,
+      previewError,
+      searchTerm,
+      hasSearched,
+      searchLoading,
+      timestamp: new Date().toISOString()
+    };
+
+    // Only print diff rather than full state spam (but keep full snapshot once)
+    if (!prev.__initialized) {
+      console.debug('[CSVSearch][init-state]', current);
+    } else {
+      const diff = {};
+      Object.keys(current).forEach(k => {
+        if (current[k] !== prev[k]) diff[k] = { prev: prev[k], next: current[k] };
+      });
+      if (Object.keys(diff).length > 0) {
+        console.debug('[CSVSearch][state-diff]', diff);
+      }
+      if (prev.searchBlocked !== current.searchBlocked) {
+        if (current.searchBlocked) {
+          console.warn('[CSVSearch][transition] searchBlocked became TRUE', {
+            reason: previewLoading ? 'previewLoading' : (missingPreview ? 'missingPreview' : 'unknown'),
+            previewLoading,
+            missingPreview,
+            previewError,
+            previewData_success: previewData?.success,
+            previewData_message: previewData?.message
+          });
+        } else {
+          console.info('[CSVSearch][transition] searchBlocked became FALSE');
+        }
+      }
+    }
+    prevRef.current = { ...current, __initialized: true };
+  }, [previewLoading, previewData, missingPreview, searchBlocked, previewError, searchTerm, hasSearched, searchLoading]);
 
   useEffect(() => {
-    let t;
-    if (previewLoading) {
-      t = setTimeout(() => setPreviewStuck(true), 16000);
-    } else {
-      setPreviewStuck(false);
-    }
-    return () => clearTimeout(t);
-  }, [previewLoading]);
+    console.debug('[CSVSearch] mounted');
+  }, []);
+
+  // No stuck timer needed anymore
 
   const typingTimeoutRef = useRef(null);
   const lastSearchTermRef = useRef('');
   const [isTyping, setIsTyping] = useState(false);
 
   const executeSearch = useCallback((term) => {
+    if (searchBlocked) {
+      console.debug('[CSVSearch][executeSearch] prevented (blocked)', { term, previewLoading, missingPreview });
+      return;
+    }
     if (term.length >= 3 && term !== lastSearchTermRef.current) {
       lastSearchTermRef.current = term;
       searchAll(term, includeHistorical, true).then(success => {
@@ -71,7 +155,7 @@ function CSVSearch() {
         }
       });
     }
-  }, [includeHistorical, searchAll]);
+  }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview]);
 
   const handleMacAddressClick = useCallback((macAddress) => {
     setSearchTerm(macAddress);
@@ -87,10 +171,10 @@ function CSVSearch() {
   }, []);
 
   const handleInputChange = useCallback((e) => {
-    if (searchBlocked) return; // block typing logic from triggering searches
     const term = e.target.value;
     setSearchTerm(term);
     setIsTyping(true);
+  console.debug('[CSVSearch][handleInputChange] value', { term });
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -109,8 +193,16 @@ function CSVSearch() {
   }, [executeSearch]);
 
   const handleSearch = useCallback(() => {
-    if (searchBlocked) return;
+    if (searchBlocked) {
+      console.debug('[CSVSearch][handleSearch] prevented manual search (blocked)', {
+        searchTerm,
+        previewLoading,
+        missingPreview
+      });
+      return;
+    }
     if (!searchTerm) return;
+  console.debug('[CSVSearch][handleSearch] initiating search', { term: searchTerm });
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
@@ -118,6 +210,7 @@ function CSVSearch() {
     searchAll(searchTerm, includeHistorical, true).then(success => {
       if (success) {
         setHasSearched(true);
+        console.debug('[CSVSearch][handleSearch] search executed', { term: searchTerm });
       }
     });
   }, [searchTerm, includeHistorical, searchAll, searchBlocked]);
@@ -159,7 +252,8 @@ function CSVSearch() {
             value={searchTerm}
             onChange={handleInputChange}
             onKeyPress={handleKeyPress}
-            disabled={searchBlocked}
+            // keep input enabled; execution will be blocked while preview loads
+            disabled={missingPreview} // only hard-disable if file truly missing
             sx={{
               '& .MuiOutlinedInput-root': {
                 backgroundColor: 'background.paper',
@@ -183,11 +277,11 @@ function CSVSearch() {
                     {isTyping && (
                       <CircularProgress size={20} />
                     )}
-                    {searchTerm && (
+          {searchTerm && (
                       <IconButton
                         onClick={handleClearSearch}
-                        size="small"
-                        disabled={searchBlocked}
+            size="small"
+            disabled={missingPreview}
                       >
                         <Clear fontSize="small" />
                       </IconButton>
@@ -197,7 +291,7 @@ function CSVSearch() {
               ),
             }}
           />
-          {searchBlocked && (
+      {searchBlocked && (
             <Alert severity={missingPreview ? 'warning' : 'info'} sx={{ mt: -1 }}>
               {missingPreview
                 ? 'Search disabled: netspeed.csv not available. Please provide the file and reload the page.'
@@ -236,10 +330,10 @@ function CSVSearch() {
               <Button
                 variant="contained"
                 onClick={handleSearch}
-                disabled={searchBlocked || searchLoading || !searchTerm}
+                disabled={searchBlocked || searchLoading || !searchTerm || searchTerm.length < 3}
                 startIcon={searchLoading ? <CircularProgress size={20} /> : <Search />}
               >
-                {searchLoading ? 'Searching...' : 'Search'}
+                {searchLoading ? 'Searching...' : (searchBlocked ? 'Waiting...' : 'Search')}
               </Button>
             </Box>
           </Box>
@@ -248,7 +342,7 @@ function CSVSearch() {
       </Paper>
 
       {/* Loading State */}
-      {(searchLoading || previewLoading) && !previewStuck && (
+  {(searchLoading || previewLoading) && (
         <Box sx={{
           display: 'flex',
           flexDirection: 'column',
@@ -263,11 +357,7 @@ function CSVSearch() {
         </Box>
       )}
 
-      {previewStuck && !previewError && (
-        <Alert severity="warning" sx={{ mb: 3 }}>
-          Preview loading is taking longer than expected. You can refresh the page or retry later.
-        </Alert>
-      )}
+  {/* Long preview load hint removed with simplified logic */}
 
       {/* Error State */}
       {(searchError || previewError) && (
@@ -301,43 +391,11 @@ function CSVSearch() {
               </Typography>
             </Paper>
           ) : previewData && previewData.data ? (
-            <Box>
-              {/* Preview Header */}
-              <Box sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                mb: 3
-              }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Box>
-                    <Typography variant="h5" fontWeight={700}>
-                      Data Preview
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Latest entries from netspeed.csv
-                    </Typography>
-                  </Box>
-                </Box>
-              </Box>
-
-              {/* Status Alert */}
-              <Alert
-                severity="info"
-                sx={{ mb: 3 }}
-              >
-                {previewData?.message || "Showing latest entries from the CSV file"}
-              </Alert>
-
-              {/* Preview Data Table */}
-              <DataTable
-                headers={previewData.headers}
-                data={previewData.data}
-                showRowNumbers={false}
-                onMacAddressClick={handleMacAddressClick}
-                onSwitchPortClick={handleSwitchPortClick}
-              />
-            </Box>
+            <PreviewSection
+              previewData={previewData}
+              handleMacAddressClick={handleMacAddressClick}
+              handleSwitchPortClick={handleSwitchPortClick}
+            />
           ) : (
             <Paper
               elevation={1}
