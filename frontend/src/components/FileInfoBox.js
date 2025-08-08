@@ -10,7 +10,8 @@ import {
   Fade,
   IconButton,
   Paper,
-  Tooltip
+  Tooltip,
+  Skeleton
 } from '@mui/material';
 import {
   Refresh,
@@ -20,6 +21,8 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 
 const FileInfoBox = React.memo(({ compact = false }) => {
+  // Unified minimum height so error / missing / loading states match loaded box height visually
+  const CARD_MIN_HEIGHT = 190; // tuned to approximate loaded layout height
   const [fileInfo, setFileInfo] = useState(null);
   const [loading, setLoading] = useState(true); // true only for very first load; later refresh keeps layout
   const [error, setError] = useState(null);
@@ -146,31 +149,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   }, [fetchFileInfo]);
 
   // NOTE: We no longer early-return ONLY for refresh; only for true initial load (no fileInfo yet)
-  if (loading && !fileInfo && !error && !missingFile) {
-    return (
-      <Fade in>
-        <Card
-          elevation={0}
-          sx={{
-            bgcolor: 'background.paper',
-            backdropFilter: 'blur(20px)',
-            border: 1,
-            borderColor: 'divider',
-            borderRadius: 4,
-            p: 3,
-            textAlign: 'center',
-            opacity: 0.9,
-            minHeight: 180 // keep some height baseline
-          }}
-        >
-          <CircularProgress size={40} thickness={4} />
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-            Loading file information...
-          </Typography>
-        </Card>
-      </Fade>
-    );
-  }
+  const initialLoading = loading && !fileInfo && !error && !missingFile;
 
   if (error) {
     return (
@@ -180,38 +159,26 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           bgcolor: 'error.light',
           border: 1,
           borderColor: 'error.main',
-          borderRadius: 4,
-          opacity: 0.1
+          borderRadius: 2,
+          opacity: 0.15,
+          minHeight: CARD_MIN_HEIGHT,
+          display: 'flex'
         }}
       >
-        <CardContent sx={{ p: 3, textAlign: 'center' }}>
-          <Avatar
-            sx={{
-              bgcolor: 'error.main',
-              width: 48,
-              height: 48,
-              mx: 'auto',
-              mb: 2
-            }}
-          >
-            <Warning />
-          </Avatar>
-          <Typography variant="body2" color="error.main" gutterBottom>
-            {error}
-          </Typography>
+        <CardContent sx={{ py: 1, px: 1.5, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflow: 'hidden', minWidth: 0 }}>
+            <Warning sx={{ color: 'error.main', fontSize: 20 }} />
+            <Typography variant="caption" color="error.main" noWrap>
+              {error}
+            </Typography>
+          </Box>
           <IconButton
             onClick={handleRefresh}
             disabled={refreshing}
-            sx={{
-              mt: 1,
-              bgcolor: 'error.light',
-              '&:hover': {
-                bgcolor: 'error.main',
-              },
-              opacity: 0.7
-            }}
+            size="small"
+            sx={{ bgcolor: 'error.light', '&:hover': { bgcolor: 'error.main', color: 'error.contrastText' }, width: 30, height: 30 }}
           >
-            <Refresh />
+            {refreshing ? <CircularProgress size={16} /> : <Refresh fontSize="inherit" />}
           </IconButton>
         </CardContent>
       </Card>
@@ -226,39 +193,27 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           bgcolor: 'background.paper',
           border: 1,
           borderColor: 'divider',
-          borderRadius: 4,
-          opacity: 0.9,
-          mb: 4
+          borderRadius: 2,
+          opacity: 0.95,
+          mb: 4,
+          minHeight: CARD_MIN_HEIGHT,
+          display: 'flex'
         }}
       >
-        <CardContent sx={{ p: 3, textAlign: 'center' }}>
-          <Avatar
-            sx={{
-              bgcolor: 'warning.main',
-              width: 48,
-              height: 48,
-              mx: 'auto',
-              mb: 2
-            }}
-          >
-            <Warning />
-          </Avatar>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-            Kein aktuelles netspeed.csv gefunden
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Die Datei wurde nicht im Verzeichnis /app/data gefunden. Sobald sie erscheint, können Sie aktualisieren.
-          </Typography>
+        <CardContent sx={{ py: 1, px: 1.5, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflow: 'hidden', minWidth: 0 }}>
+            <Warning sx={{ color: 'warning.main', fontSize: 20 }} />
+            <Typography variant="caption" color="text.secondary" noWrap>
+              Kein netspeed.csv – Datei in /app/data ablegen.
+            </Typography>
+          </Box>
           <IconButton
             onClick={handleRefresh}
             disabled={refreshing}
             size="small"
-            sx={{
-              bgcolor: 'warning.light',
-              '&:hover': { bgcolor: 'warning.main' }
-            }}
+            sx={{ bgcolor: 'warning.light', '&:hover': { bgcolor: 'warning.main', color: 'warning.contrastText' }, width: 30, height: 30 }}
           >
-            {refreshing ? <CircularProgress size={16} /> : <Refresh fontSize="small" />}
+            {refreshing ? <CircularProgress size={16} /> : <Refresh fontSize="inherit" />}
           </IconButton>
         </CardContent>
       </Card>
@@ -311,7 +266,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   }
 
   return (
-    <Card
+  <Card
       elevation={1}
       sx={{
         background: 'background.paper',
@@ -319,63 +274,56 @@ const FileInfoBox = React.memo(({ compact = false }) => {
         borderColor: 'divider',
         borderRadius: 2,
         mb: 4,
-        position: 'relative'
+    position: 'relative',
+    minHeight: CARD_MIN_HEIGHT
       }}
     >
       <CardContent sx={{ p: 3, transition: 'opacity 0.2s ease' }}>
-        {/* Header */}
-        <Box sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 3
-        }}>
-          <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-            <Typography variant="h6" fontWeight={600}>
-              Current File Information
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, minHeight: 18 }}>
-              {refreshing && (
-                <Typography variant="caption" color="info.main" sx={{ fontWeight: 500 }}>
-                  Refreshing…
-                </Typography>
-              )}
-              {!refreshing && justUpdated && (
-                <Typography variant="caption" color="success.main" sx={{ fontWeight: 500 }}>
-                  Updated just now
-                </Typography>
-              )}
-              {!refreshing && !justUpdated && lastUpdated && (
-                <Typography variant="caption" color="text.secondary">
-                  Updated {new Date(lastUpdated).toLocaleTimeString()}
-                </Typography>
-              )}
-            </Box>
+        {/* Header / Skeleton */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+            {initialLoading ? (
+              <>
+                <Skeleton variant="text" width={200} height={28} />
+                <Skeleton variant="text" width={160} height={18} />
+              </>
+            ) : (
+              <>
+                <Typography variant="h6" fontWeight={600}>Current File Information</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, minHeight: 18 }}>
+                  {refreshing && (
+                    <Typography variant="caption" color="info.main" sx={{ fontWeight: 500 }}>Refreshing…</Typography>
+                  )}
+                  {!refreshing && justUpdated && (
+                    <Typography variant="caption" color="success.main" sx={{ fontWeight: 500 }}>Updated just now</Typography>
+                  )}
+                  {!refreshing && !justUpdated && lastUpdated && (
+                    <Typography variant="caption" color="text.secondary">Updated {new Date(lastUpdated).toLocaleTimeString()}</Typography>
+                  )}
+                </Box>
+              </>
+            )}
           </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Tooltip title={indexStatusLabel()} arrow placement="top">
-              <Chip
-                label="Active"
-                color="success"
-                size="small"
-                variant="outlined"
-                sx={{ cursor: 'help' }}
-              />
-            </Tooltip>
-            <IconButton
-              onClick={handleRefresh}
-              disabled={refreshing}
-              size="small"
-            >
-              {refreshing ? (
-                <Refresh fontSize="small" sx={{
-                  '@keyframes spin': { to: { transform: 'rotate(360deg)' } },
-                  animation: 'spin 0.8s linear infinite'
-                }} />
-              ) : (
-                <Refresh fontSize="small" />
-              )}
-            </IconButton>
+            {initialLoading ? (
+              <>
+                <Skeleton variant="rounded" width={70} height={28} />
+                <Skeleton variant="circular" width={32} height={32} />
+              </>
+            ) : (
+              <>
+                <Tooltip title={indexStatusLabel()} arrow placement="top">
+                  <Chip label="Active" color="success" size="small" variant="outlined" sx={{ cursor: 'help' }} />
+                </Tooltip>
+                <IconButton onClick={handleRefresh} disabled={refreshing} size="small">
+                  {refreshing ? (
+                    <Refresh fontSize="small" sx={{ '@keyframes spin': { to: { transform: 'rotate(360deg)' } }, animation: 'spin 0.8s linear infinite' }} />
+                  ) : (
+                    <Refresh fontSize="small" />
+                  )}
+                </IconButton>
+              </>
+            )}
           </Box>
         </Box>
 
@@ -394,41 +342,21 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           animation: refreshing ? 'pulseFade 1.2s ease-in-out infinite' : 'none',
           borderRadius: 1
         }}>
-          <Box>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              File Name
-            </Typography>
-            <Typography variant="body1" fontWeight={500}>
-              netspeed.csv
-            </Typography>
-          </Box>
-
-          <Box>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              Created
-            </Typography>
-            <Typography variant="body1" fontWeight={500}>
-              {fileInfo?.date || 'Unknown'}
-            </Typography>
-          </Box>
-
-          <Box>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              Total Records
-            </Typography>
-            <Typography variant="body1" fontWeight={500}>
-              {fileInfo?.line_count?.toLocaleString() || '0'}
-            </Typography>
-          </Box>
-
-          <Box>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              Status
-            </Typography>
-            <Typography variant="body1" fontWeight={500} color="success.main">
-              Ready
-            </Typography>
-          </Box>
+          {['File Name','Created','Total Records','Status'].map((label, idx) => (
+            <Box key={label}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>{label}</Typography>
+              {initialLoading ? (
+                <Skeleton variant="text" width={idx === 0 ? 120 : 90} height={24} />
+              ) : (
+                <Typography variant="body1" fontWeight={500} color={label === 'Status' ? 'success.main' : 'inherit'}>
+                  {label === 'File Name' && 'netspeed.csv'}
+                  {label === 'Created' && (fileInfo?.date || 'Unknown')}
+                  {label === 'Total Records' && (fileInfo?.line_count?.toLocaleString() || '0')}
+                  {label === 'Status' && 'Ready'}
+                </Typography>
+              )}
+            </Box>
+          ))}
         </Box>
         {/* Overlay spinner during refresh (non-blocking) */}
     {refreshing && (

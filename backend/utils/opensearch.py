@@ -41,6 +41,8 @@ class OpenSearchConfig:
         }
 
         self.index_mappings = {
+            # IMPORTANT: If you change mappings (e.g., Switch Hostname multi-field), you MUST delete existing
+            # netspeed_* indices and trigger a rebuild for changes to take effect.
             "mappings": {
                 "dynamic": "true",  # Allow dynamic field mapping
                 "properties": {
@@ -59,7 +61,16 @@ class OpenSearchConfig:
                     "Model Name": {"type": "text"},
                     "Subnet Mask": self.keyword_type,
                     "Voice VLAN": self.keyword_type,
-                    "Switch Hostname": self.keyword_type,
+                    # Make Switch Hostname case-insensitive & partially searchable via multi-field (keyword + lowered keyword)
+                    "Switch Hostname": {
+                        "type": "keyword",
+                        "fields": {
+                            "lower": {
+                                "type": "keyword",
+                                "normalizer": "lowercase_normalizer"
+                            }
+                        }
+                    },
                     "Switch Port": self.keyword_type,
                     "Speed 1": self.keyword_type,
                     "Speed 2": self.keyword_type,
@@ -89,6 +100,15 @@ class OpenSearchConfig:
                 "index": {
                     "translog.durability": "async",  # Faster writes
                     "translog.sync_interval": "30s"
+                },
+                # Add custom normalizer for lowercase keyword comparisons
+                "analysis": {
+                    "normalizer": {
+                        "lowercase_normalizer": {
+                            "type": "custom",
+                            "filter": ["lowercase"]
+                        }
+                    }
                 }
             }
         }
@@ -515,6 +535,11 @@ class OpenSearchConfig:
                 {"prefix": {field: query}},
                 {"wildcard": {field: f"*{query}*"}}
             ]
+            # Add cleaned variant if searching Line Number with leading '+'
+            if field == "Line Number" and query.startswith('+'):
+                cleaned = query.lstrip('+')
+                if cleaned:
+                    should_clauses.append({"wildcard": {field: f"*{cleaned}*"}})
             # Add case variants for MAC/IP if relevant
             if field in ("MAC Address", "MAC Address 2", "Model Name", "Switch Hostname") and query.lower() != query.upper():
                 should_clauses.append({"wildcard": {field: f"*{query.lower()}*"}})
@@ -556,10 +581,19 @@ class OpenSearchConfig:
                             {"wildcard": {"Serial Number": f"*{query.lower()}*"}},
                             {"wildcard": {"Serial Number": f"*{query.upper()}*"}},
                             {"wildcard": {"Line Number": f"*{query}*"}},
+                            # Plus handling for line numbers
+                            # If query starts with '+', also search without it; else add a variant with leading '+'
+                            *(
+                                [ {"wildcard": {"Line Number": f"*{query.lstrip('+')}*"}} ]
+                                if query.startswith('+') and query.lstrip('+') else
+                                [ {"wildcard": {"Line Number": f"*+{query}*"}} ]
+                            ),
                             
                             # Network/Switch related fields
                             {"wildcard": {"Switch Hostname": f"*{query.lower()}*"}},
                             {"wildcard": {"Switch Hostname": f"*{query.upper()}*"}},
+                            # Lowercased subfield (requires reindex after mapping change)
+                            {"wildcard": {"Switch Hostname.lower": f"*{query.lower()}*"}},
                             {"wildcard": {"Switch Port": f"*{query}*"}},
                             {"wildcard": {"Subnet Mask": f"*{query}*"}},
                             {"wildcard": {"Voice VLAN": f"*{query}*"}},
@@ -575,7 +609,10 @@ class OpenSearchConfig:
                             {"wildcard": {"Model Name": f"*{query.upper()}*"}},
                             {"wildcard": {"File Name": f"*{query}*"}},
                             # IP Address partial match (now text field) – allow substring search
-                            {"wildcard": {"IP Address": f"*{query}*"}}
+                            {"wildcard": {"IP Address": f"*{query}*"}},
+                            # Additional variants (lowercase already same for digits / dots)
+                            # Add plus-handling expansion for numeric-like queries for safety in Line Number
+                            # Already covered above but reinforce without duplication risk
                             
                             # Fuzzy matching disabled per user request
                             # {"fuzzy": {"MAC Address": {"value": query, "fuzziness": "AUTO"}}},
@@ -623,6 +660,46 @@ class OpenSearchConfig:
             
             # Log the final query for debugging
             logger.info(f"Final search query: {search_query}")
+
+            # Additional heuristic: if query is a long numeric substring (>=5 digits) and does not already start with '+',
+            # add variant with leading '+' to increase chances of match in 'Line Number' field that may store it so.
+            if query.isdigit() and len(query) >= 5:
+                try:
+                    pref_variant = f"+{query}"
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"Line Number": f"*{pref_variant}*"}})
+                except Exception as e:
+                    logger.warning(f"Failed to append plus-prefixed numeric variant for query '{query}': {e}")
+
+            # For MAC addresses that might be entered without separators, add a flexible wildcard with removal of common separators
+            if any(c.isalpha() for c in query) and len(query.replace(':','').replace('-','').replace('.','')) >= 6:
+                mac_core = re.sub(r'[^A-Fa-f0-9]', '', query)
+                if mac_core:
+                    try:
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address": f"*{mac_core.lower()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address": f"*{mac_core.upper()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2": f"*{mac_core.lower()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2": f"*{mac_core.upper()}*"}})
+                    except Exception as e:
+                        logger.warning(f"Failed to add MAC core variants for '{query}': {e}")
+
+            # For switch hostname partials ensure lowercase + uppercase variants already there; add dotted-segment fallback
+            if '.' in query and any(c.isalpha() for c in query):
+                try:
+                    parts = [p for p in query.split('.') if p]
+                    if len(parts) >= 2:
+                        short = parts[0]
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.lower()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.upper()}*"}})
+                except Exception as e:
+                    logger.warning(f"Failed to add hostname short variants for '{query}': {e}")
+
+            # Ensure model name case variants present for partial alphanumeric queries
+            if any(c.isalpha() for c in query) and any(c.isdigit() for c in query):
+                try:
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"Model Name": f"*{query.lower()}*"}})
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"Model Name": f"*{query.upper()}*"}})
+                except Exception as e:
+                    logger.warning(f"Failed to add model name variants for '{query}': {e}")
             
             # Add _source filtering to only return desired columns
             from utils.csv_utils import DESIRED_ORDER

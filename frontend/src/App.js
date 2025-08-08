@@ -20,11 +20,25 @@ import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 
 function AppContent() {
   const [currentTab, setCurrentTab] = useState('home');
+  const [homeRefreshKey, setHomeRefreshKey] = useState(0); // forces HomePage remount to refetch preview
   const { setNavigationFunction } = useSettings();
 
   const handleTabChange = (event, newValue) => {
     setCurrentTab(newValue);
   };
+
+  const goHomeAndRefresh = () => {
+    setCurrentTab('home');
+    // bump key to force HomePage subtree remount => FileInfoBox & CSVSearch re-run effects
+    setHomeRefreshKey(k => k + 1);
+  };
+
+  // Set browser tab title once
+  React.useEffect(() => {
+    if (document && document.title !== 'CSV Viewer') {
+      document.title = 'CSV Viewer';
+    }
+  }, []);
 
   // Register navigation function with settings context
   React.useEffect(() => {
@@ -39,7 +53,7 @@ function AppContent() {
         return <SettingsPage />;
       case 'home':
       default:
-        return <HomePage />;
+        return <HomePage key={homeRefreshKey} />;
     }
   };
 
@@ -65,12 +79,17 @@ function AppContent() {
         >
           <Toolbar sx={{ py: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 4 }}>
-              <Typography 
-                variant="h6" 
-                component="h1" 
-                sx={{ 
+              <Typography
+                variant="h6"
+                component="h1"
+                onClick={goHomeAndRefresh}
+                sx={{
                   fontWeight: 600,
-                  color: 'text.primary'
+                  color: 'text.primary',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'opacity 0.15s',
+                  '&:hover': { opacity: 0.7 }
                 }}
               >
                 CSV Viewer

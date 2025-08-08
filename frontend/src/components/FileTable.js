@@ -44,16 +44,19 @@ function FileTable() {
 
   // On mount (or when lastSuccess missing), fetch persisted index state to restore last_success
   React.useEffect(() => {
-    if (!lastSuccess) {
-      fetch('/api/files/index/status')
-        .then(r => (r.ok ? r.json() : null))
-        .then(data => {
-          const ts = data?.state?.last_success || data?.state?.last_run;
-          if (ts) setLastSuccess(ts);
-        })
-        .catch(() => {/* ignore */ });
-    }
-  }, [lastSuccess]);
+    fetch('/api/files/index/status')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        const ts = data?.state?.last_success || data?.state?.last_run;
+        if (ts && !lastSuccess) setLastSuccess(ts);
+        // If backend reports an active running progress and hook idle -> hydrate
+        if (data?.active && data.active.status === 'running' && idxStatus === 'idle') {
+          startProgress(data.active.task_id || 'unknown', data.active);
+        }
+      })
+      .catch(() => {/* ignore */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRebuild = async () => {
     setReindexing(true);

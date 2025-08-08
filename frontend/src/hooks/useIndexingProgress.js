@@ -47,14 +47,19 @@ export default function useIndexingProgress(intervalMs = 2000) {
         }
     };
 
-    const start = (id) => {
+    const start = (id, snapshot) => {
         clearTimer();
         setTaskId(id);
         setStatus('starting');
-        setProgress(null);
+        setProgress(snapshot || null);
         setResult(null);
         setError(null);
-        poll(id);
+        // If we have a real id (not placeholder) poll; otherwise just treat snapshot as running
+        if (id && id !== 'unknown') {
+            poll(id);
+        } else if (snapshot) {
+            setStatus('running');
+        }
     };
 
     const reset = () => {

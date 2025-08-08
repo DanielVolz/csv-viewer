@@ -420,19 +420,22 @@ function DataTable({
           }}>{base}</Typography>
           {kemCount > 0 && (
             <Tooltip arrow placement="top" title={`${kemCount} KEM module${kemCount > 1 ? 's' : ''}`}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
                 {Array.from({ length: kemCount }).map((_, i) => (
-                  <img
+          <img
                     key={i}
                     src={kemIcon}
                     alt={`KEM module ${i + 1}`}
                     style={{
-                      width: 20,
-                      height: 12,
-                      objectFit: 'contain',
-                      display: 'block',
-                      opacity: 0.95,
-                      filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.4))'
+          width: 18,
+          height: 11,
+          objectFit: 'contain',
+          display: 'block',
+          opacity: 0.95,
+                      filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.45))',
+                      marginLeft: i === 0 ? 0 : -6, // even tighter overlap
+                      paddingLeft: 0,
+          zIndex: kemCount - i // keep leftmost on top for clearer edges
                     }}
                   />
                 ))}

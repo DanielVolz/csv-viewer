@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from utils.opensearch import opensearch_config
 from datetime import datetime
-from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current
+from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -111,16 +111,15 @@ def index_all_csv_files(directory_path: str) -> dict:
         total_documents = 0
         index_state = load_state()
 
-        # Send initial progress state so frontend gets total file count early
+        # Send initial progress and persist an active record
         try:
+            # start_time defined just below; capture early for consistency
+            # Use celery provided id when available
+            task_id = current_task.request.id if current_task else f"manual"
+            start_active(index_state, task_id, len(ordered_files))
+            save_state(index_state)
             if current_task:
-                current_task.update_state(state='PROGRESS', meta={
-                    'current_file': None,
-                    'index': 0,
-                    'total_files': len(ordered_files),
-                    'documents_indexed': 0,
-                    'last_file_docs': 0
-                })
+                current_task.update_state(state='PROGRESS', meta=index_state.get('active'))
         except Exception as e:
             logger.debug(f"Initial progress update failed: {e}")
 
@@ -155,16 +154,16 @@ def index_all_csv_files(directory_path: str) -> dict:
                 })
                 logger.info(f"Completed {file_path}: {count} documents indexed")
 
-                # Progress update
+                # Progress update (persist + celery state)
                 try:
+                    update_active(index_state,
+                                  current_file=file_path.name,
+                                  index=i + 1,
+                                  documents_indexed=total_documents,
+                                  last_file_docs=count)
+                    save_state(index_state)
                     if current_task:
-                        current_task.update_state(state='PROGRESS', meta={
-                            'current_file': file_path.name,
-                            'index': i + 1,
-                            'total_files': len(ordered_files),
-                            'documents_indexed': total_documents,
-                            'last_file_docs': count
-                        })
+                        current_task.update_state(state='PROGRESS', meta=index_state.get('active'))
                 except Exception as e:
                     logger.debug(f"Progress update failed: {e}")
             except Exception as e:
@@ -182,6 +181,7 @@ def index_all_csv_files(directory_path: str) -> dict:
             update_totals(index_state, len(ordered_files), total_documents)
             last_success_ts = datetime.utcnow().isoformat() + 'Z'
             index_state['last_success'] = last_success_ts
+            clear_active(index_state, 'completed')
             save_state(index_state)
         except Exception as e:
             logger.warning(f"Failed saving index state: {e}")
@@ -198,6 +198,11 @@ def index_all_csv_files(directory_path: str) -> dict:
         }
     except Exception as e:
         logger.error(f"Error indexing directory {directory_path}: {e}")
+        try:
+            clear_active(index_state, 'failed')
+            save_state(index_state)
+        except Exception:
+            pass
         return {
             "status": "error",
             "message": f"Error processing directory: {str(e)}",
@@ -221,7 +226,8 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
         dict: A dictionary containing the search results including file creation dates
     """
     logger.info(f"Searching OpenSearch for '{query}'")
-    
+    from time import perf_counter
+    t0 = perf_counter()
     try:
         headers, documents = opensearch_config.search(
             query=query,
@@ -291,11 +297,13 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
         # Filter headers and data to match display preferences
         filtered_headers, filtered_documents = filter_display_columns(headers, documents)
         
+        elapsed_ms = int((perf_counter() - t0) * 1000)
         return {
             "status": "success",
             "message": f"Found {len(filtered_documents)} results for '{query}'",
             "headers": filtered_headers,
-            "data": filtered_documents
+            "data": filtered_documents,
+            "took_ms": elapsed_ms
         }
     except Exception as e:
         logger.error(f"Error searching for '{query}': {e}")
@@ -303,7 +311,8 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
             "status": "error",
             "message": f"Error searching: {str(e)}",
             "headers": [],
-            "data": []
+            "data": [],
+            "took_ms": None
         }
 
 

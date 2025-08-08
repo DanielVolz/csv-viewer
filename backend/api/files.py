@@ -386,10 +386,15 @@ async def trigger_morning_reindex():
 
 @router.get("/index/status")
 async def get_index_status():
-    """Return last indexing state (files, totals, timestamps)."""
+    """Return last indexing state (files, totals, timestamps) including any active progress.
+
+    If an active indexing run is persisted with status 'running', frontend can resume progress display
+    after a page reload without needing the original Celery task id client-side.
+    """
     try:
         state = load_state()
-        return {"success": True, "state": state}
+        active = state.get("active") if isinstance(state, dict) else None
+        return {"success": True, "state": state, "active": active}
     except Exception as e:
         logger.error(f"Error reading index state: {e}")
         raise HTTPException(status_code=500, detail="Failed to read index state")

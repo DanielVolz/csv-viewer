@@ -64,7 +64,7 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
 
 function CSVSearch() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [includeHistorical, setIncludeHistorical] = useState(true);
+  const [includeHistorical, setIncludeHistorical] = useState(false); // default disabled
   const [hasSearched, setHasSearched] = useState(false);
   const searchFieldRef = useRef(null);
 
@@ -142,6 +142,7 @@ function CSVSearch() {
   const lastSearchTermRef = useRef('');
   const [isTyping, setIsTyping] = useState(false);
 
+  const isMacLike = (v) => /[0-9A-Fa-f]{2}([:\-][0-9A-Fa-f]{2}){5}/.test(v) || /^[0-9A-Fa-f]{12}$/.test(v);
   const executeSearch = useCallback((term) => {
     if (searchBlocked) {
       console.debug('[CSVSearch][executeSearch] prevented (blocked)', { term, previewLoading, missingPreview });
@@ -149,7 +150,8 @@ function CSVSearch() {
     }
     if (term.length >= 3 && term !== lastSearchTermRef.current) {
       lastSearchTermRef.current = term;
-      searchAll(term, includeHistorical, true).then(success => {
+      const hist = isMacLike(term) ? true : includeHistorical;
+      searchAll(term, hist, true).then(success => {
         if (success) {
           setHasSearched(true);
         }
@@ -160,10 +162,10 @@ function CSVSearch() {
   const handleMacAddressClick = useCallback((macAddress) => {
     setSearchTerm(macAddress);
     lastSearchTermRef.current = macAddress;
-    searchAll(macAddress, includeHistorical, true).then(success => {
+    searchAll(macAddress, true, true).then(success => { // always historical for MAC click
       if (success) setHasSearched(true);
     });
-  }, [includeHistorical, searchAll]);
+  }, [searchAll]);
 
   const handleSwitchPortClick = useCallback((switchPort) => {
     // Currently just copies to clipboard, but could trigger search
@@ -207,7 +209,8 @@ function CSVSearch() {
       clearTimeout(typingTimeoutRef.current);
     }
     lastSearchTermRef.current = searchTerm;
-    searchAll(searchTerm, includeHistorical, true).then(success => {
+    const hist = isMacLike(searchTerm) ? true : includeHistorical;
+    searchAll(searchTerm, hist, true).then(success => {
       if (success) {
         setHasSearched(true);
         console.debug('[CSVSearch][handleSearch] search executed', { term: searchTerm });
@@ -445,9 +448,18 @@ function CSVSearch() {
           {/* Status Alert */}
           <Alert
             severity={results?.success ? "success" : "info"}
-            sx={{ mb: 3 }}
+            sx={{ mb: 3, '& .MuiAlert-message': { width: '100%' } }}
           >
-            {results?.message}
+            {(() => {
+              const base = results?.message || '';
+              const took = typeof results?.took_ms === 'number' ? results.took_ms : null;
+              if (!took && took !== 0) return base;
+              if (took < 100) {
+                return `${base} (${took} ms)`;
+              }
+              const secs = (took / 1000).toFixed(2);
+              return `${base} (${secs} s)`;
+            })()}
           </Alert>
 
 
