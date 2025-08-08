@@ -14,6 +14,8 @@ import HomePage from './pages/HomePage';
 import FilesPage from './pages/FilesPage';
 import SettingsPage from './pages/SettingsPageDnd';
 import DarkModeToggle from './components/DarkModeToggle';
+import { IconButton, Tooltip } from '@mui/material';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 
 function AppContent() {
@@ -77,7 +79,18 @@ function AppContent() {
               <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
             </Box>
             
-            <DarkModeToggle />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Tooltip title="Settings" arrow>
+                <IconButton
+                  size="small"
+                  onClick={(e) => handleTabChange(e, 'settings')}
+                  color={currentTab === 'settings' ? 'primary' : 'default'}
+                >
+                  <SettingsIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <DarkModeToggle />
+            </Box>
           </Toolbar>
         </AppBar>
 

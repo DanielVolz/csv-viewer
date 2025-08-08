@@ -3,16 +3,20 @@ import {
   Tabs,
   Tab
 } from '@mui/material';
-import { Home, Folder, Settings } from '@mui/icons-material';
+import { Home, Folder } from '@mui/icons-material';
 
 function Navigation({ currentTab, onTabChange }) {
   return (
-    <Tabs 
-      value={currentTab} 
+    <Tabs
+      value={currentTab}
       onChange={onTabChange}
       variant="standard"
       sx={{
         minHeight: 'auto',
+        display: 'flex',
+        '& .MuiTabs-flexContainer': {
+          alignItems: 'center'
+        },
         '& .MuiTabs-indicator': {
           height: 2
         },
@@ -26,22 +30,16 @@ function Navigation({ currentTab, onTabChange }) {
         }
       }}
     >
-      <Tab 
-        icon={<Home fontSize="small" />} 
-        label="Home" 
+      <Tab
+        icon={<Home fontSize="small" />}
+        label="Home"
         value="home"
         iconPosition="start"
       />
-      <Tab 
-        icon={<Folder fontSize="small" />} 
-        label="Files" 
+      <Tab
+        icon={<Folder fontSize="small" />}
+        label="Files"
         value="files"
-        iconPosition="start"
-      />
-      <Tab 
-        icon={<Settings fontSize="small" />} 
-        label="Settings" 
-        value="settings"
         iconPosition="start"
       />
     </Tabs>
