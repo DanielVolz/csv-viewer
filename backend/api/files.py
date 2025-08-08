@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
 from typing import List
@@ -234,44 +234,65 @@ async def reindex_all_files():
 
 
 @router.get("/download/{filename}")
-async def download_file(filename: str):
-    """
-    Download a CSV file by name.
-    
+async def download_file(filename: str, request: Request):
+    """Download a CSV file by name with safety checks & explicit headers.
+
     Args:
         filename: Name of the file to download (e.g., netspeed.csv, netspeed.csv.1)
-        
-    Returns:
-        The file for download
     """
     try:
-        # Get path to CSV files directory
-        csv_dir = Path("/app/data")
-        file_path = csv_dir / filename
-        
-        # Check if file exists
+        raw_name = filename.strip()
+        # Basic allow‑list: only netspeed.csv and variants netspeed.csv.N plus optional _bak
+        if not raw_name.startswith("netspeed.csv"):
+            logger.warning(f"Blocked download attempt for disallowed filename: {raw_name}")
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        # Disallow path traversal
+        if any(token in raw_name for token in ("..", "/", "\\")):
+            logger.warning(f"Blocked traversal attempt: {raw_name}")
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        csv_dir = Path("/app/data").resolve()
+        file_path = (csv_dir / raw_name).resolve()
+
+        # Ensure the resolved path is still inside csv_dir
+        if csv_dir not in file_path.parents and file_path != csv_dir:
+            logger.warning(f"Blocked escape attempt: {file_path}")
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         if not file_path.exists():
-            logger.error(f"File not found: {filename}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"File {filename} not found"
-            )
-        
-        # Return file as download response
+            logger.error(f"File not found: {raw_name}")
+            raise HTTPException(status_code=404, detail=f"File {raw_name} not found")
+
+        size = file_path.stat().st_size
+        logger.info(
+            "Downloading file",
+            extra={
+                "client": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+                "file": str(file_path),
+                "size": size
+            }
+        )
+
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"{raw_name}\"",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-cache",
+            "Content-Length": str(size)
+        }
+
         return FileResponse(
             path=str(file_path),
-            filename=filename,
-            media_type="text/csv"
+            filename=raw_name,
+            media_type="text/csv; charset=utf-8",
+            headers=headers
         )
-        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error downloading file {filename}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to download file: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {e}")
 
 
 @router.get("/columns")

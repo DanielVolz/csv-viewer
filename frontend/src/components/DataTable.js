@@ -1,7 +1,6 @@
 import React from 'react';
 // Prefer real PNG logo; fallback to SVG if needed
 import kemIconPng from '../assets/kem/kem_logo.png';
-import kemIconSvg from '../assets/kem/kem.svg';
 import {
   Box,
   Typography,
@@ -20,7 +19,8 @@ import { Download, Terminal } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
-const kemIcon = kemIconPng || kemIconSvg;
+// Use only the PNG logo (removed SVG fallback to avoid missing module build error)
+const kemIcon = kemIconPng;
 
 /**
  * Unified DataTable component for preview and search results
@@ -34,6 +34,17 @@ function DataTable({
   onSwitchPortClick
 }) {
   const { getEnabledColumnHeaders, sshUsername, navigateToSettings } = useSettings();
+
+  // Unified toast helper for consistent copy notifications
+  const showCopyToast = (label, value, opts = {}) => {
+    const display = typeof value === 'string' && value.length > 120 ? value.slice(0, 117) + '…' : value;
+    toast.success(`📋 ${label}: ${display}`, {
+      autoClose: 1000,
+      pauseOnHover: false,
+      pauseOnFocusLoss: false,
+      ...opts
+    });
+  };
 
   // Get custom column configuration from settings
   const enabledHeaders = getEnabledColumnHeaders();
@@ -125,12 +136,8 @@ function DataTable({
       // Start search immediately without waiting for clipboard
       onMacAddressClick(content);
 
-      // Show immediate feedback
-      toast.success(`📋 Copying: ${content}`, {
-        autoClose: 1000,
-        pauseOnHover: false,
-        pauseOnFocusLoss: false
-      });
+  // Unified toast
+  showCopyToast('Copied MAC address', content);
 
       // Copy to clipboard in background
       copyToClipboard(content).then(success => {
@@ -146,12 +153,8 @@ function DataTable({
       // Start search immediately without waiting for clipboard
       onSwitchPortClick(content);
 
-      // Show immediate feedback
-      toast.success(`📋 Copying: ${content.length > 30 ? content.substring(0, 30) + '...' : content}`, {
-        autoClose: 1000,
-        pauseOnHover: false,
-        pauseOnFocusLoss: false
-      });
+  // Unified toast
+  showCopyToast('Copied switch port', content);
 
       // Copy to clipboard in background
       copyToClipboard(content).then(success => {
@@ -183,13 +186,9 @@ function DataTable({
           if (ciscoFormat && ciscoFormat.trim() !== '') {
             copyToClipboard(ciscoFormat).then(success => {
               if (success) {
-                toast.success(`📋 Cisco port copied: ${ciscoFormat}`, {
-                  autoClose: 2000,
-                  pauseOnHover: true,
-                  pauseOnFocusLoss: false
-                });
+                showCopyToast('Copied Cisco port', ciscoFormat, { autoClose: 2000, pauseOnHover: true });
               } else {
-                toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
+        toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
                   autoClose: 3000,
                   pauseOnHover: true,
                   pauseOnFocusLoss: false
@@ -202,7 +201,7 @@ function DataTable({
         // Show warning immediately, copy in background
         const ToastContent = () => (
           <div>
-            📋 Hostname copied! ⚠️ SSH username not configured!{' '}
+      📋 Copied hostname! ⚠️ SSH username not configured!{' '}
             <span
               onClick={() => {
                 navigateToSettings();
@@ -321,13 +320,48 @@ function DataTable({
 
     // File Name mit Download
     if (header === "File Name") {
+      const handleDownload = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const filename = content;
+        try {
+            showCopyToast('Starting download', filename);
+            const resp = await fetch(`/api/files/download/${encodeURIComponent(filename)}`, {
+              method: 'GET',
+              headers: { 'Accept': 'text/csv' }
+            });
+            if (!resp.ok) {
+              const text = await resp.text().catch(()=> '');
+              toast.error(`❌ Download failed (${resp.status})`);
+              console.error('Download error response:', resp.status, text);
+              return;
+            }
+            const blob = await resp.blob();
+            if (blob.size === 0) {
+              toast.error('❌ Empty file');
+              return;
+            }
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            showCopyToast('Downloaded file', filename);
+        } catch (err) {
+          console.error('Download exception', err);
+          toast.error('❌ Download error');
+        }
+      };
       return (
-        <Tooltip arrow placement="top" title={`Download ${content}`}>        
+        <Tooltip arrow placement="top" title={`Download ${content}`}>
           <Typography
             variant="body2"
             component="a"
             href={`/api/files/download/${content}`}
-            download
+            onClick={handleDownload}
             sx={{
               textDecoration: 'underline',
               color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
@@ -549,6 +583,8 @@ function DataTable({
                                   e.stopPropagation();
                                   const ciscoFormat = convertToCiscoFormat(cellContent);
                                   toast.success(`📋 ${ciscoFormat}`, { autoClose: 1000 });
+                                    // Above replaced by unified helper but keep fallback if needed
+                                    showCopyToast('Copied Cisco port', ciscoFormat);
                                   copyToClipboard(ciscoFormat).catch(() => {
                                     toast.error('❌ Copy failed', { autoClose: 2000 });
                                   });
@@ -576,7 +612,7 @@ function DataTable({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const formatted = formatMacDotted(cellContent);
-                                  toast.success(`📋 ${formatted}`, { autoClose: 1000 });
+                                  showCopyToast('Copied MAC (dotted)', formatted);
                                   copyToClipboard(formatted).catch(() => {
                                     toast.error('❌ Copy failed', { autoClose: 2000 });
                                   });
@@ -652,7 +688,7 @@ function DataTable({
                             onClick={(e) => {
                               e.stopPropagation();
                               const ciscoFormat = convertToCiscoFormat(cellContent);
-                              toast.success(`📋 ${ciscoFormat}`, { autoClose: 1000 });
+                              showCopyToast('Copied Cisco port', ciscoFormat);
                               copyToClipboard(ciscoFormat).catch(() => {
                                 toast.error('❌ Copy failed', { autoClose: 2000 });
                               });
@@ -680,7 +716,7 @@ function DataTable({
                             onClick={(e) => {
                               e.stopPropagation();
                               const formatted = formatMacDotted(cellContent);
-                              toast.success(`📋 ${formatted}`, { autoClose: 1000 });
+                              showCopyToast('Copied MAC (dotted)', formatted);
                               copyToClipboard(formatted).catch(() => {
                                 toast.error('❌ Copy failed', { autoClose: 2000 });
                               });
