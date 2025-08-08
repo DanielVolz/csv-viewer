@@ -1,9 +1,10 @@
 import os
-from celery import Celery
+from celery import Celery, current_task
 import logging
 from pathlib import Path
 from typing import Optional, Dict, List
 from utils.opensearch import opensearch_config
+from datetime import datetime
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current
 
 # Configure logging
@@ -71,30 +72,27 @@ def index_all_csv_files(directory_path: str) -> dict:
     logger.info(f"Indexing all CSV files in {directory_path}")
     
     try:
-        # Get the maximum number of netspeed files to index from the environment variable
+        # Limit how many historical netspeed files are indexed
         max_netspeed_files = int(os.environ.get("NETSPEED_FILES", "2"))
         logger.info(f"Maximum netspeed files to index: {max_netspeed_files}")
 
-        # Find all CSV files including historical ones
         path = Path(directory_path)
-
-        # Use a list comprehension with multiple patterns to find all relevant files
         patterns = ["netspeed.csv", "netspeed.csv.*", "netspeed.csv_bak"]
-        files = []
+        files: List[Path] = []
         for pattern in patterns:
-            # Sort the glob results to ensure consistent ordering
             glob_results = sorted(path.glob(pattern), key=lambda x: str(x))
             files.extend(glob_results)
 
-        # Filter netspeed.csv.* files based on NETSPEED_FILES
-        netspeed_files = [f for f in files if "netspeed.csv" in str(f) and "netspeed.csv_bak" not in str(f)]
-        limited_netspeed_files = netspeed_files[:max_netspeed_files]
+        netspeed_files = [f for f in files if f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak")]
+        # Separate backup files explicitly
+        backup_files = [f for f in files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
+        # Apply limit to netspeed historical files (keeping the base file first)
+        base_files = [f for f in netspeed_files if f.name == "netspeed.csv"]
+        historical_files_all = [f for f in netspeed_files if f.name != "netspeed.csv"]
+        limited_historical = historical_files_all[:max_netspeed_files-1] if max_netspeed_files > 0 else []
+        files = base_files + limited_historical + backup_files
 
-        # Add back the netspeed.csv_bak files
-        other_files = [f for f in files if "netspeed.csv" not in str(f) or "netspeed.csv_bak" in str(f)]
-        files = limited_netspeed_files + other_files
-
-        logger.info(f"Found {len(files)} files matching patterns: {patterns}")
+        logger.info(f"Found {len(files)} files matching patterns {patterns}: {[f.name for f in files]}")
 
         if not files:
             return {
@@ -104,25 +102,37 @@ def index_all_csv_files(directory_path: str) -> dict:
                 "files_processed": 0,
                 "total_documents": 0,
             }
-        
-        # Process files in optimized order: current file first, then historical files
+
         current_files = [f for f in files if f.name == "netspeed.csv"]
-        historical_files = [f for f in files if f.name != "netspeed.csv"]
-        ordered_files = current_files + sorted(historical_files, key=lambda x: x.name)
-        
-        # Process each file
-        results = []
+        other_files = [f for f in files if f.name != "netspeed.csv"]
+        ordered_files = current_files + sorted(other_files, key=lambda x: x.name)
+
+        results: List[Dict] = []
         total_documents = 0
-        
-        # Load current state to compare & later update
         index_state = load_state()
+
+        # Send initial progress state so frontend gets total file count early
+        try:
+            if current_task:
+                current_task.update_state(state='PROGRESS', meta={
+                    'current_file': None,
+                    'index': 0,
+                    'total_files': len(ordered_files),
+                    'documents_indexed': 0,
+                    'last_file_docs': 0
+                })
+        except Exception as e:
+            logger.debug(f"Initial progress update failed: {e}")
+
+        start_time = datetime.utcnow()
 
         for i, file_path in enumerate(ordered_files):
             logger.info(f"Processing file {i+1}/{len(ordered_files)}: {file_path}")
             try:
                 success, count = opensearch_config.index_csv_file(str(file_path))
                 total_documents += count
-                # Determine line count (without header) for state tracking
+
+                # Count lines (excluding header)
                 line_count = 0
                 try:
                     with open(file_path, 'r') as fh:
@@ -132,9 +142,8 @@ def index_all_csv_files(directory_path: str) -> dict:
                 except Exception:
                     line_count = 0
 
-                # Update state per file
                 try:
-                    update_file_state(index_state, Path(file_path), line_count, count)
+                    update_file_state(index_state, file_path, line_count, count)
                 except Exception as e:
                     logger.warning(f"Failed to update index state for {file_path}: {e}")
 
@@ -145,6 +154,19 @@ def index_all_csv_files(directory_path: str) -> dict:
                     "line_count": line_count
                 })
                 logger.info(f"Completed {file_path}: {count} documents indexed")
+
+                # Progress update
+                try:
+                    if current_task:
+                        current_task.update_state(state='PROGRESS', meta={
+                            'current_file': file_path.name,
+                            'index': i + 1,
+                            'total_files': len(ordered_files),
+                            'documents_indexed': total_documents,
+                            'last_file_docs': count
+                        })
+                except Exception as e:
+                    logger.debug(f"Progress update failed: {e}")
             except Exception as e:
                 logger.error(f"Error indexing {file_path}: {e}")
                 results.append({
@@ -153,21 +175,26 @@ def index_all_csv_files(directory_path: str) -> dict:
                     "error": str(e),
                     "count": 0
                 })
-        
-        # Update totals & persist state
+
+        # Persist state
+        last_success_ts = None
         try:
-            update_totals(index_state, len(files), total_documents)
+            update_totals(index_state, len(ordered_files), total_documents)
+            last_success_ts = datetime.utcnow().isoformat() + 'Z'
+            index_state['last_success'] = last_success_ts
             save_state(index_state)
         except Exception as e:
             logger.warning(f"Failed saving index state: {e}")
 
         return {
             "status": "success",
-            "message": f"Processed {len(files)} files, indexed {total_documents} documents",
+            "message": f"Processed {len(ordered_files)} files, indexed {total_documents} documents",
             "directory": directory_path,
-            "files_processed": len(files),
+            "files_processed": len(ordered_files),
             "total_documents": total_documents,
-            "results": results
+            "results": results,
+            "started_at": start_time.isoformat() + 'Z',
+            "finished_at": last_success_ts
         }
     except Exception as e:
         logger.error(f"Error indexing directory {directory_path}: {e}")

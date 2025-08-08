@@ -16,7 +16,7 @@ def load_state() -> Dict[str, Any]:
                 return json.load(f)
     except Exception:
         pass
-    return {"last_run": None, "files": {}, "totals": {"files_processed": 0, "total_documents": 0}}
+    return {"last_run": None, "last_success": None, "files": {}, "totals": {"files_processed": 0, "total_documents": 0}}
 
 def save_state(state: Dict[str, Any]) -> None:
     try:

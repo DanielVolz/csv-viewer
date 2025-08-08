@@ -6,8 +6,9 @@ echo "Ensuring data directory exists..."
 mkdir -p ./data
 
 # Start Celery worker in the background
-echo "Starting Celery worker..."
-celery -A tasks.tasks worker --loglevel=info -Q search,csv_processing,celery --uid nobody &
+echo "Starting Celery worker (dev)..."
+# Run as default container user to retain write permissions on mounted volume
+celery -A tasks.tasks worker --loglevel=info -Q search,csv_processing,celery &
 CELERY_PID=$!
 
 # Wait a moment to ensure Celery starts properly

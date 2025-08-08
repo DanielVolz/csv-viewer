@@ -7,7 +7,8 @@ mkdir -p ./data
 
 # Start Celery worker in the background
 echo "Starting Celery worker..."
-celery -A tasks.tasks worker --loglevel=info -Q search,csv_processing,celery --uid nobody &
+# Run without forcing nobody user so state file can be written if volume permissions require it
+celery -A tasks.tasks worker --loglevel=info -Q search,csv_processing,celery &
 CELERY_PID=$!
 
 # Wait a moment to ensure Celery starts properly

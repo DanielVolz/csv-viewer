@@ -4,6 +4,7 @@ import logging
 from config import settings
 from tasks.tasks import search_opensearch
 from celery.result import AsyncResult
+from utils.opensearch import opensearch_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -140,6 +141,14 @@ async def get_index_status(task_id: str):
         # Get task result
         task_result = AsyncResult(task_id)
         
+        # Include meta if in PROGRESS state
+        if task_result.state == 'PROGRESS':
+            meta = task_result.info or {}
+            return {
+                "success": True,
+                "status": "running",
+                "progress": meta
+            }
         if task_result.ready():
             if task_result.successful():
                 result = task_result.result
@@ -165,3 +174,28 @@ async def get_index_status(task_id: str):
             status_code=500,
             detail=f"Failed to check task status: {str(e)}"
         )
+
+
+@router.post("/index/rebuild")
+async def rebuild_indices(include_historical: bool = True):
+    """Delete all netspeed_* indices and trigger a fresh full indexing.
+
+    Args:
+        include_historical: kept for forward compatibility (currently always deletes all netspeed_* )
+    """
+    try:
+        # Delete indices
+        deleted = opensearch_config.cleanup_indices_by_pattern("netspeed_*")
+        logger.info(f"Rebuild requested: deleted {deleted} indices")
+
+        from tasks.tasks import index_all_csv_files
+        task = index_all_csv_files.delay("/app/data")
+        return {
+            "success": True,
+            "message": f"Deleted {deleted} indices, started fresh indexing",
+            "deleted_indices": deleted,
+            "task_id": task.id
+        }
+    except Exception as e:
+        logger.error(f"Error rebuilding indices: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to rebuild indices: {e}")

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Box,
   TextField,
@@ -43,6 +43,20 @@ function CSVSearch() {
   } = useSearchCSV();
 
   const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
+  const missingPreview = !previewLoading && previewData && previewData.success === false && (previewData.message || '').toLowerCase().includes('not found');
+  const initializing = previewLoading && !previewData; // first-time load
+  const searchBlocked = missingPreview || initializing; // block while initializing or missing file
+  const [previewStuck, setPreviewStuck] = useState(false);
+
+  useEffect(() => {
+    let t;
+    if (previewLoading) {
+      t = setTimeout(() => setPreviewStuck(true), 16000);
+    } else {
+      setPreviewStuck(false);
+    }
+    return () => clearTimeout(t);
+  }, [previewLoading]);
 
   const typingTimeoutRef = useRef(null);
   const lastSearchTermRef = useRef('');
@@ -73,6 +87,7 @@ function CSVSearch() {
   }, []);
 
   const handleInputChange = useCallback((e) => {
+    if (searchBlocked) return; // block typing logic from triggering searches
     const term = e.target.value;
     setSearchTerm(term);
     setIsTyping(true);
@@ -94,6 +109,7 @@ function CSVSearch() {
   }, [executeSearch]);
 
   const handleSearch = useCallback(() => {
+    if (searchBlocked) return;
     if (!searchTerm) return;
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -104,7 +120,7 @@ function CSVSearch() {
         setHasSearched(true);
       }
     });
-  }, [searchTerm, includeHistorical, searchAll]);
+  }, [searchTerm, includeHistorical, searchAll, searchBlocked]);
 
   const handleClearSearch = useCallback(() => {
     setSearchTerm('');
@@ -134,7 +150,7 @@ function CSVSearch() {
         }}
       >
         <Stack spacing={3}>
-          {/* Search Input */}
+          {/** Search Input */}
           <TextField
             inputRef={searchFieldRef}
             fullWidth
@@ -143,6 +159,7 @@ function CSVSearch() {
             value={searchTerm}
             onChange={handleInputChange}
             onKeyPress={handleKeyPress}
+            disabled={searchBlocked}
             sx={{
               '& .MuiOutlinedInput-root': {
                 backgroundColor: 'background.paper',
@@ -170,6 +187,7 @@ function CSVSearch() {
                       <IconButton
                         onClick={handleClearSearch}
                         size="small"
+                        disabled={searchBlocked}
                       >
                         <Clear fontSize="small" />
                       </IconButton>
@@ -179,6 +197,13 @@ function CSVSearch() {
               ),
             }}
           />
+          {searchBlocked && (
+            <Alert severity={missingPreview ? 'warning' : 'info'} sx={{ mt: -1 }}>
+              {missingPreview
+                ? 'Search disabled: netspeed.csv not available. Please provide the file and reload the page.'
+                : 'Data preview is loading – Search temporarily disabled'}
+            </Alert>
+          )}
 
           {/* Action Bar */}
           <Box sx={{
@@ -195,6 +220,7 @@ function CSVSearch() {
                   <Checkbox
                     checked={includeHistorical}
                     onChange={(e) => setIncludeHistorical(e.target.checked)}
+                    disabled={searchBlocked}
                   />
                 }
                 label={
@@ -210,7 +236,7 @@ function CSVSearch() {
               <Button
                 variant="contained"
                 onClick={handleSearch}
-                disabled={searchLoading || !searchTerm}
+                disabled={searchBlocked || searchLoading || !searchTerm}
                 startIcon={searchLoading ? <CircularProgress size={20} /> : <Search />}
               >
                 {searchLoading ? 'Searching...' : 'Search'}
@@ -222,7 +248,7 @@ function CSVSearch() {
       </Paper>
 
       {/* Loading State */}
-      {(searchLoading || previewLoading) && (
+      {(searchLoading || previewLoading) && !previewStuck && (
         <Box sx={{
           display: 'flex',
           flexDirection: 'column',
@@ -235,6 +261,12 @@ function CSVSearch() {
             {searchLoading ? 'Searching...' : 'Loading preview...'}
           </Typography>
         </Box>
+      )}
+
+      {previewStuck && !previewError && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          Preview loading is taking longer than expected. You can refresh the page or retry later.
+        </Alert>
       )}
 
       {/* Error State */}
@@ -250,7 +282,25 @@ function CSVSearch() {
       {/* Welcome Message or Preview - Show when no search has been performed */}
       {!searchLoading && !previewLoading && !hasSearched && (
         <>
-          {previewData && previewData.data ? (
+          {missingPreview ? (
+            <Paper
+              elevation={1}
+              sx={{
+                p: 4,
+                textAlign: 'center',
+                borderRadius: 2,
+                border: '1px solid',
+                borderColor: 'divider'
+              }}
+            >
+              <Typography variant="h6" gutterBottom>
+                Keine netspeed.csv vorhanden
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Legen Sie eine Datei im Verzeichnis /app/data ab und aktualisieren Sie die Seite.
+              </Typography>
+            </Paper>
+          ) : previewData && previewData.data ? (
             <Box>
               {/* Preview Header */}
               <Box sx={{

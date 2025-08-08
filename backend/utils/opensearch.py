@@ -29,6 +29,8 @@ class OpenSearchConfig:
         """Initialize OpenSearch configuration."""
         self.hosts = [settings.OPENSEARCH_URL]
         self._client = None
+    # NOTE: After changing field mappings (e.g. IP Address from ip->text) existing indices
+    # must be deleted & rebuilt (reindex) for the new mapping to apply.
         # Define field types for reuse
         self.keyword_type = {"type": "keyword"}
         self.text_with_keyword = {
@@ -47,7 +49,9 @@ class OpenSearchConfig:
                         "type": "date",
                         "format": "yyyy-MM-dd"
                     },
-                    "IP Address": {"type": "ip"},
+                    # Changed from type 'ip' to text for partial / wildcard search support.
+                    # If numeric range queries are needed later, introduce a parallel long form field.
+                    "IP Address": self.text_with_keyword,
                     "Line Number": self.text_with_keyword,  # Now contains KEM info
                     "MAC Address": self.text_with_keyword,
                     "MAC Address 2": self.text_with_keyword,
@@ -506,33 +510,27 @@ class OpenSearchConfig:
         if field:
             # Field-specific search with both exact and partial matching
             from utils.csv_utils import DESIRED_ORDER
+            should_clauses = [
+                {"term": {field: query}},
+                {"prefix": {field: query}},
+                {"wildcard": {field: f"*{query}*"}}
+            ]
+            # Add case variants for MAC/IP if relevant
+            if field in ("MAC Address", "MAC Address 2", "Model Name", "Switch Hostname") and query.lower() != query.upper():
+                should_clauses.append({"wildcard": {field: f"*{query.lower()}*"}})
+                should_clauses.append({"wildcard": {field: f"*{query.upper()}*"}})
             return {
                 "query": {
                     "bool": {
-                        "should": [
-                            # Exact match
-                            {"term": {field: query}},
-                            # Prefix match
-                            {"prefix": {field: query}},
-                            # Wildcard for partial match
-                            {"wildcard": {field: f"*{query}*"}}
-                        ],
+                        "should": should_clauses,
                         "minimum_should_match": 1
                     }
                 },
                 "_source": DESIRED_ORDER,
                 "size": size,
                 "sort": [
-                    {
-                        "Creation Date": {
-                            "order": "desc"
-                        }
-                    },
-                    {
-                        "_score": {
-                            "order": "desc"
-                        }
-                    }
+                    {"Creation Date": {"order": "desc"}},
+                    {"_score": {"order": "desc"}}
                 ]
             }
         else:
@@ -575,7 +573,9 @@ class OpenSearchConfig:
                             # Model and file information
                             {"wildcard": {"Model Name": f"*{query.lower()}*"}},
                             {"wildcard": {"Model Name": f"*{query.upper()}*"}},
-                            {"wildcard": {"File Name": f"*{query}*"}}
+                            {"wildcard": {"File Name": f"*{query}*"}},
+                            # IP Address partial match (now text field) – allow substring search
+                            {"wildcard": {"IP Address": f"*{query}*"}}
                             
                             # Fuzzy matching disabled per user request
                             # {"fuzzy": {"MAC Address": {"value": query, "fuzziness": "AUTO"}}},

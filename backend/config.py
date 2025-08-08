@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings
-from functools import lru_cache
 from typing import Optional
 
 
@@ -28,6 +27,9 @@ class Settings(BaseSettings):
     
     # Logging
     LOG_LEVEL: str = "INFO"
+
+    # SSH username (used for simple gating of rebuild UI). Leave empty to disable rebuild UI.
+    # Explicitly set environment variable SSH_USERNAME=volzd to enable.
     
     # CORS Settings
     CORS_ORIGINS: list[str] = ["*"]
@@ -38,28 +40,25 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
-@lru_cache()
 def get_settings() -> Settings:
-    """Get cached settings instance."""
-    settings = Settings()
-    
-    # Set PORT from environment variable BACKEND_PORT with fallback to 8000
+    """Build a fresh settings instance (no cache so env changes are picked up)."""
     import os
-    settings.PORT = int(os.environ.get("BACKEND_PORT", 8000))
-    
-    # Set CSV_FILES_DIR from environment variable with fallback to default
-    # Note: This should be the container path, not the host path
-    # Host path is mapped via docker volume: ${CSV_FILES_DIR}:/app/data
-    settings.CSV_FILES_DIR = "/app/data"
-    
-    # Format Redis and OpenSearch URLs with environment variables
+    s = Settings()
+
+    # Dynamic ports / paths
+    s.PORT = int(os.environ.get("BACKEND_PORT", 8000))
+    s.CSV_FILES_DIR = "/app/data"
+
+    # Compose service URLs
     redis_port = os.environ.get("REDIS_PORT", 6379)
     opensearch_port = os.environ.get("OPENSEARCH_PORT", 9200)
-    
-    settings.REDIS_URL = settings.REDIS_URL.format(REDIS_PORT=redis_port)
-    settings.OPENSEARCH_URL = settings.OPENSEARCH_URL.format(OPENSEARCH_PORT=opensearch_port)
-    
-    return settings
+    s.REDIS_URL = s.REDIS_URL.format(REDIS_PORT=redis_port)
+    s.OPENSEARCH_URL = s.OPENSEARCH_URL.format(OPENSEARCH_PORT=opensearch_port)
+
+    # Use value from Settings (no env override)
+    # If left empty, UI will hide rebuild controls
+
+    return s
 
 
 # Create a global settings instance

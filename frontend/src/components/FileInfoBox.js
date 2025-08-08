@@ -9,7 +9,8 @@ import {
   Chip,
   Fade,
   IconButton,
-  Paper
+  Paper,
+  Tooltip
 } from '@mui/material';
 import {
   Refresh,
@@ -23,31 +24,84 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const isFetchingRef = React.useRef(false);
+  const [missingFile, setMissingFile] = useState(false);
+  // Index status state (lightweight copy of logic from FileTable)
+  const [idxStatus, setIdxStatus] = useState('idle');
+  const [lastSuccess, setLastSuccess] = useState(null);
+  const [progress, setProgress] = useState(null);
+
+  const loadIndexState = useCallback(async () => {
+    try {
+      const r = await fetch('/api/files/index/status');
+      if (!r.ok) return;
+      const data = await r.json();
+      const state = data?.state || {};
+      const ls = state.last_success || state.last_run;
+      if (ls) setLastSuccess(ls);
+      // If there's an active task we don't have real-time here, just show healthy or idle
+    } catch (_) { /* ignore */ }
+  }, []);
+
+  // Very small poll if we detect active indexing later (future extension)
+  useEffect(() => { loadIndexState(); }, [loadIndexState]);
+
+  const indexStatusLabel = () => {
+    if (idxStatus === 'starting') return 'Index rebuild starting';
+    if (idxStatus === 'running') return `Rebuilding index${progress?.total_files ? ` (${progress.index || 0}/${progress.total_files})` : ''}`;
+    if (idxStatus === 'failed' || idxStatus === 'error') return 'Index rebuild error';
+    if (lastSuccess) return `Index healthy · last success ${new Date(lastSuccess).toLocaleString()}`;
+    return 'Index idle (no successful run yet)';
+  };
 
   const fetchFileInfo = useCallback(async () => {
     // Prevent multiple simultaneous requests
     if (isFetchingRef.current) {
       return;
     }
+    // Controller & timeout flag need function scope (used in catch)
+    let timedOut = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 12000);
 
     try {
       isFetchingRef.current = true;
       setLoading(true);
 
-      const response = await axios.get('/api/files/netspeed_info');
+      const response = await axios.get('/api/files/netspeed_info', { signal: controller.signal });
       const data = response.data;
 
       if (data.success) {
         setFileInfo(data);
         setError(null);
         console.log('File info loaded:', data.date, 'Records:', data.line_count);
+        setMissingFile(false);
       } else {
-        setError(data.message || 'Failed to fetch file information');
+        // Treat missing file as a non-error (informational state)
+        if ((data.message || '').toLowerCase().includes('not found')) {
+          setMissingFile(true);
+          setFileInfo({ date: null, line_count: 0, success: false });
+          setError(null);
+        } else {
+          setError(data.message || 'Failed to fetch file information');
+        }
       }
     } catch (err) {
-      setError('Error fetching file information');
-      console.error('Error fetching file info:', err);
+      if (axios.isCancel(err) || err?.name === 'CanceledError') {
+        if (timedOut) {
+          setError('Timed out fetching file information');
+        } else {
+          // Silent cancellation (unmount / strict mode) -> do not set a user-facing error
+          console.debug('File info request cancelled (ignored).');
+        }
+      } else {
+        setError('Error fetching file information');
+        console.error('Error fetching file info:', err);
+      }
     } finally {
+      clearTimeout(timeout);
       isFetchingRef.current = false;
       setLoading(false);
     }
@@ -139,6 +193,53 @@ const FileInfoBox = React.memo(({ compact = false }) => {
     );
   }
 
+  if (missingFile) {
+    return (
+      <Card
+        elevation={0}
+        sx={{
+          bgcolor: 'background.paper',
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 4,
+          opacity: 0.9,
+          mb: 4
+        }}
+      >
+        <CardContent sx={{ p: 3, textAlign: 'center' }}>
+          <Avatar
+            sx={{
+              bgcolor: 'warning.main',
+              width: 48,
+              height: 48,
+              mx: 'auto',
+              mb: 2
+            }}
+          >
+            <Warning />
+          </Avatar>
+          <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+            Kein aktuelles netspeed.csv gefunden
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Die Datei wurde nicht im Verzeichnis /app/data gefunden. Sobald sie erscheint, können Sie aktualisieren.
+          </Typography>
+          <IconButton
+            onClick={handleRefresh}
+            disabled={refreshing}
+            size="small"
+            sx={{
+              bgcolor: 'warning.light',
+              '&:hover': { bgcolor: 'warning.main' }
+            }}
+          >
+            {refreshing ? <CircularProgress size={16} /> : <Refresh fontSize="small" />}
+          </IconButton>
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (compact) {
     return (
       <Paper
@@ -162,12 +263,15 @@ const FileInfoBox = React.memo(({ compact = false }) => {
             Current File: <strong>netspeed.csv</strong> • Created: <strong>{fileInfo?.date ? new Date(fileInfo.date).toLocaleDateString() : '-'}</strong> • Records: <strong>{fileInfo?.line_count?.toLocaleString() || '0'}</strong>
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Chip
-              label="Active"
-              color="success"
-              size="small"
-              variant="outlined"
-            />
+            <Tooltip title={indexStatusLabel()} arrow placement="top">
+              <Chip
+                label="Active"
+                color="success"
+                size="small"
+                variant="outlined"
+                sx={{ cursor: 'help' }}
+              />
+            </Tooltip>
             <IconButton
               onClick={handleRefresh}
               disabled={refreshing}
@@ -204,12 +308,15 @@ const FileInfoBox = React.memo(({ compact = false }) => {
             Current File Information
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Chip
-              label="Active"
-              color="success"
-              size="small"
-              variant="outlined"
-            />
+            <Tooltip title={indexStatusLabel()} arrow placement="top">
+              <Chip
+                label="Active"
+                color="success"
+                size="small"
+                variant="outlined"
+                sx={{ cursor: 'help' }}
+              />
+            </Tooltip>
             <IconButton
               onClick={handleRefresh}
               disabled={refreshing}

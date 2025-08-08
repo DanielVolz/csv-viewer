@@ -127,7 +127,7 @@ function DataTable({
     // Remove separators
     const cleaned = mac.replace(/[^A-Fa-f0-9]/g, '').toLowerCase();
     if (cleaned.length !== 12) return mac; // Not a standard MAC
-    return `${cleaned.slice(0,4)}.${cleaned.slice(4,8)}.${cleaned.slice(8,12)}`;
+    return `${cleaned.slice(0, 4)}.${cleaned.slice(4, 8)}.${cleaned.slice(8, 12)}`;
   };
 
   const handleCellClick = (header, content, rowData = null) => {
@@ -136,8 +136,8 @@ function DataTable({
       // Start search immediately without waiting for clipboard
       onMacAddressClick(content);
 
-  // Unified toast
-  showCopyToast('Copied MAC address', content);
+      // Unified toast
+      showCopyToast('Copied MAC address', content);
 
       // Copy to clipboard in background
       copyToClipboard(content).then(success => {
@@ -153,8 +153,8 @@ function DataTable({
       // Start search immediately without waiting for clipboard
       onSwitchPortClick(content);
 
-  // Unified toast
-  showCopyToast('Copied switch port', content);
+      // Unified toast
+      showCopyToast('Copied switch port', content);
 
       // Copy to clipboard in background
       copyToClipboard(content).then(success => {
@@ -188,7 +188,7 @@ function DataTable({
               if (success) {
                 showCopyToast('Copied Cisco port', ciscoFormat, { autoClose: 2000, pauseOnHover: true });
               } else {
-        toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
+                toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
                   autoClose: 3000,
                   pauseOnHover: true,
                   pauseOnFocusLoss: false
@@ -201,7 +201,7 @@ function DataTable({
         // Show warning immediately, copy in background
         const ToastContent = () => (
           <div>
-      📋 Copied hostname! ⚠️ SSH username not configured!{' '}
+            📋 Copied hostname! ⚠️ SSH username not configured!{' '}
             <span
               onClick={() => {
                 navigateToSettings();
@@ -325,31 +325,31 @@ function DataTable({
         e.stopPropagation();
         const filename = content;
         try {
-            showCopyToast('Starting download', filename);
-            const resp = await fetch(`/api/files/download/${encodeURIComponent(filename)}`, {
-              method: 'GET',
-              headers: { 'Accept': 'text/csv' }
-            });
-            if (!resp.ok) {
-              const text = await resp.text().catch(()=> '');
-              toast.error(`❌ Download failed (${resp.status})`);
-              console.error('Download error response:', resp.status, text);
-              return;
-            }
-            const blob = await resp.blob();
-            if (blob.size === 0) {
-              toast.error('❌ Empty file');
-              return;
-            }
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-            showCopyToast('Downloaded file', filename);
+          showCopyToast('Starting download', filename);
+          const resp = await fetch(`/api/files/download/${encodeURIComponent(filename)}`, {
+            method: 'GET',
+            headers: { 'Accept': 'text/csv' }
+          });
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => '');
+            toast.error(`❌ Download failed (${resp.status})`);
+            console.error('Download error response:', resp.status, text);
+            return;
+          }
+          const blob = await resp.blob();
+          if (blob.size === 0) {
+            toast.error('❌ Empty file');
+            return;
+          }
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+          showCopyToast('Downloaded file', filename);
         } catch (err) {
           console.error('Download exception', err);
           toast.error('❌ Download error');
@@ -419,23 +419,23 @@ function DataTable({
             fontWeight: 400
           }}>{base}</Typography>
           {kemCount > 0 && (
-            <Tooltip arrow placement="top" title={`${kemCount} KEM module${kemCount>1?'s':''}`}> 
+            <Tooltip arrow placement="top" title={`${kemCount} KEM module${kemCount > 1 ? 's' : ''}`}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-              {Array.from({ length: kemCount }).map((_, i) => (
-                <img
-                  key={i}
-                  src={kemIcon}
-                  alt={`KEM module ${i + 1}`}
-                  style={{
-                    width: 20,
-                    height: 12,
-                    objectFit: 'contain',
-                    display: 'block',
-                    opacity: 0.95,
-                    filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.4))'
-                  }}
-                />
-              ))}
+                {Array.from({ length: kemCount }).map((_, i) => (
+                  <img
+                    key={i}
+                    src={kemIcon}
+                    alt={`KEM module ${i + 1}`}
+                    style={{
+                      width: 20,
+                      height: 12,
+                      objectFit: 'contain',
+                      display: 'block',
+                      opacity: 0.95,
+                      filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.4))'
+                    }}
+                  />
+                ))}
               </Box>
             </Tooltip>
           )}
@@ -583,8 +583,8 @@ function DataTable({
                                   e.stopPropagation();
                                   const ciscoFormat = convertToCiscoFormat(cellContent);
                                   toast.success(`📋 ${ciscoFormat}`, { autoClose: 1000 });
-                                    // Above replaced by unified helper but keep fallback if needed
-                                    showCopyToast('Copied Cisco port', ciscoFormat);
+                                  // Above replaced by unified helper but keep fallback if needed
+                                  showCopyToast('Copied Cisco port', ciscoFormat);
                                   copyToClipboard(ciscoFormat).catch(() => {
                                     toast.error('❌ Copy failed', { autoClose: 2000 });
                                   });

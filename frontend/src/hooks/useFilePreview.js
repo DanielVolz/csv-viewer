@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
@@ -13,16 +13,28 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    const abortController = new AbortController();
+    const timeoutRef = { current: null };
+    let timedOut = false;
+    let mounted = true;
+
     const fetchPreview = async () => {
       try {
         setLoading(true);
-        // Get file info to get the total count
-        const infoResponse = await axios.get('/api/files/netspeed_info');
+        // Safety timeout (15s)
+        timeoutRef.current = setTimeout(() => {
+          if (!timedOut && mounted) {
+            timedOut = true;
+            abortController.abort();
+          }
+        }, 15000);
+
+        const infoResponse = await axios.get('/api/files/netspeed_info', { signal: abortController.signal });
         const fileInfo = infoResponse.data;
 
-        // Call the backend API endpoint for preview data
         const response = await axios.get('/api/files/preview', {
-          params: { limit: 105 } // Fixed limit to prevent re-renders
+          params: { limit: 105 },
+          signal: abortController.signal
         });
 
         // Get the original data
@@ -36,26 +48,37 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
 
         setError(null);
       } catch (err) {
-        console.error('Error fetching file preview:', err);
-        const errorMessage = 'Failed to fetch file preview. Please try again later.';
-        setError(errorMessage);
-        toast.error(errorMessage, {
-          position: "top-right",
-          autoClose: 5000
-        });
-        // For development, set some mock data with only the desired columns
-        setPreviewData({
-          success: false,
-          message: 'Error connecting to backend',
-          headers: [],
-          data: []
-        });
+        if (!mounted) return; // Ignore after unmount
+        if (axios.isCancel(err) || err?.name === 'CanceledError') {
+          // Distinguish between deliberate timeout and React StrictMode double-invoke abort
+          if (timedOut) {
+            setError('Preview request timed out.');
+            toast.error('Preview request timed out.', { autoClose: 4000 });
+          } else {
+            // Silent cancellation (StrictMode/unmount) — no UI noise
+            console.debug('Preview request cancelled (ignored).');
+          }
+        } else {
+          console.error('Error fetching file preview:', err);
+          const errorMessage = 'Failed to fetch file preview. Please try again later.';
+          setError(errorMessage);
+          toast.error(errorMessage, { position: 'top-right', autoClose: 5000 });
+          setPreviewData({ success: false, message: 'Error connecting to backend', headers: [], data: [] });
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          clearTimeout(timeoutRef.current);
+          setLoading(false);
+        }
       }
     };
 
     fetchPreview();
+    return () => {
+      mounted = false;
+      clearTimeout(timeoutRef.current);
+      abortController.abort();
+    };
   }, []); // Empty dependency array - only run once on mount
 
   return { previewData, loading, error };
