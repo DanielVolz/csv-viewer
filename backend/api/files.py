@@ -10,6 +10,7 @@ from models.file import FileModel
 from config import settings
 from utils.csv_utils import read_csv_file, DESIRED_ORDER
 from tasks.tasks import index_all_csv_files, app
+from utils.index_state import load_state
 from celery import current_app
 
 # Configure logging
@@ -357,3 +358,14 @@ async def trigger_morning_reindex():
             status_code=500,
             detail="Failed to trigger morning reindexing task"
         )
+
+
+@router.get("/index/status")
+async def get_index_status():
+    """Return last indexing state (files, totals, timestamps)."""
+    try:
+        state = load_state()
+        return {"success": True, "state": state}
+    except Exception as e:
+        logger.error(f"Error reading index state: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read index state")

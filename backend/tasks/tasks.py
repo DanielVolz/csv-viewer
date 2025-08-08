@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, List
 from utils.opensearch import opensearch_config
+from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -113,16 +114,35 @@ def index_all_csv_files(directory_path: str) -> dict:
         results = []
         total_documents = 0
         
+        # Load current state to compare & later update
+        index_state = load_state()
+
         for i, file_path in enumerate(ordered_files):
             logger.info(f"Processing file {i+1}/{len(ordered_files)}: {file_path}")
             try:
                 success, count = opensearch_config.index_csv_file(str(file_path))
                 total_documents += count
-                
+                # Determine line count (without header) for state tracking
+                line_count = 0
+                try:
+                    with open(file_path, 'r') as fh:
+                        total_lines = sum(1 for _ in fh)
+                        if total_lines > 0:
+                            line_count = total_lines - 1
+                except Exception:
+                    line_count = 0
+
+                # Update state per file
+                try:
+                    update_file_state(index_state, Path(file_path), line_count, count)
+                except Exception as e:
+                    logger.warning(f"Failed to update index state for {file_path}: {e}")
+
                 results.append({
                     "file": str(file_path),
                     "success": success,
-                    "count": count
+                    "count": count,
+                    "line_count": line_count
                 })
                 logger.info(f"Completed {file_path}: {count} documents indexed")
             except Exception as e:
@@ -134,6 +154,13 @@ def index_all_csv_files(directory_path: str) -> dict:
                     "count": 0
                 })
         
+        # Update totals & persist state
+        try:
+            update_totals(index_state, len(files), total_documents)
+            save_state(index_state)
+        except Exception as e:
+            logger.warning(f"Failed saving index state: {e}")
+
         return {
             "status": "success",
             "message": f"Processed {len(files)} files, indexed {total_documents} documents",
@@ -268,20 +295,32 @@ def morning_reindex(directory_path: str = "/app/data") -> dict:
     logger.info("Starting morning reindexing at 7:00 AM...")
     
     try:
-        # Step 1: Clean up all existing netspeed indices
-        logger.info("Cleaning up all existing netspeed indices...")
-        
-        # Delete all netspeed_* indices
+        # Load current state and determine if netspeed.csv already current
+        state = load_state()
+        data_dir = Path(directory_path)
+        netspeed_file = data_dir / "netspeed.csv"
+
+        if netspeed_file.exists():
+            recorded = state.get("files", {}).get(netspeed_file.name)
+            if recorded and is_file_current(netspeed_file, recorded):
+                logger.info("Morning reindex skipped: netspeed.csv already indexed (size/mtime unchanged)")
+                return {
+                    "status": "skipped",
+                    "message": "Skipped morning reindex: netspeed.csv unchanged since last index",
+                    "timestamp": "07:00"
+                }
+
+        # Clean up indices only if we proceed
+        logger.info("Cleaning up all existing netspeed indices (proceeding with reindex)...")
         try:
             indices_deleted = opensearch_config.cleanup_indices_by_pattern("netspeed_*")
             logger.info(f"Successfully cleaned up {indices_deleted} netspeed indices")
         except Exception as e:
             logger.warning(f"Error cleaning up indices: {e}")
-        
-        # Step 2: Trigger full reindexing of all CSV files
+
         logger.info("Triggering full reindexing of all netspeed files...")
         result = index_all_csv_files(directory_path)
-        
+
         if result.get("status") == "success":
             logger.info(f"Morning reindexing completed successfully: {result.get('message')}")
             return {
@@ -296,9 +335,9 @@ def morning_reindex(directory_path: str = "/app/data") -> dict:
             return {
                 "status": "error",
                 "message": f"Morning reindexing failed: {result.get('message')}",
-                "timestamp": "07:00"
+                    "timestamp": "07:00"
             }
-            
+
     except Exception as e:
         logger.error(f"Error during morning reindexing: {e}")
         return {
