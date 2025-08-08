@@ -17,10 +17,11 @@ import {
   Warning
 } from '@mui/icons-material';
 import axios from 'axios';
+import { toast } from 'react-toastify';
 
 const FileInfoBox = React.memo(({ compact = false }) => {
   const [fileInfo, setFileInfo] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // true only for very first load; later refresh keeps layout
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const isFetchingRef = React.useRef(false);
@@ -29,6 +30,8 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   const [idxStatus, setIdxStatus] = useState('idle');
   const [lastSuccess, setLastSuccess] = useState(null);
   const [progress, setProgress] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [justUpdated, setJustUpdated] = useState(false);
 
   const loadIndexState = useCallback(async () => {
     try {
@@ -53,7 +56,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
     return 'Index idle (no successful run yet)';
   };
 
-  const fetchFileInfo = useCallback(async () => {
+  const fetchFileInfo = useCallback(async (isManualRefresh = false) => {
     // Prevent multiple simultaneous requests
     if (isFetchingRef.current) {
       return;
@@ -68,7 +71,10 @@ const FileInfoBox = React.memo(({ compact = false }) => {
 
     try {
       isFetchingRef.current = true;
-      setLoading(true);
+      // Only trigger global loading placeholder if we have no data yet (initial mount)
+      if (!fileInfo) {
+        setLoading(true);
+      }
 
       const response = await axios.get('/api/files/netspeed_info', { signal: controller.signal });
       const data = response.data;
@@ -78,6 +84,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
         setError(null);
         console.log('File info loaded:', data.date, 'Records:', data.line_count);
         setMissingFile(false);
+        setLastUpdated(Date.now());
       } else {
         // Treat missing file as a non-error (informational state)
         if ((data.message || '').toLowerCase().includes('not found')) {
@@ -103,14 +110,30 @@ const FileInfoBox = React.memo(({ compact = false }) => {
     } finally {
       clearTimeout(timeout);
       isFetchingRef.current = false;
-      setLoading(false);
+      if (!fileInfo) { // only end initial loading placeholder if we were in initial load
+        setLoading(false);
+      }
     }
-  }, []); // No dependencies needed
+  }, [fileInfo]); // depend on fileInfo to know if initial load done
 
   const handleRefresh = async () => {
+    if (refreshing) return; // guard
+    const start = Date.now();
     setRefreshing(true);
-    await fetchFileInfo();
+    setJustUpdated(false);
+    await fetchFileInfo(true);
+    // Enforce minimal visible spinner time (600ms)
+    const elapsed = Date.now() - start;
+    const MIN_MS = 600;
+    if (elapsed < MIN_MS) {
+      await new Promise(r => setTimeout(r, MIN_MS - elapsed));
+    }
     setRefreshing(false);
+    setJustUpdated(true);
+    setLastUpdated(Date.now());
+    toast.success('File info refreshed', { autoClose: 1200, pauseOnHover: false });
+    // clear flag after 2s
+    setTimeout(() => setJustUpdated(false), 2000);
   };
 
   useEffect(() => {
@@ -122,7 +145,8 @@ const FileInfoBox = React.memo(({ compact = false }) => {
     // The daily netspeed.csv is loaded at 7:00 AM, user can refresh page to see new data
   }, [fetchFileInfo]);
 
-  if (loading) {
+  // NOTE: We no longer early-return ONLY for refresh; only for true initial load (no fileInfo yet)
+  if (loading && !fileInfo && !error && !missingFile) {
     return (
       <Fade in>
         <Card
@@ -135,7 +159,8 @@ const FileInfoBox = React.memo(({ compact = false }) => {
             borderRadius: 4,
             p: 3,
             textAlign: 'center',
-            opacity: 0.9
+            opacity: 0.9,
+            minHeight: 180 // keep some height baseline
           }}
         >
           <CircularProgress size={40} thickness={4} />
@@ -293,10 +318,11 @@ const FileInfoBox = React.memo(({ compact = false }) => {
         border: '1px solid',
         borderColor: 'divider',
         borderRadius: 2,
-        mb: 4
+        mb: 4,
+        position: 'relative'
       }}
     >
-      <CardContent sx={{ p: 3 }}>
+      <CardContent sx={{ p: 3, transition: 'opacity 0.2s ease' }}>
         {/* Header */}
         <Box sx={{
           display: 'flex',
@@ -304,9 +330,28 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           justifyContent: 'space-between',
           mb: 3
         }}>
-          <Typography variant="h6" fontWeight={600}>
-            Current File Information
-          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="h6" fontWeight={600}>
+              Current File Information
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, minHeight: 18 }}>
+              {refreshing && (
+                <Typography variant="caption" color="info.main" sx={{ fontWeight: 500 }}>
+                  Refreshing…
+                </Typography>
+              )}
+              {!refreshing && justUpdated && (
+                <Typography variant="caption" color="success.main" sx={{ fontWeight: 500 }}>
+                  Updated just now
+                </Typography>
+              )}
+              {!refreshing && !justUpdated && lastUpdated && (
+                <Typography variant="caption" color="text.secondary">
+                  Updated {new Date(lastUpdated).toLocaleTimeString()}
+                </Typography>
+              )}
+            </Box>
+          </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
             <Tooltip title={indexStatusLabel()} arrow placement="top">
               <Chip
@@ -322,7 +367,14 @@ const FileInfoBox = React.memo(({ compact = false }) => {
               disabled={refreshing}
               size="small"
             >
-              {refreshing ? <CircularProgress size={16} /> : <Refresh fontSize="small" />}
+              {refreshing ? (
+                <Refresh fontSize="small" sx={{
+                  '@keyframes spin': { to: { transform: 'rotate(360deg)' } },
+                  animation: 'spin 0.8s linear infinite'
+                }} />
+              ) : (
+                <Refresh fontSize="small" />
+              )}
             </IconButton>
           </Box>
         </Box>
@@ -331,7 +383,16 @@ const FileInfoBox = React.memo(({ compact = false }) => {
         <Box sx={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: 2
+          gap: 2,
+          opacity: refreshing ? 0.55 : 1,
+          position: 'relative',
+          '@keyframes pulseFade': {
+            '0%': { backgroundColor: 'transparent' },
+            '50%': { backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' },
+            '100%': { backgroundColor: 'transparent' }
+          },
+          animation: refreshing ? 'pulseFade 1.2s ease-in-out infinite' : 'none',
+          borderRadius: 1
         }}>
           <Box>
             <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -369,6 +430,19 @@ const FileInfoBox = React.memo(({ compact = false }) => {
             </Typography>
           </Box>
         </Box>
+        {/* Overlay spinner during refresh (non-blocking) */}
+    {refreshing && (
+          <Box sx={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none'
+          }}>
+      <CircularProgress size={36} thickness={4} />
+          </Box>
+        )}
       </CardContent>
     </Card>
   );
