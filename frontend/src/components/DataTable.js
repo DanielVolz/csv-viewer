@@ -325,7 +325,6 @@ function DataTable({
         e.stopPropagation();
         const filename = content;
         try {
-          showCopyToast('Starting download', filename);
           const resp = await fetch(`/api/files/download/${encodeURIComponent(filename)}`, {
             method: 'GET',
             headers: { 'Accept': 'text/csv' }
@@ -585,8 +584,6 @@ function DataTable({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const ciscoFormat = convertToCiscoFormat(cellContent);
-                                  toast.success(`📋 ${ciscoFormat}`, { autoClose: 1000 });
-                                  // Above replaced by unified helper but keep fallback if needed
                                   showCopyToast('Copied Cisco port', ciscoFormat);
                                   copyToClipboard(ciscoFormat).catch(() => {
                                     toast.error('❌ Copy failed', { autoClose: 2000 });
