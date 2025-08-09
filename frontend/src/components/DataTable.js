@@ -13,6 +13,7 @@ import {
   Paper,
   Chip,
   Tooltip,
+  TableSortLabel,
   alpha
 } from '@mui/material';
 import { Download, Terminal } from '@mui/icons-material';
@@ -35,6 +36,19 @@ function DataTable({
 }) {
   const { getEnabledColumnHeaders, sshUsername, navigateToSettings } = useSettings();
 
+  // Sorting state
+  const [orderBy, setOrderBy] = React.useState(null); // header name
+  const [order, setOrder] = React.useState('asc'); // 'asc' | 'desc'
+
+  const handleSort = (header) => {
+    if (orderBy === header) {
+      setOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setOrderBy(header);
+      setOrder('asc');
+    }
+  };
+
   // Unified toast helper for consistent copy notifications
   const showCopyToast = (label, value, opts = {}) => {
     const display = typeof value === 'string' && value.length > 120 ? value.slice(0, 117) + '…' : value;
@@ -54,6 +68,88 @@ function DataTable({
   const filteredHeaders = enabledHeaders
     .filter(header => header !== '#')
     .filter(header => headers.includes(header));
+
+  // Utility used by sorting and UI: ensure defined before usage
+  
+
+  // Helpers for sorting
+  const toIpKey = (ip) => {
+    if (!ip || typeof ip !== 'string') return [];
+    const parts = ip.split('.').map(p => parseInt(p, 10));
+    if (parts.length === 4 && parts.every(n => Number.isFinite(n))) return parts;
+    return [ip.toString()];
+  };
+
+  const toDateKey = (v) => {
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const toNumberKey = (v) => {
+    if (v == null) return Number.NEGATIVE_INFINITY;
+    const m = String(v).match(/\d+/);
+    return m ? parseInt(m[0], 10) : Number.NEGATIVE_INFINITY;
+  };
+
+  const toMacKey = (v) => {
+    if (!v) return '';
+    return String(v).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  };
+
+  const toPortKey = (v) => {
+    if (!v || typeof v !== 'string') return [0];
+    const s = convertToCiscoFormat(v) || String(v);
+    const typeWeight = /^Gig\b/.test(s) ? 2 : /^Fas\b/.test(s) ? 1 : 0;
+    const nums = s.match(/\d+/g) || [];
+    const parts = nums.map(n => parseInt(n, 10));
+    return [typeWeight, ...parts];
+  };
+
+  const getKey = (header, value) => {
+    switch (header) {
+      case 'IP Address':
+        return toIpKey(value);
+      case 'Creation Date':
+        return toDateKey(value);
+      case 'Line Number':
+        return toNumberKey(value);
+      case 'MAC Address':
+        return toMacKey(value);
+      case 'Switch Port':
+        return toPortKey(value);
+      default:
+        return (value == null ? '' : String(value).toLowerCase());
+    }
+  };
+
+  const compareKeys = (a, b) => {
+    if (Array.isArray(a) && Array.isArray(b)) {
+      const len = Math.max(a.length, b.length);
+      for (let i = 0; i < len; i++) {
+        const av = a[i] ?? -Infinity;
+        const bv = b[i] ?? -Infinity;
+        if (av < bv) return -1;
+        if (av > bv) return 1;
+      }
+      return 0;
+    }
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a).localeCompare(String(b));
+  };
+
+  const sortedData = React.useMemo(() => {
+    if (!Array.isArray(data) || !orderBy) return data;
+    const arr = data.map((row, idx) => ({ row, idx }));
+    arr.sort((A, B) => {
+      const aKey = getKey(orderBy, A.row[orderBy]);
+      const bKey = getKey(orderBy, B.row[orderBy]);
+      let cmp = compareKeys(aKey, bKey);
+      if (order === 'desc') cmp = -cmp;
+      if (cmp === 0) return A.idx - B.idx; // stable
+      return cmp;
+    });
+    return arr.map(x => x.row);
+  }, [data, orderBy, order]);
 
   const getDateColor = (dateString) => {
     if (!dateString) return 'inherit';
@@ -103,7 +199,7 @@ function DataTable({
     }
   };
 
-  const convertToCiscoFormat = (port) => {
+  function convertToCiscoFormat(port) {
     if (!port || typeof port !== 'string') return port;
     const p = port.trim();
     // Already shortened
@@ -123,7 +219,7 @@ function DataTable({
     if (/^Gi\d/.test(p)) return p.replace(/^Gi/, 'Gig ');
     if (/^Fa\d/.test(p)) return p.replace(/^Fa/, 'Fas ');
     return p;
-  };
+  }
 
   const formatMacDotted = (mac) => {
     if (!mac || typeof mac !== 'string') return mac;
@@ -478,7 +574,7 @@ function DataTable({
         overflowX: 'auto'
       }}
     >
-      <Table>
+  <Table>
         <TableHead>
           <TableRow>
             {showRowNumbers && (
@@ -500,7 +596,13 @@ function DataTable({
                 borderBottom: theme => `2px solid ${theme.palette.divider}`,
                 backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : 'rgba(0, 0, 0, 0.02)'
               }}>
-                {header}
+                <TableSortLabel
+                  active={orderBy === header}
+                  direction={orderBy === header ? order : 'asc'}
+                  onClick={() => handleSort(header)}
+                >
+                  {header}
+                </TableSortLabel>
               </TableCell>
             ))}
           </TableRow>
@@ -521,7 +623,7 @@ function DataTable({
                 </TableCell>
               </TableRow>
             ) : (
-              data.map((row, index) => (
+              (sortedData || data).map((row, index) => (
                 <TableRow
                   key={index}
                   sx={{
