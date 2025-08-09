@@ -24,6 +24,21 @@ export const SettingsProvider = ({ children }) => {
     refreshColumns
   } = useColumns();
 
+  // Eagerly load saved columns from localStorage on mount so preferences apply immediately
+  useEffect(() => {
+    try {
+      const savedSettings = localStorage.getItem('csv-viewer-settings');
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        if (Array.isArray(parsed?.columns) && parsed.columns.length > 0) {
+          setColumns(parsed.columns);
+        }
+      }
+    } catch (e) {
+      // ignore parse errors
+    }
+  }, []);
+
   // Initialize columns from backend when available
   useEffect(() => {
     if (availableColumns && availableColumns.length > 0) {
@@ -40,15 +55,32 @@ export const SettingsProvider = ({ children }) => {
         }
       }
 
-      // Merge backend columns with saved preferences
-      const mergedColumns = availableColumns.map(backendCol => {
-        // Find matching saved column
-        const savedCol = savedColumns?.find(col => col.id === backendCol.id);
-        return {
-          ...backendCol,
-          enabled: savedCol ? savedCol.enabled : backendCol.enabled
-        };
-      });
+      // Merge backend columns with saved preferences preserving saved order
+      let mergedColumns = [];
+      if (Array.isArray(savedColumns) && savedColumns.length > 0) {
+        // Use saved order; for each saved col, take backend definition if exists
+        const backendById = new Map(availableColumns.map(c => [c.id, c]));
+        mergedColumns = savedColumns
+          .map(savedCol => {
+            const backendCol = backendById.get(savedCol.id);
+            if (!backendCol) return null; // drop unknown/removed columns
+            return {
+              ...backendCol,
+              enabled: typeof savedCol.enabled === 'boolean' ? savedCol.enabled : backendCol.enabled
+            };
+          })
+          .filter(Boolean);
+
+        // Append any new backend columns not present in saved settings
+        const savedIds = new Set(savedColumns.map(c => c.id));
+        const newOnes = availableColumns
+          .filter(c => !savedIds.has(c.id))
+          .map(c => ({ ...c }));
+        mergedColumns = [...mergedColumns, ...newOnes];
+      } else {
+        // No saved settings; use backend order as-is
+        mergedColumns = availableColumns.map(c => ({ ...c }));
+      }
 
       setColumns(mergedColumns);
     }
@@ -76,6 +108,17 @@ export const SettingsProvider = ({ children }) => {
     localStorage.setItem('csv-viewer-settings', JSON.stringify(settings));
   }, [sshUsername, columns]);
 
+  // Helper to persist immediately (used when actions might trigger a reload)
+  const persistSettings = useCallback((nextSsh, nextColumns) => {
+    try {
+      const settings = {
+        sshUsername: nextSsh ?? sshUsername,
+        columns: Array.isArray(nextColumns) ? nextColumns : columns
+      };
+      localStorage.setItem('csv-viewer-settings', JSON.stringify(settings));
+    } catch {}
+  }, [sshUsername, columns]);
+
   // Get enabled columns in order
   const getEnabledColumns = useCallback(() => {
     return columns.filter(col => col.enabled);
@@ -88,9 +131,16 @@ export const SettingsProvider = ({ children }) => {
 
   // Update column enabled status
   const toggleColumn = useCallback((columnId) => {
-    setColumns(prev => prev.map(col =>
-      col.id === columnId ? { ...col, enabled: !col.enabled } : col
-    ));
+    setColumns(prev => {
+      const next = prev.map(col => col.id === columnId ? { ...col, enabled: !col.enabled } : col);
+      persistSettings(undefined, next);
+      return next;
+    });
+  }, [persistSettings]);
+
+  // Allow explicit saving of columns (optional use by settings UI)
+  const saveColumns = useCallback((nextColumns) => {
+    if (Array.isArray(nextColumns)) setColumns(nextColumns);
   }, []);
 
   // Reorder columns
@@ -99,23 +149,27 @@ export const SettingsProvider = ({ children }) => {
       const result = Array.from(prev);
       const [removed] = result.splice(startIndex, 1);
       result.splice(endIndex, 0, removed);
+      persistSettings(undefined, result);
       return result;
     });
-  }, []);
+  }, [persistSettings]);
 
   // Reset to default configuration (reload from backend)
   const resetToDefault = useCallback(() => {
     if (availableColumns && availableColumns.length > 0) {
-      setColumns([...availableColumns]);
+    const next = [...availableColumns];
+    setColumns(next);
+    persistSettings(undefined, next);
     } else {
       refreshColumns();
     }
-  }, [availableColumns, refreshColumns]);
+  }, [availableColumns, refreshColumns, persistSettings]);
 
   // Update SSH username
   const updateSshUsername = useCallback((username) => {
     setSshUsername(username);
-  }, []);
+    persistSettings(username, undefined);
+  }, [persistSettings]);
 
   // Set navigation callback function
   const setNavigationFunction = useCallback((callback) => {
@@ -137,6 +191,7 @@ export const SettingsProvider = ({ children }) => {
     getEnabledColumns,
     getEnabledColumnHeaders,
     toggleColumn,
+  saveColumns,
     reorderColumns,
     resetToDefault,
     updateSshUsername,
@@ -151,6 +206,7 @@ export const SettingsProvider = ({ children }) => {
     getEnabledColumns,
     getEnabledColumnHeaders,
     toggleColumn,
+  saveColumns,
     reorderColumns,
     resetToDefault,
     updateSshUsername,

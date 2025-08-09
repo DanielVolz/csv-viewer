@@ -34,7 +34,7 @@ function DataTable({
   onMacAddressClick,
   onSwitchPortClick
 }) {
-  const { getEnabledColumnHeaders, sshUsername, navigateToSettings } = useSettings();
+  const { columns, getEnabledColumnHeaders, sshUsername, navigateToSettings } = useSettings();
 
   // Sorting state
   const [orderBy, setOrderBy] = React.useState(null); // header name
@@ -61,7 +61,13 @@ function DataTable({
   };
 
   // Get custom column configuration from settings
-  const enabledHeaders = getEnabledColumnHeaders();
+  const enabledHeaders = React.useMemo(() => {
+    if (Array.isArray(columns) && columns.length > 0) {
+      return columns.filter(c => c.enabled).map(c => c.id);
+    }
+    // Fallback: if columns not loaded yet, allow all provided headers
+    return Array.isArray(headers) ? headers : [];
+  }, [columns, headers]);
 
   // Filter headers based on settings, but keep the original order from the settings
   // Also remove any CSV header literally named '#' to avoid a duplicate '#' column
