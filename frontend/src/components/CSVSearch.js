@@ -21,12 +21,17 @@ import {
 import {
   Search,
   Clear,
-  Download
+  Download,
+  History,
+  ContentCopy,
+  DeleteOutline
 } from '@mui/icons-material';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import DataTable from './DataTable';
 import { toast } from 'react-toastify';
+import useMacHistory from '../hooks/useMacHistory';
+import { Popover, List, ListItemButton, ListItemText, Tooltip } from '@mui/material';
 
 // Preview block extracted to reduce re-renders while typing
 const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick }) {
@@ -72,8 +77,8 @@ function CSVSearch() {
 
   const {
     searchAll,
-  results,
-  allResults,
+    results,
+    allResults,
     loading: searchLoading,
     error: searchError,
     pagination,
@@ -144,8 +149,16 @@ function CSVSearch() {
   const typingTimeoutRef = useRef(null);
   const lastSearchTermRef = useRef('');
   const [isTyping, setIsTyping] = useState(false);
+  const [historyAnchor, setHistoryAnchor] = useState(null);
+  const historyOpen = Boolean(historyAnchor);
 
-  const isMacLike = (v) => /[0-9A-Fa-f]{2}([:\-][0-9A-Fa-f]{2}){5}/.test(v) || /^[0-9A-Fa-f]{12}$/.test(v);
+  const { list: macHistory, record: recordMac, remove: removeMac } = useMacHistory();
+
+  const isMacLike = (v) => {
+    if (!v) return false;
+    const cleaned = String(v).replace(/[^0-9A-Fa-f]/g, '');
+    return cleaned.length === 12; // supports colon, hyphen, dotted, or condensed
+  };
   const executeSearch = useCallback((term) => {
     if (searchBlocked) {
       console.debug('[CSVSearch][executeSearch] prevented (blocked)', { term, previewLoading, missingPreview });
@@ -154,21 +167,25 @@ function CSVSearch() {
     if (term.length >= 3 && term !== lastSearchTermRef.current) {
       lastSearchTermRef.current = term;
       const hist = isMacLike(term) ? true : includeHistorical;
+      if (isMacLike(term)) recordMac(term);
       searchAll(term, hist, true).then(success => {
         if (success) {
           setHasSearched(true);
         }
       });
     }
-  }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview]);
+  }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview, recordMac]);
 
   const handleMacAddressClick = useCallback((macAddress) => {
     setSearchTerm(macAddress);
     lastSearchTermRef.current = macAddress;
+    recordMac(macAddress);
     searchAll(macAddress, true, true).then(success => { // always historical for MAC click
-      if (success) setHasSearched(true);
+      if (success) {
+        setHasSearched(true);
+      }
     });
-  }, [searchAll]);
+  }, [searchAll, recordMac]);
 
   const handleSwitchPortClick = useCallback((switchPort) => {
     // Currently just copies to clipboard, but could trigger search
@@ -179,7 +196,7 @@ function CSVSearch() {
     const term = e.target.value;
     setSearchTerm(term);
     setIsTyping(true);
-  console.debug('[CSVSearch][handleInputChange] value', { term });
+    console.debug('[CSVSearch][handleInputChange] value', { term });
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -207,19 +224,20 @@ function CSVSearch() {
       return;
     }
     if (!searchTerm) return;
-  console.debug('[CSVSearch][handleSearch] initiating search', { term: searchTerm });
+    console.debug('[CSVSearch][handleSearch] initiating search', { term: searchTerm });
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
     lastSearchTermRef.current = searchTerm;
     const hist = isMacLike(searchTerm) ? true : includeHistorical;
+    if (isMacLike(searchTerm)) recordMac(searchTerm);
     searchAll(searchTerm, hist, true).then(success => {
       if (success) {
         setHasSearched(true);
         console.debug('[CSVSearch][handleSearch] search executed', { term: searchTerm });
       }
     });
-  }, [searchTerm, includeHistorical, searchAll, searchBlocked]);
+  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac]);
 
   const handleClearSearch = useCallback(() => {
     setSearchTerm('');
@@ -328,11 +346,24 @@ function CSVSearch() {
                     {isTyping && (
                       <CircularProgress size={20} />
                     )}
-          {searchTerm && (
+                    <Tooltip title="MAC history" placement="top" arrow>
+                      <span>
+                        <IconButton
+                          onClick={(e) => setHistoryAnchor(e.currentTarget)}
+                          size="small"
+                          disabled={missingPreview}
+                          sx={{ opacity: 0.55, transition: 'opacity 0.2s', '&:hover': { opacity: 1 } }}
+                          aria-label="open mac history"
+                        >
+                          <History fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    {searchTerm && (
                       <IconButton
                         onClick={handleClearSearch}
-            size="small"
-            disabled={missingPreview}
+                        size="small"
+                        disabled={missingPreview}
                       >
                         <Clear fontSize="small" />
                       </IconButton>
@@ -342,7 +373,89 @@ function CSVSearch() {
               ),
             }}
           />
-      {searchBlocked && (
+
+          {/* MAC History Popover */}
+          <Popover
+            open={historyOpen}
+            anchorEl={historyAnchor}
+            onClose={() => setHistoryAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            PaperProps={{ sx: { width: 340, maxHeight: 160 } }}
+          >
+            <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>
+              {(!macHistory || macHistory.length === 0) ? (
+                <Box sx={{ p: 2 }}>
+                  <Typography variant="body2" color="text.secondary">No MAC searches yet.</Typography>
+                </Box>
+              ) : (
+                <List dense disablePadding>
+                  {macHistory.map((item, idx) => (
+                    <ListItemButton
+                      key={`${item.mac}-${idx}`}
+                      onClick={() => {
+                        setHistoryAnchor(null);
+                        setSearchTerm(item.mac);
+                        lastSearchTermRef.current = item.mac;
+                        recordMac(item.mac);
+                        searchAll(item.mac, true, true).then(success => {
+                          if (success) {
+                            setHasSearched(true);
+                          }
+                        });
+                      }}
+                      sx={{ py: 1, minHeight: 44 }}
+                    >
+                      <ListItemText
+                        primary={item.mac}
+                        secondary={item.lastSearchedAt ? new Date(item.lastSearchedAt).toLocaleString() : ''}
+                        primaryTypographyProps={{
+                          variant: 'body1',
+                          sx: {
+                            lineHeight: 1.2,
+                            fontSize: '0.98rem',
+                            color: (theme) => theme.palette.mode === 'dark' ? theme.palette.common.white : theme.palette.text.primary
+                          }
+                        }}
+                        secondaryTypographyProps={{
+                          variant: 'body2',
+                          sx: {
+                            fontSize: '0.82rem',
+                            color: (theme) => theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.6)' : theme.palette.text.secondary
+                          }
+                        }}
+                      />
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <Tooltip title="Copy" arrow>
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard?.writeText(item.mac).then(() => toast.success('Copied MAC'));
+                            }}
+                          >
+                            <ContentCopy sx={{ fontSize: 18 }} />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Remove" arrow>
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeMac(item.mac);
+                            }}
+                          >
+                            <DeleteOutline sx={{ fontSize: 18 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </ListItemButton>
+                  ))}
+                </List>
+              )}
+            </Box>
+          </Popover>
+          {searchBlocked && (
             <Alert severity={missingPreview ? 'warning' : 'info'} sx={{ mt: -1 }}>
               {missingPreview
                 ? 'Search disabled: netspeed.csv not available. Please provide the file and reload the page.'
@@ -401,7 +514,7 @@ function CSVSearch() {
       </Paper>
 
       {/* Loading State */}
-  {(searchLoading || previewLoading) && (
+      {(searchLoading || previewLoading) && (
         <Box sx={{
           display: 'flex',
           flexDirection: 'column',
@@ -416,7 +529,7 @@ function CSVSearch() {
         </Box>
       )}
 
-  {/* Long preview load hint removed with simplified logic */}
+      {/* Long preview load hint removed with simplified logic */}
 
       {/* Error State */}
       {(searchError || previewError) && (
