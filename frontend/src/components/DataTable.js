@@ -595,19 +595,28 @@ function DataTable({
               </TableCell>
             )}
             {filteredHeaders.map((header) => (
-              <TableCell key={header} align={(header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left'} sx={{
+              <TableCell
+                key={header}
+                align="left"
+                sx={{
                 fontWeight: 600,
                 fontSize: '0.85rem',
                 color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.5)' : 'text.secondary',
                 borderBottom: theme => `2px solid ${theme.palette.divider}`,
-                backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : 'rgba(0, 0, 0, 0.02)'
-              }}>
+                backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : 'rgba(0, 0, 0, 0.02)',
+                ...(header === 'Voice VLAN' ? { width: 64, maxWidth: 72, px: 1 } : {})
+              }}
+              >
                 <TableSortLabel
                   active={orderBy === header}
                   direction={orderBy === header ? order : 'asc'}
                   onClick={() => handleSort(header)}
                 >
-                  {header}
+                  {header === 'Voice VLAN' ? (
+                    <Box component="span" sx={{ display: 'block', lineHeight: 1.05, whiteSpace: 'normal' }}>
+                      Voice<br />VLAN
+                    </Box>
+                  ) : header}
                 </TableSortLabel>
               </TableCell>
             ))}
@@ -665,12 +674,13 @@ function DataTable({
                       <TableCell
                         key={`${index}-${header}`}
                         onClick={() => handleCellClick(header, cellContent, row)}
-                        align={(header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left'}
+                        align={header === 'Voice VLAN' ? 'center' : ((header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left')}
                         sx={{
                           cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+                          ...(header === 'Voice VLAN' ? { width: 64, maxWidth: 72, px: 1 } : {}),
                           '&:hover': (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? {
                             backgroundColor: theme => alpha(theme.palette.secondary.main, 0.1)
                           } : {}
@@ -772,10 +782,13 @@ function DataTable({
                   <TableCell
                     key={header}
                     onClick={() => handleCellClick(header, cellContent, data)}
-                    align={(header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left'}
+                    align={header === 'Voice VLAN' ? 'center' : ((header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left')}
                     sx={{
                       cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
-                      whiteSpace: header === "Switch Port" ? "nowrap" : "normal",
+            whiteSpace: header === "Switch Port" ? "nowrap" : "nowrap",
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+                      ...(header === 'Voice VLAN' ? { width: 64, maxWidth: 72, px: 1 } : {}),
                       '&:hover': (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? {
                         backgroundColor: theme => alpha(theme.palette.secondary.main, 0.1)
                       } : {}
