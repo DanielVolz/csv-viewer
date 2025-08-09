@@ -50,7 +50,10 @@ function DataTable({
   const enabledHeaders = getEnabledColumnHeaders();
 
   // Filter headers based on settings, but keep the original order from the settings
-  const filteredHeaders = enabledHeaders.filter(header => headers.includes(header));
+  // Also remove any CSV header literally named '#' to avoid a duplicate '#' column
+  const filteredHeaders = enabledHeaders
+    .filter(header => header !== '#')
+    .filter(header => headers.includes(header));
 
   const getDateColor = (dateString) => {
     if (!dateString) return 'inherit';
