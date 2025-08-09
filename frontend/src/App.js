@@ -20,17 +20,20 @@ import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 
 function AppContent() {
   const [currentTab, setCurrentTab] = useState('home');
-  const [homeRefreshKey, setHomeRefreshKey] = useState(0); // forces HomePage remount to refetch preview
   const { setNavigationFunction } = useSettings();
 
   const handleTabChange = (event, newValue) => {
+    if (newValue === 'home') {
+      // Full reload to mimic browser refresh
+      window.location.reload();
+      return;
+    }
     setCurrentTab(newValue);
   };
 
   const goHomeAndRefresh = () => {
-    setCurrentTab('home');
-    // bump key to force HomePage subtree remount => FileInfoBox & CSVSearch re-run effects
-    setHomeRefreshKey(k => k + 1);
+    // Full reload to mimic browser refresh
+    window.location.reload();
   };
 
   // Set browser tab title once
@@ -53,7 +56,7 @@ function AppContent() {
         return <SettingsPage />;
       case 'home':
       default:
-        return <HomePage key={homeRefreshKey} />;
+        return <HomePage />;
     }
   };
 
@@ -95,7 +98,7 @@ function AppContent() {
                 CSV Viewer
               </Typography>
               
-              <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
+              <Navigation currentTab={currentTab} onTabChange={handleTabChange} onHomeClick={goHomeAndRefresh} />
             </Box>
             
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

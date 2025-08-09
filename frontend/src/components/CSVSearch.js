@@ -154,21 +154,35 @@ function CSVSearch() {
 
   const { list: macHistory, record: recordMac, remove: removeMac } = useMacHistory();
 
-  const isMacLike = (v) => {
-    if (!v) return false;
-    const cleaned = String(v).replace(/[^0-9A-Fa-f]/g, '');
-    return cleaned.length === 12; // supports colon, hyphen, dotted, or condensed
+  // Remove all whitespace characters from a value
+  const stripAllWhitespace = (v) => String(v ?? '').replace(/\s+/g, '');
+
+  // Normalize input MACs (handles optional SEP/sep prefix) to canonical condensed 12-hex (uppercase), e.g., AABBCCDDEEFF
+  const normalizeMacInput = (v) => {
+    if (!v) return null;
+    let s = stripAllWhitespace(String(v));
+    // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
+    s = s.replace(/^sep[-_:]?/i, '');
+    const hex = s.replace(/[^0-9A-Fa-f]/g, '');
+    if (hex.length !== 12) return null;
+    return hex.toUpperCase();
   };
+
+  const isMacLike = (v) => !!normalizeMacInput(v);
   const executeSearch = useCallback((term) => {
+    const cleaned = stripAllWhitespace(term);
     if (searchBlocked) {
       console.debug('[CSVSearch][executeSearch] prevented (blocked)', { term, previewLoading, missingPreview });
       return;
     }
-    if (term.length >= 3 && term !== lastSearchTermRef.current) {
-      lastSearchTermRef.current = term;
-      const hist = isMacLike(term) ? true : includeHistorical;
-      if (isMacLike(term)) recordMac(term);
-      searchAll(term, hist, true).then(success => {
+    if (cleaned.length >= 3 && cleaned !== lastSearchTermRef.current) {
+      if (cleaned !== term) setSearchTerm(cleaned);
+      lastSearchTermRef.current = cleaned;
+      const macCanonical = normalizeMacInput(cleaned);
+      const hist = macCanonical ? true : includeHistorical;
+      if (macCanonical) recordMac(macCanonical);
+      // Keep the user's typed term for search to maximize matches
+      searchAll(cleaned, hist, true).then(success => {
         if (success) {
           setHasSearched(true);
         }
@@ -177,10 +191,13 @@ function CSVSearch() {
   }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview, recordMac]);
 
   const handleMacAddressClick = useCallback((macAddress) => {
-    setSearchTerm(macAddress);
-    lastSearchTermRef.current = macAddress;
-    recordMac(macAddress);
-    searchAll(macAddress, true, true).then(success => { // always historical for MAC click
+    const macCanonical = normalizeMacInput(macAddress) || macAddress;
+    // Display without separators per requirement
+    setSearchTerm(macCanonical);
+    lastSearchTermRef.current = macCanonical;
+    recordMac(macCanonical);
+    // Use the displayed condensed MAC for searching as well
+    searchAll(macCanonical, true, true).then(success => { // always historical for MAC click
       if (success) {
         setHasSearched(true);
       }
@@ -228,13 +245,17 @@ function CSVSearch() {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    lastSearchTermRef.current = searchTerm;
-    const hist = isMacLike(searchTerm) ? true : includeHistorical;
-    if (isMacLike(searchTerm)) recordMac(searchTerm);
-    searchAll(searchTerm, hist, true).then(success => {
+    const cleaned = stripAllWhitespace(searchTerm);
+    if (cleaned !== searchTerm) setSearchTerm(cleaned);
+    lastSearchTermRef.current = cleaned;
+    const macCanonical = normalizeMacInput(cleaned);
+  const hist = macCanonical ? true : includeHistorical;
+  if (macCanonical) recordMac(macCanonical);
+  // Use the input as-is for search; history stores canonical MAC
+    searchAll(cleaned, hist, true).then(success => {
       if (success) {
         setHasSearched(true);
-        console.debug('[CSVSearch][handleSearch] search executed', { term: searchTerm });
+        console.debug('[CSVSearch][handleSearch] search executed', { term: cleaned });
       }
     });
   }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac]);
@@ -390,15 +411,15 @@ function CSVSearch() {
                 </Box>
               ) : (
                 <List dense disablePadding>
-                  {macHistory.map((item, idx) => (
+      {macHistory.map((item, idx) => (
                     <ListItemButton
                       key={`${item.mac}-${idx}`}
                       onClick={() => {
                         setHistoryAnchor(null);
-                        setSearchTerm(item.mac);
-                        lastSearchTermRef.current = item.mac;
-                        recordMac(item.mac);
-                        searchAll(item.mac, true, true).then(success => {
+        setSearchTerm(item.mac);
+        lastSearchTermRef.current = item.mac;
+        recordMac(item.mac);
+        searchAll(item.mac, true, true).then(success => {
                           if (success) {
                             setHasSearched(true);
                           }

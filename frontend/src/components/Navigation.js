@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import { Home, Folder } from '@mui/icons-material';
 
-function Navigation({ currentTab, onTabChange }) {
+function Navigation({ currentTab, onTabChange, onHomeClick }) {
   return (
     <Tabs
       value={currentTab}
@@ -35,6 +35,7 @@ function Navigation({ currentTab, onTabChange }) {
         label="Home"
         value="home"
         iconPosition="start"
+  onClick={onHomeClick}
       />
       <Tab
         icon={<Folder fontSize="small" />}

@@ -589,7 +589,7 @@ function DataTable({
               </TableCell>
             )}
             {filteredHeaders.map((header) => (
-              <TableCell key={header} sx={{
+              <TableCell key={header} align={(header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left'} sx={{
                 fontWeight: 600,
                 fontSize: '0.85rem',
                 color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.5)' : 'text.secondary',
@@ -659,6 +659,7 @@ function DataTable({
                       <TableCell
                         key={`${index}-${header}`}
                         onClick={() => handleCellClick(header, cellContent, row)}
+                        align={(header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left'}
                         sx={{
                           cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
                           whiteSpace: "nowrap",
@@ -670,7 +671,7 @@ function DataTable({
                         }}
                       >
                         {header === "Switch Port" ? (
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
                             {renderCellContent(header, cellContent, true)}
                             <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
                               <Chip
@@ -698,7 +699,7 @@ function DataTable({
                             </Tooltip>
                           </Box>
                         ) : header === "MAC Address" ? (
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
                             {renderCellContent(header, cellContent, true)}
                             <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
                               <Chip
@@ -765,6 +766,7 @@ function DataTable({
                   <TableCell
                     key={header}
                     onClick={() => handleCellClick(header, cellContent, data)}
+                    align={(header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left'}
                     sx={{
                       cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
                       whiteSpace: header === "Switch Port" ? "nowrap" : "normal",
@@ -774,7 +776,7 @@ function DataTable({
                     }}
                   >
                     {header === "Switch Port" ? (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
                         {renderCellContent(header, cellContent, false)}
                         <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
                           <Chip
@@ -802,7 +804,7 @@ function DataTable({
                         </Tooltip>
                       </Box>
                     ) : header === "MAC Address" ? (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
                         {renderCellContent(header, cellContent, false)}
                         <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
                           <Chip
