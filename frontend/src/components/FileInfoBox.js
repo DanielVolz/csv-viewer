@@ -33,6 +33,9 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   const [progress, setProgress] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [justUpdated, setJustUpdated] = useState(false);
+  // Guards to prevent redundant work
+  const didInitRef = React.useRef(false);
+  const prevSigRef = React.useRef(null);
 
   const loadIndexState = useCallback(async () => {
     try {
@@ -57,7 +60,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
     return 'Index idle (no successful run yet)';
   };
 
-  const fetchFileInfo = useCallback(async (isManualRefresh = false) => {
+  const fetchFileInfo = useCallback(async ({ initial = false } = {}) => {
     // Prevent multiple simultaneous requests
     if (isFetchingRef.current) {
       return;
@@ -72,10 +75,8 @@ const FileInfoBox = React.memo(({ compact = false }) => {
 
     try {
       isFetchingRef.current = true;
-      // Only trigger global loading placeholder if we have no data yet (initial mount)
-      if (!fileInfo) {
-        setLoading(true);
-      }
+      // Only show big placeholder on first load
+      if (initial) setLoading(true);
 
       const response = await axios.get('/api/files/netspeed_info', { signal: controller.signal });
       const data = response.data;
@@ -83,7 +84,14 @@ const FileInfoBox = React.memo(({ compact = false }) => {
       if (data.success) {
         setFileInfo(data);
         setError(null);
-        console.log('File info loaded:', data.date, 'Records:', data.line_count);
+        // Log only when content actually changes
+        try {
+          const sig = `${data.date}|${data.line_count}`;
+          if (sig !== prevSigRef.current) {
+            prevSigRef.current = sig;
+            console.info('File info loaded:', data.date, 'Records:', data.line_count);
+          }
+        } catch {}
         setMissingFile(false);
         setLastUpdated(Date.now());
       } else {
@@ -111,18 +119,16 @@ const FileInfoBox = React.memo(({ compact = false }) => {
     } finally {
       clearTimeout(timeout);
       isFetchingRef.current = false;
-      if (!fileInfo) { // only end initial loading placeholder if we were in initial load
-        setLoading(false);
-      }
+    if (initial) setLoading(false);
     }
-  }, [fileInfo]); // depend on fileInfo to know if initial load done
+  }, []);
 
   const handleRefresh = async () => {
     if (refreshing) return; // guard
     const start = Date.now();
     setRefreshing(true);
     setJustUpdated(false);
-    await fetchFileInfo(true);
+  await fetchFileInfo({ initial: false });
     // Enforce minimal visible spinner time (600ms)
     const elapsed = Date.now() - start;
     const MIN_MS = 600;
@@ -138,13 +144,14 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   };
 
   useEffect(() => {
-    // Only fetch file info once on component mount
-    // File info will only update when component is remounted (e.g., page refresh)
-    fetchFileInfo();
+    // Only fetch file info once on component mount (guard StrictMode double-invoke)
+    if (didInitRef.current) return;
+    didInitRef.current = true;
+    fetchFileInfo({ initial: true });
 
     // NO INTERVAL - File info is static until page refresh
     // The daily netspeed.csv is loaded at 7:00 AM, user can refresh page to see new data
-  }, [fetchFileInfo]);
+  }, []);
 
   // NOTE: We no longer early-return ONLY for refresh; only for true initial load (no fileInfo yet)
   const initialLoading = loading && !fileInfo && !error && !missingFile;

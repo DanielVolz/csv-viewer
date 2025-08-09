@@ -17,8 +17,11 @@ import DarkModeToggle from './components/DarkModeToggle';
 import { IconButton, Tooltip } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import { SettingsProvider, useSettings } from './contexts/SettingsContext';
+import useUpdateNotifier from './hooks/useUpdateNotifier';
 
 function AppContent() {
+  // Check for new deployments periodically (dev + prod)
+  useUpdateNotifier({ intervalMs: 60000 });
   const [currentTab, setCurrentTab] = useState('home');
   const { setNavigationFunction } = useSettings();
 
