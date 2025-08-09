@@ -21,8 +21,6 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 
 const FileInfoBox = React.memo(({ compact = false }) => {
-  // Unified minimum height so error / missing / loading states match loaded box height visually
-  const CARD_MIN_HEIGHT = 190; // tuned to approximate loaded layout height
   const [fileInfo, setFileInfo] = useState(null);
   const [loading, setLoading] = useState(true); // true only for very first load; later refresh keeps layout
   const [error, setError] = useState(null);
@@ -161,7 +159,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           borderColor: 'error.main',
           borderRadius: 2,
           opacity: 0.15,
-          minHeight: CARD_MIN_HEIGHT,
+          minHeight: 110,
           display: 'flex'
         }}
       >
@@ -196,7 +194,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           borderRadius: 2,
           opacity: 0.95,
           mb: 4,
-          minHeight: CARD_MIN_HEIGHT,
+          minHeight: 110,
           display: 'flex'
         }}
       >
@@ -266,7 +264,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   }
 
   return (
-  <Card
+    <Card
       elevation={1}
       sx={{
         background: 'background.paper',
@@ -274,8 +272,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
         borderColor: 'divider',
         borderRadius: 2,
         mb: 4,
-    position: 'relative',
-    minHeight: CARD_MIN_HEIGHT
+        position: 'relative'
       }}
     >
       <CardContent sx={{ p: 3, transition: 'opacity 0.2s ease' }}>
