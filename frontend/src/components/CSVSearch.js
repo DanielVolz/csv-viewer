@@ -20,11 +20,13 @@ import {
 } from '@mui/material';
 import {
   Search,
-  Clear
+  Clear,
+  Download
 } from '@mui/icons-material';
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import DataTable from './DataTable';
+import { toast } from 'react-toastify';
 
 // Preview block extracted to reduce re-renders while typing
 const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick }) {
@@ -70,7 +72,8 @@ function CSVSearch() {
 
   const {
     searchAll,
-    results,
+  results,
+  allResults,
     loading: searchLoading,
     error: searchError,
     pagination,
@@ -232,6 +235,51 @@ function CSVSearch() {
     }
   }, [handleSearch]);
 
+  // Export full search results (allResults) to CSV
+  const handleExportCsv = useCallback(() => {
+    try {
+      const headers = allResults?.headers;
+      const rows = allResults?.data;
+      if (!headers || !Array.isArray(headers) || !rows || !Array.isArray(rows) || rows.length === 0) {
+        toast.info('Nothing to export');
+        return;
+      }
+
+      // CSV escaping: wrap in quotes, double internal quotes
+      const esc = (val) => {
+        if (val === null || val === undefined) return '';
+        let s = String(val);
+        // normalize line breaks
+        s = s.replace(/\r\n|\r|\n/g, '\n');
+        if (/[",\n]/.test(s)) {
+          s = '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      };
+
+      const headerLine = headers.map(esc).join(',');
+      const dataLines = rows.map((row) => headers.map(h => esc(row[h])).join(','));
+      const csvContent = [headerLine, ...dataLines].join('\n');
+
+      // Add BOM for Excel compatibility
+      const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const term = lastSearchTermRef.current || searchTerm || 'search';
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      a.href = url;
+      a.download = `search_export_${term}_${timestamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${rows.length} rows`);
+    } catch (e) {
+      console.error('Export CSV error', e);
+      toast.error('Failed to export CSV');
+    }
+  }, [allResults, searchTerm]);
+
   return (
     <Box sx={{ mb: 4 }}>
       {/* Search Section */}
@@ -330,6 +378,14 @@ function CSVSearch() {
 
             {/* Right Side - Action Buttons */}
             <Box sx={{ display: 'flex', gap: 2 }}>
+              <Button
+                variant="outlined"
+                onClick={handleExportCsv}
+                startIcon={<Download />}
+                disabled={!hasSearched || searchLoading || !allResults || !Array.isArray(allResults?.data) || allResults.data.length === 0}
+              >
+                Export CSV
+              </Button>
               <Button
                 variant="contained"
                 onClick={handleSearch}
