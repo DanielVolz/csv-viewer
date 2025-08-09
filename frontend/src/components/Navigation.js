@@ -32,10 +32,10 @@ function Navigation({ currentTab, onTabChange, onHomeClick }) {
     >
       <Tab
         icon={<Home fontSize="small" />}
-        label="Home"
+        label="Search"
         value="home"
         iconPosition="start"
-  onClick={onHomeClick}
+        onClick={onHomeClick}
       />
       <Tab
         icon={<Folder fontSize="small" />}
