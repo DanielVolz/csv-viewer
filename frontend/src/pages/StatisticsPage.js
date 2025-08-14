@@ -138,7 +138,8 @@ export default function StatisticsPage() {
         setLocLoading(true);
         setLocError(null);
         const q = encodeURIComponent(locInput.trim());
-        const r = await fetch(`/api/stats/locations?q=${q}`, { signal: controller.signal });
+        // Request all locations (no server-side limit) so the dropdown can show everything with scroll
+        const r = await fetch(`/api/stats/locations?q=${q}&limit=0`, { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (abort) return;
@@ -257,6 +258,14 @@ export default function StatisticsPage() {
             onOpen={() => setLocOpen(true)}
             onClose={() => setLocOpen(false)}
             getOptionLabel={getOptionLabel}
+            // Keep popup size fixed and make options scrollable
+            slotProps={{
+              paper: { sx: { maxHeight: 320, overflowY: 'auto' } },
+              listbox: { sx: { maxHeight: 280, overflowY: 'auto' } },
+            }}
+            ListboxProps={{
+              style: { maxHeight: 280, overflowY: 'auto' },
+            }}
             onChange={(_, val) => {
               if (typeof val === 'string') {
                 const s = val.trim().toUpperCase();
@@ -270,11 +279,6 @@ export default function StatisticsPage() {
             inputValue={locInput}
             onInputChange={(_, val) => {
               setLocInput(val);
-              const s = (val || '').trim().toUpperCase();
-              if (/^[A-Z]{3}$/.test(s)) {
-                // Trigger prefix stats directly when exactly 3 letters typed
-                setLocSelected(s);
-              }
             }}
             filterOptions={(x) => x} // server-side filtering
             renderInput={(params) => (
