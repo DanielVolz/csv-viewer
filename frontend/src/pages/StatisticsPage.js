@@ -47,6 +47,17 @@ export default function StatisticsPage() {
     phonesByModel: [],
     cities: [],
   });
+  // Map 3-letter city code to human name from stats payload
+  const cityNameByCode3 = React.useMemo(() => {
+    const map = {};
+    try {
+      (data?.cities || []).forEach(({ code, name }) => {
+        const k = String(code || '').slice(0, 3).toUpperCase();
+        if (k) map[k] = name || k;
+      });
+    } catch {}
+    return map;
+  }, [data?.cities]);
   const [fileMeta, setFileMeta] = React.useState(null);
 
   // Location-specific state
@@ -68,6 +79,25 @@ export default function StatisticsPage() {
   });
   const [locStatsLoading, setLocStatsLoading] = React.useState(false);
   const [locOpen, setLocOpen] = React.useState(false);
+  const locInputUpper = (locInput || '').trim().toUpperCase();
+  const isThreeLetterPrefix = /^[A-Z]{3}$/.test(locInputUpper);
+  // Inject synthetic option for prefix mode at the top
+  const autoOptions = React.useMemo(() => {
+    if (isThreeLetterPrefix) return [locInputUpper, ...(locOptions || [])];
+    return locOptions || [];
+  }, [isThreeLetterPrefix, locInputUpper, locOptions]);
+  const getOptionLabel = (opt) => {
+    const s = String(opt || '').toUpperCase();
+    if (/^[A-Z]{3}$/.test(s)) {
+      const nm = cityNameByCode3[s];
+      return nm ? `All locations for ${s} (${nm})` : `All locations for ${s}`;
+    }
+    if (/^[A-Z]{3}[0-9]{2}$/.test(s)) {
+      const nm = cityNameByCode3[s.slice(0, 3)];
+      return nm ? `${s} (${nm})` : s;
+    }
+    return s;
+  };
 
   React.useEffect(() => {
     let abort = false;
@@ -176,25 +206,7 @@ export default function StatisticsPage() {
           <Grid item xs={12} sm={6} md={3}><StatCard tone="secondary" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
           <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.phonesWithKEM} loading={loading} /></Grid>
         </Grid>
-        <Box sx={{ mt: 2 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>Cities</Typography>
-          {loading ? (
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} variant="rounded" width={120} height={28} />
-              ))}
-            </Box>
-          ) : (
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              {(data.cities || []).map(({ code, name }) => (
-                <Chip key={code} label={`${name} (${code})`} size="small" color="default" variant="outlined" />
-              ))}
-              {(!data.cities || data.cities.length === 0) && (
-                <Typography variant="body2" color="text.secondary">No cities found</Typography>
-              )}
-            </Box>
-          )}
-        </Box>
+  {/* Cities enumeration disabled (debug-only); keeping Total Cities stat above */}
       </Paper>
 
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
@@ -237,13 +249,14 @@ export default function StatisticsPage() {
         <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'info.main' }}>Statistics by Location</Typography>
         <Box sx={{ maxWidth: 520, mb: 2 }}>
           <Autocomplete
-            options={locOptions}
+            options={autoOptions}
             loading={locLoading}
             value={locSelected}
             freeSolo
             open={locOpen}
             onOpen={() => setLocOpen(true)}
             onClose={() => setLocOpen(false)}
+            getOptionLabel={getOptionLabel}
             onChange={(_, val) => {
               if (typeof val === 'string') {
                 const s = val.trim().toUpperCase();
