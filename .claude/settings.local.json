@@ -11,9 +11,5 @@
       "Bash(docker exec:*)"
     ],
     "deny": []
-  },
-  "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "csv-processor"
-  ]
+  }
 }
