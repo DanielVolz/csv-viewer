@@ -1,0 +1,12 @@
+# Simple OpenSearch configuration
+cluster.name: csv-viewer-cluster
+node.name: opensearch-node
+discovery.type: single-node
+bootstrap.memory_lock: true
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+
+# Disable security
+plugins.security.disabled: true

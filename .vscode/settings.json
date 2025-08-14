@@ -1,0 +1,27 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.linting.enabled": true,
+    "python.formatting.provider": "black",
+    "editor.formatOnSave": true,
+    "python.linting.pylintEnabled": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/backend/.venv/lib/python3.*/site-packages"
+    ],
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true,
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    // VS Code Jest: point to the frontend app where the tests live
+    "jest.rootPath": "frontend",
+    // Use CRA’s test runner; the trailing -- lets the extension append its own flags
+    "jest.jestCommandLine": "npm test --",
+    // Show tests in the Test Explorer and keep them running in watch mode
+    // Use the new run mode API for the Jest extension
+    "jest.runMode": {
+        "type": "watch"
+    }
+}

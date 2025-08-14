@@ -1,0 +1,139 @@
+services:
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+      args:
+        HTTP_PROXY: ${HTTP_PROXY}
+        HTTPS_PROXY: ${HTTPS_PROXY}
+        NO_PROXY: ${NO_PROXY}
+    container_name: csv-viewer-frontend-dev
+    ports:
+      - "${FRONTEND_DEV_PORT}:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/package.dev.json:/app/package.json
+      - ./frontend/package-lock.json:/app/package-lock.json
+    depends_on:
+      - backend-dev
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+      - WDS_SOCKET_PORT=0
+      - PORT=3000
+      - REACT_APP_API_URL=http://localhost:${BACKEND_DEV_PORT}
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - NO_PROXY=${NO_PROXY}
+    env_file:
+      - .env.dev
+    networks:
+      - app-network
+
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+      args:
+        HTTP_PROXY: ${HTTP_PROXY}
+        HTTPS_PROXY: ${HTTPS_PROXY}
+        NO_PROXY: ${NO_PROXY}
+    container_name: csv-viewer-backend-dev
+    ports:
+      - "${BACKEND_DEV_PORT}:${BACKEND_PORT}"
+    volumes:
+      - ./backend:/app
+      - ${CSV_FILES_DIR}:/app/data
+    environment:
+      - NODE_ENV=development
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - NO_PROXY=${NO_PROXY}
+    env_file:
+      - .env.dev
+    depends_on:
+      opensearch-dev:
+        condition: service_healthy
+      redis-dev:
+        condition: service_started
+    networks:
+      app-network:
+        aliases:
+          - backend
+
+  # Redis service - use standard redis image
+  redis-dev:
+    image: redis:7-alpine
+    container_name: redis-dev
+    ports:
+      - "${REDIS_PORT}:${REDIS_PORT}"
+    volumes:
+      - redis-data-dev:/data
+    restart: unless-stopped
+    env_file:
+      - .env.dev
+    networks:
+      app-network:
+        aliases:
+          - redis
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # OpenSearch service - use standard opensearch image
+  opensearch-dev:
+    image: opensearchproject/opensearch:2
+    container_name: opensearch-dev
+    ports:
+      - "${OPENSEARCH_PORT}:${OPENSEARCH_PORT}"
+      - "${OPENSEARCH_TRANSPORT_PORT}:${OPENSEARCH_TRANSPORT_PORT}"
+    environment:
+      - cluster.name=csv-viewer-dev-cluster
+      - node.name=opensearch-node-dev
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}"
+    env_file:
+      - .env.dev
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    volumes:
+      - opensearch-data-dev:/usr/share/opensearch/data
+      - opensearch-logs-dev:/usr/share/opensearch/logs
+    restart: unless-stopped
+    networks:
+      app-network:
+        aliases:
+          - opensearch
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+networks:
+  app-network:
+    external: true
+    name: csv-viewer_app-network
+
+volumes:
+  redis-data-dev:
+  opensearch-data-dev:
+  opensearch-logs-dev:

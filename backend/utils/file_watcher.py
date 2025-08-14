@@ -1,0 +1,190 @@
+import os
+import time
+import logging
+from pathlib import Path
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from tasks.tasks import index_csv, index_all_csv_files
+from utils.opensearch import opensearch_config
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class CSVFileHandler(FileSystemEventHandler):
+    """Handler for monitoring CSV file changes."""
+
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self.current_csv_path = self.data_dir / "netspeed.csv"
+        self.last_reindex_time = 0
+        self.reindex_cooldown = 30  # 30 seconds cooldown between reindexing
+
+    def _is_netspeed_file(self, file_path: Path) -> bool:
+        """Check if the file is a netspeed CSV file."""
+        return (file_path.name == "netspeed.csv" or
+                file_path.name.startswith("netspeed.csv.") and
+                file_path.suffix == '' and  # netspeed.csv.0, .1, etc. have no extension
+                file_path.name.replace("netspeed.csv.", "").isdigit())
+
+    def _should_trigger_reindex(self) -> bool:
+        """Check if we should trigger reindexing (cooldown check)."""
+        current_time = time.time()
+        if current_time - self.last_reindex_time > self.reindex_cooldown:
+            self.last_reindex_time = current_time
+            return True
+        return False
+
+    def on_created(self, event):
+        """Handle file creation events."""
+        if event.is_directory:
+            return
+
+        file_path = Path(event.src_path)
+
+        # Check if any netspeed file was created
+        if self._is_netspeed_file(file_path):
+            logger.info(f"New netspeed file detected: {file_path}")
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("created", str(file_path))
+
+    def on_modified(self, event):
+        """Handle file modification events."""
+        if event.is_directory:
+            return
+
+        file_path = Path(event.src_path)
+
+        # Check if any netspeed file was modified
+        if self._is_netspeed_file(file_path):
+            logger.info(f"netspeed file modified: {file_path}")
+            # Wait a moment to ensure file is completely written
+            time.sleep(2)
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("modified", str(file_path))
+
+    def on_moved(self, event):
+        """Handle file move/rename events."""
+        if event.is_directory:
+            return
+
+        src_path = Path(event.src_path)
+        dest_path = Path(event.dest_path)
+
+        # Check if any netspeed file was moved/renamed
+        if (self._is_netspeed_file(src_path) or self._is_netspeed_file(dest_path)):
+            logger.info(f"netspeed file moved/renamed: {src_path} -> {dest_path}")
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("moved", f"{src_path} -> {dest_path}")
+
+    def on_deleted(self, event):
+        """Handle file deletion events."""
+        if event.is_directory:
+            return
+
+        file_path = Path(event.src_path)
+
+        # Check if any netspeed file was deleted
+        if self._is_netspeed_file(file_path):
+            logger.info(f"netspeed file deleted: {file_path}")
+            if self._should_trigger_reindex():
+                self._handle_netspeed_files_change("deleted", str(file_path))
+
+    def _handle_netspeed_files_change(self, event_type: str, file_info: str):
+        """
+        Handle changes to netspeed files by triggering full reindexing.
+
+        Args:
+            event_type: Type of file system event (created, modified, moved, deleted)
+            file_info: Information about the file(s) involved
+        """
+        try:
+            logger.info(f"Processing netspeed files change ({event_type}): {file_info}")
+
+            # Step 1: Clean up all existing netspeed indices
+            logger.info("Cleaning up all existing netspeed indices...")
+
+            # Delete all netspeed_* indices
+            try:
+                indices_deleted = opensearch_config.cleanup_indices_by_pattern("netspeed_*")
+                logger.info(f"Successfully cleaned up {indices_deleted} netspeed indices")
+            except Exception as e:
+                logger.warning(f"Error cleaning up indices: {e}")
+
+            # Step 2: Trigger full reindexing of all CSV files
+            logger.info("Triggering full reindexing of all netspeed files...")
+            task = index_all_csv_files.delay(str(self.data_dir))
+            logger.info(f"Full reindexing task started with ID: {task.id}")
+
+        except Exception as e:
+            logger.error(f"Error handling netspeed files change: {e}")
+
+
+class FileWatcher:
+    """File system watcher for CSV files."""
+
+    def __init__(self, data_dir: str = "/app/data"):
+        self.data_dir = data_dir
+        self.observer = Observer()
+        self.handler = CSVFileHandler(data_dir)
+
+    def start(self):
+        """Start watching for file changes."""
+        try:
+            # Ensure the data directory exists
+            Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+
+            self.observer.schedule(self.handler, self.data_dir, recursive=False)
+            self.observer.start()
+            logger.info(f"File watcher started for directory: {self.data_dir}")
+
+        except Exception as e:
+            logger.error(f"Error starting file watcher: {e}")
+            raise
+
+    def stop(self):
+        """Stop watching for file changes."""
+        try:
+            self.observer.stop()
+            self.observer.join()
+            logger.info("File watcher stopped")
+        except Exception as e:
+            logger.error(f"Error stopping file watcher: {e}")
+
+    def is_alive(self):
+        """Check if the file watcher is running."""
+        return self.observer.is_alive()
+
+
+# Global file watcher instance
+file_watcher = None
+
+
+def start_file_watcher(data_dir: str = "/app/data"):
+    """
+    Start the global file watcher.
+
+    Args:
+        data_dir: Directory to watch for CSV files
+    """
+    global file_watcher
+
+    if file_watcher is None or not file_watcher.is_alive():
+        file_watcher = FileWatcher(data_dir)
+        file_watcher.start()
+        logger.info("Global file watcher started")
+    else:
+        logger.info("File watcher is already running")
+
+
+def stop_file_watcher():
+    """Stop the global file watcher."""
+    global file_watcher
+
+    if file_watcher and file_watcher.is_alive():
+        file_watcher.stop()
+        file_watcher = None
+        logger.info("Global file watcher stopped")
+    else:
+        logger.info("File watcher is not running")
