@@ -49,6 +49,7 @@ services:
       - ${CSV_FILES_DIR}:/app/data
     environment:
       - NODE_ENV=development
+      - PYTHONPATH=/app
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - NO_PROXY=${NO_PROXY}

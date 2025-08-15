@@ -49,14 +49,30 @@ show_help() {
   echo "Targets:"
   echo "  dev       Development stack (docker-compose.dev.yml)"
   echo "  prod      Production-like stack (docker-compose.prod.yml)"
-  echo "  amd64     (legacy) default docker-compose.yml"
-  echo "  arm       (legacy) docker-compose.arm.yml"
+  echo "  amd64     (legacy) default docker-compose.yml)"
+  echo "  arm       (legacy) docker-compose.arm.yml)"
   echo ""
   echo "Examples:"
   echo "  ./app.sh up dev         # Start development stack"
   echo "  ./app.sh down prod      # Stop production-like stack"
   echo "  ./app.sh restart dev    # Restart development stack"
   echo "  ./app.sh status prod    # Show status of prod stack"
+}
+
+# Restart a list of containers if they exist (POSIX-compatible)
+restart_named_if_exist() {
+  found=""
+  for n in "$@"; do
+    if docker ps -a --format '{{.Names}}' | grep -qx "$n"; then
+      found="$found $n"
+    fi
+  done
+  if [ -n "$found" ]; then
+    echo "Restarting existing containers:$found"
+    docker restart $found >/dev/null
+    return 0
+  fi
+  return 1
 }
 
 # Check if docker compose is installed
@@ -190,8 +206,37 @@ status_dev() {
 }
 
 restart_dev() {
-  down_dev
-  up_dev
+  check_docker_compose
+  check_env_file .env.dev
+  echo "🔄 Restart (dev)"
+  # Restart only services defined in the dev compose file
+  local SVCS
+  SVCS=$(docker compose -f docker-compose.dev.yml --env-file .env.dev config --services 2>/dev/null | xargs)
+  if [ -z "$SVCS" ]; then
+    echo "(no services defined in docker-compose.dev.yml)"
+    return 0
+  fi
+  # If there are no containers for this project yet, bring them up instead of no-op
+  local RUNNING
+  RUNNING=$(docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev ps -q)
+  if [ -z "$RUNNING" ]; then
+    # Try restarting known named dev containers to avoid name conflicts
+    if restart_named_if_exist opensearch-dev redis-dev csv-viewer-backend-dev csv-viewer-frontend-dev; then
+      return 0
+    fi
+    # Try default compose project (no -p)
+    local ALT_RUNNING
+    ALT_RUNNING=$(docker compose -f docker-compose.dev.yml --env-file .env.dev ps -q)
+    if [ -n "$ALT_RUNNING" ]; then
+      echo "(found existing dev containers under default project; restarting them)"
+      docker compose -f docker-compose.dev.yml --env-file .env.dev restart
+      return 0
+    fi
+    echo "(no existing dev containers found, starting stack instead)"
+    up_dev
+    return 0
+  fi
+  docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev restart
 }
 
 # New simple commands for prod stack
@@ -226,8 +271,24 @@ status_prod() {
 }
 
 restart_prod() {
-  down_prod
-  up_prod
+  check_docker_compose
+  check_env_file .env.prod
+  echo "🔄 Restart (prod)"
+  # Restart only services defined in the prod compose file
+  local SVCS
+  SVCS=$(docker compose -f docker-compose.prod.yml --env-file .env.prod config --services 2>/dev/null | xargs)
+  if [ -z "$SVCS" ]; then
+    echo "(no services defined in docker-compose.prod.yml)"
+    return 0
+  fi
+  local RUNNING
+  RUNNING=$(docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file .env.prod ps -q)
+  if [ -z "$RUNNING" ]; then
+    echo "(no existing prod containers found, starting stack instead)"
+    up_prod
+    return 0
+  fi
+  docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file .env.prod restart
 }
 
 # Stop application with AMD64 images

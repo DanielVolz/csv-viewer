@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Ensure local packages are importable (e.g., 'models', 'utils')
+export PYTHONPATH="/app:${PYTHONPATH}"
+
 # Create directory for CSV files if it doesn't exist
 echo "Ensuring data directory exists..."
 mkdir -p ./data
@@ -34,6 +37,39 @@ for i in {1..30}; do
     echo "Timed out waiting for FastAPI application to start"
   fi
 done
+
+# Wait for OpenSearch to be healthy before indexing (green or yellow)
+OS_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
+echo "Waiting for OpenSearch at $OS_URL to be healthy..."
+for i in {1..60}; do
+  if curl -s "$OS_URL/_cluster/health" | grep -q '"status":"green"\|"status":"yellow"'; then
+    echo "OpenSearch is healthy"
+    break
+  fi
+  sleep 1
+  if [ $i -eq 60 ]; then
+    echo "Timed out waiting for OpenSearch to be healthy; proceeding anyway"
+  fi
+done
+# Wait for OpenSearch to be healthy before indexing (green or yellow)
+PRIMARY_OS_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
+FALLBACK_OS_URL="http://opensearch:9200"
+HEALTHY=0
+for URL in "$PRIMARY_OS_URL" "$FALLBACK_OS_URL"; do
+  echo "Waiting for OpenSearch at $URL to be healthy..."
+  for i in {1..120}; do
+    if curl -sf "$URL/_cluster/health" | grep -q '"status":"green"\|"status":"yellow"'; then
+      echo "OpenSearch is healthy at $URL"
+      HEALTHY=1
+      break
+    fi
+    sleep 1
+  done
+  [ $HEALTHY -eq 1 ] && break
+done
+if [ $HEALTHY -ne 1 ]; then
+  echo "Timed out waiting for OpenSearch to be healthy; proceeding anyway"
+fi
 
 # Index CSV files
 echo "Indexing CSV files..."
