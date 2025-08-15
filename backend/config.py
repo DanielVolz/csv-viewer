@@ -52,8 +52,17 @@ def get_settings() -> Settings:
     # Compose service URLs
     redis_port = os.environ.get("REDIS_PORT", 6379)
     opensearch_port = os.environ.get("OPENSEARCH_PORT", 9200)
-    s.REDIS_URL = s.REDIS_URL.format(REDIS_PORT=redis_port)
-    s.OPENSEARCH_URL = s.OPENSEARCH_URL.format(OPENSEARCH_PORT=opensearch_port)
+    # Prefer explicit env overrides for URLs to allow dev/prod separation by hostname
+    explicit_redis = os.environ.get("REDIS_URL")
+    explicit_os = os.environ.get("OPENSEARCH_URL")
+    if explicit_redis:
+        s.REDIS_URL = explicit_redis
+    else:
+        s.REDIS_URL = s.REDIS_URL.format(REDIS_PORT=redis_port)
+    if explicit_os:
+        s.OPENSEARCH_URL = explicit_os
+    else:
+        s.OPENSEARCH_URL = s.OPENSEARCH_URL.format(OPENSEARCH_PORT=opensearch_port)
 
     # Use value from Settings (no env override)
     # If left empty, UI will hide rebuild controls

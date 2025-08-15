@@ -10,7 +10,7 @@ from models.file import FileModel
 from config import settings, get_settings
 from utils.csv_utils import read_csv_file, DESIRED_ORDER
 from tasks.tasks import index_all_csv_files, app
-from utils.index_state import load_state
+from utils.index_state import load_state, save_state
 from celery import current_app
 from config import settings
 
@@ -406,7 +406,64 @@ async def get_index_status():
     try:
         state = load_state()
         active = state.get("active") if isinstance(state, dict) else None
-        return {"success": True, "state": state, "active": active}
+
+        # Auto-clear stale 'running' states left from previous containers/brokers
+        try:
+            if active and active.get("status") == "running":
+                # If we can query Celery and it's not running, or if it's too old, mark as interrupted
+                too_old = False
+                try:
+                    from datetime import datetime, timezone
+                    started_at = active.get("started_at")
+                    if started_at:
+                        # Pydantic isoformat with timezone; fallback if naive
+                        try:
+                            dt = datetime.fromisoformat(started_at)
+                        except Exception:
+                            dt = None
+                        if dt:
+                            if not dt.tzinfo:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            age_sec = (datetime.now(tz=timezone.utc) - dt).total_seconds()
+                            # Consider older than 10 minutes as stale
+                            if age_sec > 10 * 60:
+                                too_old = True
+                except Exception:
+                    pass
+
+                celery_not_running = False
+                try:
+                    from celery.result import AsyncResult
+                    task_id = active.get("task_id")
+                    if task_id:
+                        r = AsyncResult(task_id)
+                        if r.state not in ("PENDING", "PROGRESS", "STARTED"):
+                            celery_not_running = True
+                except Exception:
+                    # If broker changed or unavailable, prefer time-based stale detection
+                    pass
+
+                # If the stored environment signature doesn't match this environment, clear it
+                env_mismatch = False
+                try:
+                    stored_broker = active.get("broker")
+                    stored_os = active.get("opensearch")
+                    if (stored_broker and stored_broker != settings.REDIS_URL) or (stored_os and stored_os != settings.OPENSEARCH_URL):
+                        env_mismatch = True
+                except Exception:
+                    pass
+
+                if too_old or celery_not_running or env_mismatch:
+                    active["status"] = "interrupted"
+                    if env_mismatch:
+                        active["note"] = "cleared_due_to_env_mismatch"
+                    state["active"] = active
+                    save_state(state)
+
+        except Exception:
+            pass
+
+        return {"success": True, "state": state, "active": state.get("active")}
     except Exception as e:
         logger.error(f"Error reading index state: {e}")
         raise HTTPException(status_code=500, detail="Failed to read index state")

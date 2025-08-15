@@ -1,10 +1,54 @@
 import json
 import os
+import hashlib
+from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-STATE_FILE = Path(os.environ.get("INDEX_STATE_FILE", "/app/data/.index_state.json"))
+
+def _env_host(url: str) -> str:
+    try:
+        p = urlparse(url)
+        return p.hostname or url
+    except Exception:
+        return url or ""
+
+
+def _compute_state_file() -> Path:
+    """Resolve a per-environment state file path.
+
+    Priority:
+    1) INDEX_STATE_FILE env var (explicit override)
+    2) Namespaced file under /app/data based on Redis/OpenSearch hosts
+    3) Fallback legacy path /app/data/.index_state.json
+    """
+    override = os.environ.get("INDEX_STATE_FILE")
+    if override:
+        return Path(override)
+
+    # Store state inside the container/repo, not in the mounted CSV directory
+    base_dir = Path("/app/var/index_state")
+    try:
+        # Late import to avoid circulars in some contexts
+        from config import settings as _settings
+        redis_url = getattr(_settings, "REDIS_URL", "") or ""
+        os_url = getattr(_settings, "OPENSEARCH_URL", "") or ""
+    except Exception:
+        redis_url = os.environ.get("REDIS_URL", "")
+        os_url = os.environ.get("OPENSEARCH_URL", "")
+
+    key = f"{_env_host(redis_url)}|{_env_host(os_url)}".strip()
+    if key:
+        h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+        name = f".index_state.{h}.json"
+    else:
+        # No env info available; use legacy name
+        name = ".index_state.json"
+    return base_dir / name
+
+
+STATE_FILE = _compute_state_file()
 
 def _now_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()

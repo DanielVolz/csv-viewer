@@ -5,6 +5,9 @@ set -e
 echo "Ensuring data directory exists..."
 mkdir -p ./data
 
+# Ensure local index state directory exists (container-local, not in mounted CSV path)
+mkdir -p /app/var/index_state || true
+
 # Start Celery worker in the background
 echo "Starting Celery worker..."
 # Run without forcing nobody user so state file can be written if volume permissions require it

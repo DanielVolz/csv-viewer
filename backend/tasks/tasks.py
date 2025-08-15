@@ -6,6 +6,7 @@ from typing import Optional, Dict, List
 from utils.opensearch import opensearch_config
 from datetime import datetime
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
+from utils.csv_utils import read_csv_file_normalized
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,55 @@ def index_csv(file_path: str) -> dict:
         success, count = opensearch_config.index_csv_file(file_path)
 
         if success:
+            # Best-effort: persist stats snapshot for this file
+            try:
+                from models.file import FileModel as _FM
+                fm = _FM.from_path(file_path)
+                date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+                _, _rows = read_csv_file_normalized(file_path)
+                total_phones = len(_rows)
+                switches = set()
+                locations = set()
+                city_codes = set()
+                phones_with_kem = 0
+                model_counts: Dict[str, int] = {}
+                for r in _rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if sh:
+                        switches.add(sh)
+                        try:
+                            from api.stats import extract_location
+                            loc = extract_location(sh)
+                            if loc:
+                                locations.add(loc)
+                                city_codes.add(loc[:3])
+                        except Exception:
+                            pass
+                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                        phones_with_kem += 1
+                    model = (r.get("Model Name") or "").strip() or "Unknown"
+                    if model != "Unknown":
+                        model_counts[model] = model_counts.get(model, 0) + 1
+                phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                metrics = {
+                    "totalPhones": total_phones,
+                    "totalSwitches": len(switches),
+                    "totalLocations": len(locations),
+                    "totalCities": len(city_codes),
+                    "phonesWithKEM": phones_with_kem,
+                    "phonesByModel": phones_by_model,
+                    "cityCodes": sorted(list(city_codes)),
+                }
+                opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+            except Exception as _e:
+                logger.debug(f"Stats snapshot failed for {file_path}: {_e}")
+            # Best-effort: persist full archive snapshot
+            try:
+                if '_rows' not in locals():
+                    _, _rows = read_csv_file_normalized(file_path)
+                opensearch_config.index_archive_snapshot(file=fm.name, date=date_str, rows=_rows)
+            except Exception as _e:
+                logger.debug(f"Archive snapshot failed for {file_path}: {_e}")
             return {
                 "status": "success",
                 "message": f"Successfully indexed {count} documents from {file_path}",
@@ -58,8 +108,8 @@ def index_csv(file_path: str) -> dict:
         }
 
 
-@app.task(name='tasks.index_all_csv_files')
-def index_all_csv_files(directory_path: str) -> dict:
+@app.task(bind=True, name='tasks.index_all_csv_files')
+def index_all_csv_files(self, directory_path: str) -> dict:
     """
     Task to index all CSV files in a directory.
 
@@ -108,9 +158,31 @@ def index_all_csv_files(directory_path: str) -> dict:
 
         # Send initial progress and persist an active record
         try:
-            task_id = os.environ.get('CELERY_TASK_ID', 'manual')
+            task_id = getattr(self.request, 'id', os.environ.get('CELERY_TASK_ID', 'manual'))
             start_active(index_state, task_id, len(ordered_files))
             save_state(index_state)
+            # Attach environment signature for isolation (dev vs prod): broker & opensearch URLs
+            try:
+                from config import settings as _settings
+                update_active(index_state,
+                              broker=_settings.REDIS_URL,
+                              opensearch=_settings.OPENSEARCH_URL)
+                save_state(index_state)
+            except Exception:
+                pass
+            # Also expose Celery PROGRESS meta for /api/search/index/status/{task_id}
+            try:
+                self.update_state(state='PROGRESS', meta={
+                    "task_id": task_id,
+                    "status": "running",
+                    "current_file": None,
+                    "index": 0,
+                    "total_files": len(ordered_files),
+                    "documents_indexed": 0,
+                    "last_file_docs": 0,
+                })
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f"Initial progress update failed: {e}")
 
@@ -118,6 +190,27 @@ def index_all_csv_files(directory_path: str) -> dict:
 
         for i, file_path in enumerate(ordered_files):
             logger.info(f"Processing file {i+1}/{len(ordered_files)}: {file_path}")
+            # Emit a pre-index progress update so UI immediately shows the current file
+            try:
+                update_active(index_state,
+                              current_file=file_path.name,
+                              index=i + 1,
+                              last_file_docs=0)
+                save_state(index_state)
+                try:
+                    self.update_state(state='PROGRESS', meta={
+                        "task_id": getattr(self.request, 'id', None),
+                        "status": "running",
+                        "current_file": file_path.name,
+                        "index": i + 1,
+                        "total_files": len(ordered_files),
+                        "documents_indexed": total_documents,
+                        "last_file_docs": 0,
+                    })
+                except Exception:
+                    pass
+            except Exception:
+                pass
             try:
                 success, count = opensearch_config.index_csv_file(str(file_path))
                 total_documents += count
@@ -145,6 +238,60 @@ def index_all_csv_files(directory_path: str) -> dict:
                 })
                 logger.info(f"Completed {file_path}: {count} documents indexed")
 
+                # Persist a stats snapshot for timeline (best-effort)
+                try:
+                    from models.file import FileModel as _FM
+                    fm = _FM.from_path(str(file_path))
+                    date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+                    # Compute metrics from normalized CSV (local, no opensearch read)
+                    _, _rows = read_csv_file_normalized(str(file_path))
+                    # Minimal recomputation to avoid duplicating logic
+                    total_phones = len(_rows)
+                    switches = set()
+                    locations = set()
+                    city_codes = set()
+                    phones_with_kem = 0
+                    model_counts: Dict[str, int] = {}
+                    for r in _rows:
+                        sh = (r.get("Switch Hostname") or "").strip()
+                        if sh:
+                            switches.add(sh)
+                            # Reuse extract_location from stats via a local import
+                            try:
+                                from api.stats import extract_location
+                                loc = extract_location(sh)
+                                if loc:
+                                    locations.add(loc)
+                                    city_codes.add(loc[:3])
+                            except Exception:
+                                pass
+                        if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                            phones_with_kem += 1
+                        model = (r.get("Model Name") or "").strip() or "Unknown"
+                        if model != "Unknown":
+                            model_counts[model] = model_counts.get(model, 0) + 1
+                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                    metrics = {
+                        "totalPhones": total_phones,
+                        "totalSwitches": len(switches),
+                        "totalLocations": len(locations),
+                        "totalCities": len(city_codes),
+                        "phonesWithKEM": phones_with_kem,
+                        "phonesByModel": phones_by_model,
+                        "cityCodes": sorted(list(city_codes)),
+                    }
+                    opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+                except Exception as _e:
+                    logger.debug(f"Stats snapshot failed for {file_path}: {_e}")
+
+                # Persist a full archive snapshot of rows (best-effort, excludes external city names)
+                try:
+                    if '_rows' not in locals():
+                        _, _rows = read_csv_file_normalized(str(file_path))
+                    opensearch_config.index_archive_snapshot(file=file_path.name, date=date_str, rows=_rows)
+                except Exception as _e:
+                    logger.debug(f"Archive snapshot failed for {file_path}: {_e}")
+
                 # Progress update (persist)
                 try:
                     update_active(index_state,
@@ -155,6 +302,19 @@ def index_all_csv_files(directory_path: str) -> dict:
                     save_state(index_state)
                 except Exception as e:
                     logger.debug(f"Progress update failed: {e}")
+                # Emit Celery PROGRESS meta for UI polling
+                try:
+                    self.update_state(state='PROGRESS', meta={
+                        "task_id": task_id,
+                        "status": "running",
+                        "current_file": file_path.name,
+                        "index": i + 1,
+                        "total_files": len(ordered_files),
+                        "documents_indexed": total_documents,
+                        "last_file_docs": count,
+                    })
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"Error indexing {file_path}: {e}")
                 results.append({

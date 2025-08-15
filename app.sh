@@ -2,10 +2,14 @@
 set -e
 
 # This script provides a unified interface for managing the CSV Viewer application
-# Usage: ./app.sh [start|stop] [amd64|arm|dev]
-#   - First argument: action (start or stop)
-#   - Second argument: architecture (amd64, arm, or dev)
-#   - If no architecture is specified, amd64 is used by default
+# New simple mode:
+#   ./app.sh up   dev|prod
+#   ./app.sh down dev|prod
+#   ./app.sh restart dev|prod
+#   ./app.sh status dev|prod
+#
+# Backward-compatible mode (legacy):
+#   ./app.sh start|stop [amd64|arm|dev]
 
 # Display usage banner for default help
 if [ -z "$1" ]; then
@@ -18,31 +22,41 @@ fi
 
 # Default values
 ACTION=${1:-help}
-ARCH=${2:-amd64}
+TARGET=${2:-}
+DEV_PROJECT="csv-viewer-dev"
+PROD_PROJECT="csv-viewer-prod"
 
 # Help function
 show_help() {
   echo "CSV Viewer Application Manager"
   echo ""
-  echo "Usage: ./app.sh [start|stop|status] [amd64|arm|dev]"
+  echo "Usage:"
+  echo "  Simple (recommended):"
+  echo "    ./app.sh up|down|restart|status dev|prod"
+  echo ""
+  echo "  Legacy (still works):"
+  echo "    ./app.sh start|stop|status [amd64|arm|dev]"
   echo ""
   echo "Commands:"
-  echo "  start     Start the application"
-  echo "  stop      Stop the application"
+  echo "  up        Start services"
+  echo "  down      Stop services"
+  echo "  restart   Restart services (down+up)"
   echo "  status    Show the application status"
+  echo "  start     (legacy) Start services"
+  echo "  stop      (legacy) Stop services"
   echo "  help      Show this help message"
   echo ""
-  echo "Architectures:"
-  echo "  amd64     AMD64 architecture (default)"
-  echo "  arm       ARM architecture"
-  echo "  dev       Development environment"
+  echo "Targets:"
+  echo "  dev       Development stack (docker-compose.dev.yml)"
+  echo "  prod      Production-like stack (docker-compose.prod.yml)"
+  echo "  amd64     (legacy) default docker-compose.yml"
+  echo "  arm       (legacy) docker-compose.arm.yml"
   echo ""
   echo "Examples:"
-  echo "  ./app.sh start          # Start application with AMD64 images (default)"
-  echo "  ./app.sh start arm      # Start application with ARM images"
-  echo "  ./app.sh stop           # Stop application with AMD64 images (default)"
-  echo "  ./app.sh stop arm       # Stop application with ARM images"
-  echo "  ./app.sh status         # Show status of all application components"
+  echo "  ./app.sh up dev         # Start development stack"
+  echo "  ./app.sh down prod      # Stop production-like stack"
+  echo "  ./app.sh restart dev    # Restart development stack"
+  echo "  ./app.sh status prod    # Show status of prod stack"
 }
 
 # Check if docker compose is installed
@@ -55,8 +69,10 @@ check_docker_compose() {
 
 # Check if .env file exists
 check_env_file() {
-  if [ ! -f .env ]; then
-    echo "❌ .env file not found. Please create one based on .env.example."
+  local file="$1"
+  if [ -z "$file" ]; then file=".env"; fi
+  if [ ! -f "$file" ]; then
+    echo "❌ $file file not found."
     exit 1
   fi
 }
@@ -64,6 +80,14 @@ check_env_file() {
 # Make sure data directory exists
 ensure_data_dir() {
   mkdir -p ./data
+}
+
+# Ensure dev network exists (docker-compose.dev.yml uses external network csv-viewer_app-network)
+ensure_dev_network() {
+  if ! docker network inspect csv-viewer_app-network >/dev/null 2>&1; then
+    echo "🔧 Creating dev Docker network csv-viewer_app-network"
+    docker network create csv-viewer_app-network >/dev/null
+  fi
 }
 
 # Start application with AMD64 images
@@ -89,15 +113,22 @@ start_amd64() {
 
 # Start application with ARM images
 start_arm() {
-  echo "🚀 Starting CSV Viewer application (ARM version)..."
-  echo "📋 Using configuration from docker-compose.arm.yml"
-
-  # Pull images from Docker Hub
-  echo "📥 Pulling images from Docker Hub..."
-  docker compose -f docker-compose.arm.yml pull
+  echo "🚀 Starting CSV Viewer application (Development mode)..."
+  echo "📋 Using configuration from docker-compose.dev.yml"
 
   # Start the application
   echo "🏁 Starting application services..."
+  ensure_dev_network
+  docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev up -d
+
+  # Show status with dev-specific ports from .env.dev if available
+  set +u
+  set -a; . ./.env.dev 2>/dev/null || true; set +a
+  echo "✅ Application started in development mode! You can access it at:"
+  echo "   Frontend: http://localhost:${FRONTEND_DEV_PORT:-3000}"
+  echo "   Backend API: http://localhost:${BACKEND_DEV_PORT:-8000}"
+  echo ""
+  echo "📊 To view logs, run: docker compose -f docker-compose.dev.yml logs -f"
   docker compose -f docker-compose.arm.yml up -d
 
   # Show status
@@ -110,19 +141,93 @@ start_arm() {
 
 # Start application in development mode
 start_dev() {
-  echo "🚀 Starting CSV Viewer application (Development mode)..."
-  echo "📋 Using configuration from docker-compose.dev.yml"
-
-  # Start the application
-  echo "🏁 Starting application services..."
-  docker compose -f docker-compose.dev.yml up -d
-
-  # Show status
+  echo "� Status (dev)"
+  docker ps \
+    --filter "label=com.docker.compose.project=$DEV_PROJECT" \
+    --format 'table {{.Names}}\t{{.Image}}\t{{.Label "com.docker.compose.service"}}\t{{.Status}}\t{{.Ports}}'
   echo "✅ Application started in development mode! You can access it at:"
   echo "   Frontend: http://localhost:${FRONTEND_PORT:-3001}"  # Use env variable with fallback
   echo "   Backend API: http://localhost:${BACKEND_PORT}"
   echo ""
   echo "📊 To view logs, run: docker compose -f docker-compose.dev.yml logs -f"
+}
+
+# New simple commands for dev stack
+up_dev() {
+  check_docker_compose
+  check_env_file .env.dev
+  ensure_dev_network
+  echo "🚀 Up (dev)"
+  docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev up -d
+  # Load ports for nicer output
+  set +u
+  set -a; . ./.env.dev 2>/dev/null || true; set +a
+  echo "✅ Dev started:"
+  echo "   Frontend: http://localhost:${FRONTEND_DEV_PORT:-3000}"
+  echo "   Backend API: http://localhost:${BACKEND_DEV_PORT:-8000}"
+}
+
+down_dev() {
+  check_docker_compose
+  echo "🛑 Down (dev)"
+  # Try named project first
+  if ! docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev down 2>/dev/null; then
+    echo "ℹ️  No services under project $DEV_PROJECT or compose returned error. Trying legacy project..."
+    docker compose -f docker-compose.dev.yml --env-file .env.dev down || true
+  fi
+}
+
+status_dev() {
+  echo "📊 Status (dev)"
+  # List only services defined in the dev compose file
+  local SVCS
+  SVCS=$(docker compose -f docker-compose.dev.yml --env-file .env.dev config --services 2>/dev/null | xargs)
+  if [ -z "$SVCS" ]; then
+    echo "(no services defined in docker-compose.dev.yml)"
+    return 0
+  fi
+  docker compose -f docker-compose.dev.yml --env-file .env.dev ps $SVCS
+}
+
+restart_dev() {
+  down_dev
+  up_dev
+}
+
+# New simple commands for prod stack
+up_prod() {
+  check_docker_compose
+  check_env_file .env.prod
+  echo "🚀 Up (prod)"
+  docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file .env.prod up -d
+  set +u
+  set -a; . ./.env.prod 2>/dev/null || true; set +a
+  echo "✅ Prod started:"
+  echo "   Frontend: http://localhost:${FRONTEND_PORT:-8123}"
+  echo "   Backend API: http://localhost:${BACKEND_PORT:-8001}"
+}
+
+down_prod() {
+  check_docker_compose
+  echo "🛑 Down (prod)"
+  docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file .env.prod down
+}
+
+status_prod() {
+  echo "📊 Status (prod)"
+  # List only services defined in the prod compose file
+  local SVCS
+  SVCS=$(docker compose -f docker-compose.prod.yml --env-file .env.prod config --services 2>/dev/null | xargs)
+  if [ -z "$SVCS" ]; then
+    echo "(no services defined in docker-compose.prod.yml)"
+    return 0
+  fi
+  docker compose -f docker-compose.prod.yml --env-file .env.prod ps $SVCS
+}
+
+restart_prod() {
+  down_prod
+  up_prod
 }
 
 # Stop application with AMD64 images
@@ -142,7 +247,7 @@ stop_arm() {
 # Stop application in development mode
 stop_dev() {
   echo "🛑 Stopping CSV Viewer application (Development mode)..."
-  docker compose -f docker-compose.dev.yml down
+  docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev down
   echo "✅ Application stopped successfully!"
 }
 
@@ -177,12 +282,40 @@ show_status() {
 
 # Main execution
 case "$ACTION" in
+  up)
+    case "$TARGET" in
+      dev) up_dev ;;
+      prod) up_prod ;;
+      *) show_help; exit 1 ;;
+    esac
+    ;;
+  down)
+    case "$TARGET" in
+      dev) down_dev ;;
+      prod) down_prod ;;
+      *) show_help; exit 1 ;;
+    esac
+    ;;
+  restart)
+    case "$TARGET" in
+      dev) restart_dev ;;
+      prod) restart_prod ;;
+      *) show_help; exit 1 ;;
+    esac
+    ;;
+  status)
+    case "$TARGET" in
+      dev) status_dev ;;
+      prod) status_prod ;;
+      *) show_status ;;
+    esac
+    ;;
   start)
     check_docker_compose
-    check_env_file
+    check_env_file .env
     ensure_data_dir
 
-    case "$ARCH" in
+    case "$TARGET" in
       amd64)
         start_amd64
         ;;
@@ -203,7 +336,7 @@ case "$ACTION" in
   stop)
     check_docker_compose
 
-    case "$ARCH" in
+    case "$TARGET" in
       amd64)
         stop_amd64
         ;;
@@ -221,7 +354,7 @@ case "$ACTION" in
     esac
     ;;
 
-  status)
+  status_legacy)
     show_status
     ;;
 

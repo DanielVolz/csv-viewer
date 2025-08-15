@@ -113,6 +113,57 @@ class OpenSearchConfig:
             }
         }
 
+        # Separate index for persisted time-series snapshots (not prefixed with 'netspeed_')
+        self.stats_index = "stats_netspeed"
+        self.stats_index_mappings = {
+            "mappings": {
+                "dynamic": "true",
+                "properties": {
+                    "file": {"type": "keyword"},
+                    "date": {"type": "date", "format": "yyyy-MM-dd"},
+                    "totalPhones": {"type": "long"},
+                    "totalSwitches": {"type": "long"},
+                    "totalLocations": {"type": "long"},
+                    "totalCities": {"type": "long"},
+                    "phonesWithKEM": {"type": "long"},
+                    "phonesByModel": {
+                        "type": "nested",
+                        "properties": {
+                            "model": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "cityCodes": {"type": "keyword"}
+                }
+            },
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "refresh_interval": "30s"
+            }
+        }
+
+        # Archive index to persist full daily snapshots of netspeed.csv
+        # Not deleted by file watcher (it only deletes netspeed_* patterns)
+        self.archive_index = "archive_netspeed"
+        # Build archive mappings by copying netspeed mappings and adding snapshot fields
+        archive_props = dict(self.index_mappings["mappings"]["properties"])  # shallow copy
+        archive_props.update({
+            "snapshot_date": {"type": "date", "format": "yyyy-MM-dd"},
+            "snapshot_file": {"type": "keyword"}
+        })
+        self.archive_index_mappings = {
+            "mappings": {
+                "dynamic": "true",
+                "properties": archive_props
+            },
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "refresh_interval": "30s"
+            }
+        }
+
     @property
     def client(self) -> OpenSearch:
         """
@@ -233,6 +284,39 @@ class OpenSearchConfig:
             logger.error(f"Error creating index {index_name}: {e}")
             return False
 
+    def create_stats_index(self) -> bool:
+        """Create the stats timeline index if it doesn't exist."""
+        try:
+            if self.client.indices.exists(index=self.stats_index):
+                return True
+            self.client.indices.create(index=self.stats_index, body=self.stats_index_mappings)
+            logger.info(f"Created stats index {self.stats_index}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating stats index {self.stats_index}: {e}")
+            return False
+
+    def index_stats_snapshot(self, *, file: str, date: str | None, metrics: dict) -> bool:
+        """Index a single timeline snapshot document.
+
+        Args:
+            file: filename (e.g., netspeed.csv or netspeed.csv.N)
+            date: ISO date YYYY-MM-DD
+            metrics: flat dict with numeric metrics and lists for by-model/city codes
+        """
+        try:
+            self.create_stats_index()
+            # Use deterministic id to avoid duplicates if re-run: file + date
+            doc_id = None
+            if date:
+                doc_id = f"{file}:{date}"
+            body = {"file": file, "date": date, **metrics}
+            self.client.index(index=self.stats_index, id=doc_id, body=body)
+            return True
+        except Exception as e:
+            logger.error(f"Error indexing stats snapshot for {file}@{date}: {e}")
+            return False
+
     def delete_index(self, index_name: str) -> bool:
         """
         Delete an OpenSearch index.
@@ -259,6 +343,105 @@ class OpenSearchConfig:
             logger.error(f"Error deleting index {index_name}: {e}")
             return False
 
+    def create_archive_index(self) -> bool:
+        """Create the archive index if it doesn't exist."""
+        try:
+            if self.client.indices.exists(index=self.archive_index):
+                return True
+            self.client.indices.create(index=self.archive_index, body=self.archive_index_mappings)
+            logger.info(f"Created archive index {self.archive_index}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating archive index {self.archive_index}: {e}")
+            return False
+
+    def index_archive_snapshot(self, *, file: str, date: str | None, rows: List[Dict[str, Any]]) -> Tuple[bool, int]:
+        """Persist a full snapshot of rows for a given file/date into the archive index.
+
+        This deletes any existing snapshot for the same file+date, then bulk-indexes the rows
+        with additional fields snapshot_date and snapshot_file. Uses sequential ids for idempotency.
+        """
+        try:
+            if not self.create_archive_index():
+                return False, 0
+            # Retention: keep only the last 4 years (approx). Best-effort cleanup.
+            try:
+                self.purge_archive_older_than_years(4)
+            except Exception:
+                pass
+            snapshot_date = date or datetime.utcnow().strftime('%Y-%m-%d')
+            # Delete existing snapshot docs (best-effort)
+            try:
+                self.client.delete_by_query(
+                    index=self.archive_index,
+                    body={
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    {"term": {"snapshot_file": file}},
+                                    {"term": {"snapshot_date": snapshot_date}}
+                                ]
+                            }
+                        }
+                    }
+                )
+            except Exception:
+                pass
+
+            def _actions() -> Generator[Dict[str, Any], None, None]:
+                for i, r in enumerate(rows, start=1):
+                    # Ensure string values; keep existing fields
+                    doc = {k: (str(v) if v is not None else "") for k, v in r.items()}
+                    doc["snapshot_date"] = snapshot_date
+                    doc["snapshot_file"] = file
+                    yield {
+                        "_index": self.archive_index,
+                        "_id": f"{file}:{snapshot_date}:{i}",
+                        "_source": doc
+                    }
+
+            success, failed = helpers.bulk(
+                self.client,
+                _actions(),
+                chunk_size=1000,
+                max_chunk_bytes=10 * 1024 * 1024,
+                request_timeout=60,
+                refresh=False
+            )
+            self.client.indices.refresh(index=self.archive_index)
+            if failed:
+                logger.warning(f"Archive snapshot had {failed} failed docs for {file}@{snapshot_date}")
+            return True, success
+        except Exception as e:
+            logger.error(f"Error indexing archive snapshot for {file}@{date}: {e}")
+            return False, 0
+
+    def purge_archive_older_than_years(self, years: int) -> int:
+        """Delete archived snapshot docs older than the specified number of years.
+
+        Returns number of deleted docs (best-effort; 0 if unknown).
+        """
+        try:
+            from datetime import timedelta
+            # Approximate 4 years as 1461 days (365*4 + 1 leap)
+            days = max(1, int(years * 365 + years // 4))
+            cutoff = (datetime.utcnow().date() - timedelta(days=days)).strftime('%Y-%m-%d')
+            body = {
+                "query": {
+                    "range": {
+                        "snapshot_date": {"lt": cutoff}
+                    }
+                }
+            }
+            res = self.client.delete_by_query(index=self.archive_index, body=body)
+            deleted = int(res.get('deleted', 0)) if isinstance(res, dict) else 0
+            if deleted:
+                logger.info(f"Purged {deleted} archived docs older than {cutoff}")
+            return deleted
+        except Exception as e:
+            logger.warning(f"Failed to purge archive older than {years} years: {e}")
+            return 0
+
     def cleanup_indices_by_pattern(self, pattern: str) -> int:
         """
         Delete all indices matching a pattern.
@@ -271,7 +454,10 @@ class OpenSearchConfig:
         """
         try:
             # Get all indices matching the pattern
-            response = self.client.indices.get(index=pattern, ignore=[404])
+            try:
+                response = self.client.indices.get(index=pattern)
+            except Exception:
+                response = {}
 
             if not response or response == {}:
                 logger.info(f"No indices found matching pattern: {pattern}")

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import logging
 
 from models.file import FileModel
@@ -179,6 +179,193 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
     except Exception as e:
         logger.error(f"Error computing stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to compute statistics")
+
+
+def _compute_basic_stats(rows: List[Dict]) -> Tuple[int, int, int, int, List[Dict], List[str]]:
+    """Return core metrics from normalized rows.
+
+    Returns: (total_phones, total_switches, total_locations, total_cities, phones_by_model, city_codes_sorted)
+    """
+    total_phones = len(rows)
+    switches = set()
+    phones_with_kem = 0
+    model_counts: Dict[str, int] = {}
+    locations = set()
+    city_codes = set()
+
+    for r in rows:
+        sh = (r.get("Switch Hostname") or "").strip()
+        if sh:
+            switches.add(sh)
+            loc = extract_location(sh)
+            if loc:
+                locations.add(loc)
+                city_codes.add(loc[:3])
+
+        if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+            phones_with_kem += 1
+
+        model = (r.get("Model Name") or "").strip() or "Unknown"
+        if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
+            continue
+        model_counts[model] = model_counts.get(model, 0) + 1
+
+    phones_by_model = [
+        {"model": m, "count": c} for m, c in model_counts.items()
+    ]
+    phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+    return (
+        total_phones,
+        len(switches),
+        len(locations),
+        len(city_codes),
+        phones_by_model,
+        sorted(list(city_codes)),
+    )
+
+
+@router.get("/timeline")
+async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> Dict:
+    """Build a time series of key metrics across netspeed files.
+
+    - Scans /app/data for netspeed.csv and netspeed.csv.N files (optionally backups).
+    - Computes basic metrics per file and returns a sorted timeline by date.
+    - If limit > 0, return the most recent N entries.
+    """
+    try:
+        data_dir = Path("/app/data")
+        if not data_dir.exists():
+            return {"success": True, "message": "No data directory", "series": []}
+
+        candidates: List[Path] = []
+        for p in data_dir.glob("netspeed.csv*"):
+            name = p.name
+            if not include_backups and (name.endswith("_bak") or name == "netspeed.csv_bak"):
+                continue
+            # Only accept base and numeric suffix variants
+            if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.replace("netspeed.csv.", "").isdigit()):
+                candidates.append(p)
+
+        series = []
+        for file_path in candidates:
+            try:
+                # resolve date via FileModel
+                fm = FileModel.from_path(str(file_path))
+                date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+                # read & compute
+                _, rows = read_csv_file_normalized(str(file_path))
+                (total_phones, total_switches, total_locations, total_cities, phones_by_model, city_codes) = _compute_basic_stats(rows)
+                series.append({
+                    "file": fm.name,
+                    "date": date_str,
+                    "metrics": {
+                        "totalPhones": total_phones,
+                        "totalSwitches": total_switches,
+                        "totalLocations": total_locations,
+                        "totalCities": total_cities,
+                        "phonesWithKEM": sum(1 for r in rows if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip()),
+                        "phonesByModel": phones_by_model,
+                        # City names resolved at read-time from mapping; no need to persist
+                        "cityCodes": [
+                            {"code": c, "name": resolve_city_name(c)} for c in city_codes
+                        ],
+                    }
+                })
+            except Exception as _e:
+                # Skip problematic files but keep timeline building
+                continue
+
+        # If filesystem has no candidates, fall back to persisted OpenSearch snapshots
+        if not series:
+            try:
+                from utils.opensearch import opensearch_config
+                # Query all snapshot docs; sort ascending by date then file
+                body = {
+                    "size": 10000,
+                    "sort": [
+                        {"date": {"order": "asc", "missing": "_last"}},
+                        {"file.keyword": {"order": "asc"}}
+                    ],
+                    "query": {"match_all": {}},
+                    "_source": True,
+                }
+                res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body)
+                hits = res.get("hits", {}).get("hits", [])
+                for h in hits:
+                    s = h.get("_source", {})
+                    date_str = s.get("date")
+                    file_name = s.get("file")
+                    # Rebuild metrics into the same shape
+                    metrics = {
+                        "totalPhones": s.get("totalPhones", 0),
+                        "totalSwitches": s.get("totalSwitches", 0),
+                        "totalLocations": s.get("totalLocations", 0),
+                        "totalCities": s.get("totalCities", 0),
+                        "phonesWithKEM": s.get("phonesWithKEM", 0),
+                        "phonesByModel": s.get("phonesByModel", []),
+                        # If old snapshots contained codes, map to names; else leave empty (not persisted)
+                        "cityCodes": [
+                            {"code": c, "name": resolve_city_name(c)} for c in (s.get("cityCodes") or [])
+                        ],
+                    }
+                    series.append({"file": file_name, "date": date_str, "metrics": metrics})
+            except Exception:
+                # If OpenSearch not available, keep empty series
+                pass
+
+    # sort by date, then by filename fallback
+        def k(item):
+            d = item.get("date") or ""
+            return (d, item.get("file"))
+
+        series.sort(key=k)
+        if limit and limit > 0:
+            series = series[-limit:]
+
+        return {"success": True, "message": f"Computed {len(series)} timeline points", "series": series}
+    except Exception as e:
+        logger.error(f"Error building stats timeline: {e}")
+        raise HTTPException(status_code=500, detail="Failed to build stats timeline")
+
+
+@router.get("/archive")
+async def get_archive(date: str, file: str | None = None, size: int = 1000) -> Dict:
+    """Return archived rows for a specific snapshot date (and optional file name).
+
+    Args:
+        date: YYYY-MM-DD snapshot date
+        file: optional file variant (e.g., netspeed.csv or netspeed.csv.3)
+        size: max docs to return (default 1000)
+    """
+    try:
+        from utils.opensearch import opensearch_config
+        # If archive index doesn't exist yet, return empty set gracefully
+        try:
+            if not opensearch_config.client.indices.exists(index=opensearch_config.archive_index):
+                return {"success": True, "date": date, "file": file, "count": 0, "data": []}
+        except Exception:
+            # If existence check fails (e.g., OS down), return empty success to avoid 500s
+            return {"success": True, "date": date, "file": file, "count": 0, "data": []}
+
+        must_filters = [
+            {"range": {"snapshot_date": {"gte": date, "lte": date}}}
+        ]
+        if file:
+            must_filters.append({"term": {"snapshot_file": {"value": file}}})
+        body = {
+            "size": max(1, min(size, 10000)),
+            "query": {"bool": {"filter": must_filters}},
+            "_source": True,
+            "sort": [{"_id": {"order": "asc"}}]
+        }
+        res = opensearch_config.client.search(index=opensearch_config.archive_index, body=body)
+        hits = res.get("hits", {}).get("hits", [])
+        data = [h.get("_source", {}) for h in hits]
+        return {"success": True, "date": date, "file": file, "count": len(data), "data": data}
+    except Exception as e:
+        logger.error(f"Error reading archive {date}/{file}: {e}")
+        # Return empty but successful to avoid breaking UI; user can investigate OS connectivity
+        return {"success": True, "date": date, "file": file, "count": 0, "data": []}
 
 
 @router.get("/cities/debug")
