@@ -273,14 +273,17 @@ def _compute_basic_stats(rows: List[Dict]) -> Tuple[int, int, int, int, List[Dic
 
 @router.get("/timeline")
 async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> Dict:
-    """Build a time series of key metrics across netspeed files.
+    """Build a time series of key metrics across netspeed files (snapshot-only).
 
-    - Scans /app/data for netspeed.csv and netspeed.csv.N files (optionally backups).
-    - Computes basic metrics per file and returns a sorted timeline by date.
-    - If limit > 0, return the most recent N entries.
+    Behavior change: the series always starts at the earliest available date and
+    continues day-by-day to the latest date, carrying forward metrics for
+    missing days. If limit > 0, the series is truncated to the first `limit`
+    days (still starting from the earliest date). If limit == 0, return full
+    history.
     """
     try:
-        eff_limit = limit if limit and limit > 0 else 31
+        # limit==0 means full history; otherwise truncate to first N days from earliest
+        eff_limit = limit if limit and limit > 0 else 0
         now = time.time()
         cached = _TIMELINE_CACHE.get(eff_limit)
         if cached and cached[0] > now:
@@ -288,13 +291,29 @@ async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> D
 
         # Only use OpenSearch snapshots, never CSV fallback
         from utils.opensearch import opensearch_config
-        # Fetch more hits than limit to cover potential duplicates per date and then collapse
-        max_docs = max(200, eff_limit * 8)
+        # Fetch many hits but respect default max_result_window (10k)
+        max_docs = 10000
+        # If stats index is missing, try an on-demand backfill once, then continue
+        try:
+            exists_stats = opensearch_config.client.indices.exists(index=opensearch_config.stats_index)
+        except Exception:
+            exists_stats = False
+        if not exists_stats:
+            try:
+                from tasks.tasks import backfill_stats_snapshots
+                backfill_stats_snapshots("/app/data")
+                try:
+                    opensearch_config.client.indices.refresh(index=opensearch_config.stats_index)
+                except Exception:
+                    pass
+            except Exception:
+                # proceed; query below will just yield empty
+                pass
         body = {
             "size": max_docs,
             "sort": [
-                {"date": {"order": "desc", "missing": "_last"}},
-                {"file": {"order": "desc"}}
+                {"date": {"order": "asc", "missing": "_last"}},
+                {"file": {"order": "desc"}}  # prefer netspeed.csv when collapsing
             ],
             "query": {"match_all": {}},
             "_source": [
@@ -311,7 +330,7 @@ async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> D
             f = s.get("file") or ""
             if not d:
                 continue
-            if d not in by_date or (f == "netspeed.csv" and by_date.get(d, {}).get("file") != "netspeed.csv"):
+            if d not in by_date:
                 by_date[d] = {
                     "file": f,
                     "date": d,
@@ -325,10 +344,45 @@ async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> D
                         "cityCodes": [],
                     }
                 }
-        # Build chronological series of last eff_limit unique dates
-        unique_dates = sorted(by_date.keys())
-        tail_dates = unique_dates[-eff_limit:]
-        series: List[Dict] = [by_date[d] for d in tail_dates]
+            elif f == "netspeed.csv" and by_date.get(d, {}).get("file") != "netspeed.csv":
+                by_date[d] = {
+                    "file": f,
+                    "date": d,
+                    "metrics": {
+                        "totalPhones": s.get("totalPhones", 0),
+                        "totalSwitches": s.get("totalSwitches", 0),
+                        "totalLocations": s.get("totalLocations", 0),
+                        "totalCities": s.get("totalCities", 0),
+                        "phonesWithKEM": s.get("phonesWithKEM", 0),
+                        "phonesByModel": [],
+                        "cityCodes": [],
+                    }
+                }
+        # Build a continuous window starting at earliest and ending at latest; carry-forward missing days
+        series: List[Dict] = []
+        if by_date:
+            from datetime import datetime as _dt, timedelta as _td
+            fmt = "%Y-%m-%d"
+            min_date_str = min(by_date.keys())
+            max_date_str = max(by_date.keys())
+            min_date = _dt.strptime(min_date_str, fmt)
+            max_date = _dt.strptime(max_date_str, fmt)
+            current = by_date.get(min_date_str)
+            day = min_date
+            while day <= max_date:
+                dstr = day.strftime(fmt)
+                if dstr in by_date:
+                    current = by_date[dstr]
+                if current is not None:
+                    series.append({
+                        "file": current.get("file"),
+                        "date": dstr,
+                        "metrics": current.get("metrics", {}),
+                    })
+                day += _td(days=1)
+            # If a limit is set, keep the first N entries (oldest-first)
+            if eff_limit and len(series) > eff_limit:
+                series = series[:eff_limit]
         result = {"success": True, "message": f"Computed {len(series)} timeline points (snapshot)", "series": series}
         _TIMELINE_CACHE[eff_limit] = (now + 60.0, result)
         return result
@@ -352,7 +406,8 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0, include_backups
         if mode == "invalid":
             return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)", "series": []}
 
-        eff_limit = limit if limit and limit > 0 else 31
+        # limit==0 means full history; otherwise truncate to first N days from earliest
+        eff_limit = limit if limit and limit > 0 else 0
         now = time.time()
         cache_key = (query, eff_limit)
         cached = _TIMELINE_BY_LOC_CACHE.get(cache_key)
@@ -363,28 +418,77 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0, include_backups
         from utils.opensearch import opensearch_config
         series: List[Dict] = []
         if mode == "code":
+            # Fetch more than needed to build a continuous window ending at the latest date
+            max_docs = 10000
             body = {
-                "size": eff_limit,
-                "sort": [{"date": {"order": "desc"}}, {"file": {"order": "desc"}}],
+                "size": max_docs,
+                "sort": [{"date": {"order": "asc"}}, {"file": {"order": "desc"}}],
                 "query": {"term": {"key": {"value": query}}},
                 "_source": ["file", "date", "totalPhones", "totalSwitches", "phonesWithKEM"],
             }
+            # If per-location index is missing, try on-demand backfill once
+            try:
+                exists_loc = opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index)
+            except Exception:
+                exists_loc = False
+            if not exists_loc:
+                try:
+                    from tasks.tasks import backfill_location_snapshots
+                    backfill_location_snapshots("/app/data")
+                    try:
+                        opensearch_config.client.indices.refresh(index=opensearch_config.stats_loc_index)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
             hits = res.get("hits", {}).get("hits", [])
-            for h in hits:
-                s = h.get("_source", {})
-                series.append({
-                    "file": s.get("file"),
-                    "date": s.get("date"),
-                    "metrics": {
-                        "totalPhones": s.get("totalPhones", 0),
-                        "totalSwitches": s.get("totalSwitches", 0),
-                        "phonesWithKEM": s.get("phonesWithKEM", 0),
-                        "phonesByModel": [],
-                        "cityCodes": [],
-                    },
-                })
-            series.reverse()
+            if hits:
+                # Reduce to one entry per date (prefer netspeed.csv if multiple)
+                by_date: Dict[str, Dict] = {}
+                for h in hits:
+                    s = h.get("_source", {})
+                    d = s.get("date")
+                    if not d or d in by_date:
+                        # allow update below if this one is netspeed.csv
+                        if s.get("file") != "netspeed.csv":
+                            continue
+                    by_date[d] = {
+                        "file": s.get("file"),
+                        "date": d,
+                        "metrics": {
+                            "totalPhones": s.get("totalPhones", 0),
+                            "totalSwitches": s.get("totalSwitches", 0),
+                            "phonesWithKEM": s.get("phonesWithKEM", 0),
+                            "phonesByModel": [],
+                            "cityCodes": [],
+                        },
+                    }
+                # Build window from earliest to latest, carry-forward gaps
+                from datetime import datetime as _dt, timedelta as _td
+                fmt = "%Y-%m-%d"
+                if by_date:
+                    min_date_str = min(by_date.keys())
+                    max_date_str = max(by_date.keys())
+                    min_date = _dt.strptime(min_date_str, fmt)
+                    max_date = _dt.strptime(max_date_str, fmt)
+                    current = by_date.get(min_date_str)
+                    out: List[Dict] = []
+                    day = min_date
+                    while day <= max_date:
+                        dstr = day.strftime(fmt)
+                        if dstr in by_date:
+                            current = by_date[dstr]
+                        if current is not None:
+                            out.append({
+                                "file": current.get("file"),
+                                "date": dstr,
+                                "metrics": current.get("metrics", {}),
+                            })
+                        day += _td(days=1)
+                    if eff_limit and len(out) > eff_limit:
+                        out = out[:eff_limit]
+                    series = out
         else:
             # prefix mode: aggregate sums per date over all matching location codes
             body = {
@@ -404,20 +508,47 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0, include_backups
             res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
             buckets = res.get("aggregations", {}).get("by_date", {}).get("buckets", [])
             buckets_sorted = sorted(buckets, key=lambda b: b.get("key", 0))
-            if eff_limit and eff_limit > 0:
-                buckets_sorted = buckets_sorted[-eff_limit:]
-            for b in buckets_sorted:
-                series.append({
-                    "file": None,
-                    "date": b.get("key_as_string"),
-                    "metrics": {
-                        "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
-                        "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
-                        "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
-                        "phonesByModel": [],
-                        "cityCodes": [],
-                    },
-                })
+            if buckets_sorted:
+                # Map to per-date metrics
+                by_date = {}
+                for b in buckets_sorted:
+                    d = b.get("key_as_string")
+                    if not d:
+                        continue
+                    by_date[d] = {
+                        "file": None,
+                        "date": d,
+                        "metrics": {
+                            "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
+                            "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
+                            "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
+                            "phonesByModel": [],
+                            "cityCodes": [],
+                        },
+                    }
+                from datetime import datetime as _dt, timedelta as _td
+                fmt = "%Y-%m-%d"
+                min_date_str = min(by_date.keys())
+                max_date_str = max(by_date.keys())
+                min_date = _dt.strptime(min_date_str, fmt)
+                max_date = _dt.strptime(max_date_str, fmt)
+                current = by_date.get(min_date_str)
+                out: List[Dict] = []
+                day = min_date
+                while day <= max_date:
+                    dstr = day.strftime(fmt)
+                    if dstr in by_date:
+                        current = by_date[dstr]
+                    if current is not None:
+                        out.append({
+                            "file": None,
+                            "date": dstr,
+                            "metrics": current.get("metrics", {}),
+                        })
+                    day += _td(days=1)
+                if eff_limit and len(out) > eff_limit:
+                    out = out[:eff_limit]
+                series = out
 
         result = {"success": True, "message": f"Computed {len(series)} location timeline points (snapshot)", "series": series}
         _TIMELINE_BY_LOC_CACHE[cache_key] = (now + 60.0, result)

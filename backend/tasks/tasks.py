@@ -291,7 +291,18 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             glob_results = sorted(path.glob(pattern), key=lambda x: str(x))
             files.extend(glob_results)
 
-        netspeed_files = [f for f in files if f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak")]
+        # Also include archived daily CSV copies under /archive
+        archive_dir = path / "archive"
+        if archive_dir.exists():
+            # Expect file names like netspeed_YYYY-MM-DDTHHMMSSZ.csv
+            archived = sorted(archive_dir.glob("netspeed_*.csv"), key=lambda x: str(x))
+            files.extend(archived)
+
+        netspeed_files = [
+            f for f in files
+            if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))
+            or (f.parent.name == "archive" and f.name.startswith("netspeed_"))
+        ]
         # Separate backup files explicitly
         backup_files = [f for f in files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
         # Always include all netspeed files (base + all historical), backups last
@@ -299,7 +310,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
         historical_files_all = [f for f in netspeed_files if f.name != "netspeed.csv"]
         files = base_files + historical_files_all + backup_files
 
-        logger.info(f"Found {len(files)} files matching patterns {patterns}: {[f.name for f in files]}")
+        logger.info(f"Found {len(files)} files matching patterns {patterns} and archive: {[str(f.relative_to(path)) for f in files]}")
 
         if not files:
             return {

@@ -179,7 +179,7 @@ export default function StatisticsPage() {
       (async () => {
         try {
           setTimeline((t) => ({ ...t, loading: true, error: null }));
-          const r = await fetch('/api/stats/timeline?limit=31', { signal: controller.signal });
+          const r = await fetch('/api/stats/timeline?limit=0', { signal: controller.signal });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const json = await r.json();
           if (abort) return;
@@ -284,7 +284,7 @@ export default function StatisticsPage() {
     (async () => {
       try {
         setLocTimeline((t) => ({ ...t, loading: true, error: null }));
-        const r = await fetch(`/api/stats/timeline/by_location?q=${encodeURIComponent(locSelected)}&limit=31`, { signal: controller.signal });
+        const r = await fetch(`/api/stats/timeline/by_location?q=${encodeURIComponent(locSelected)}&limit=0`, { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (abort) return;
@@ -448,7 +448,7 @@ export default function StatisticsPage() {
         {locSelected && (
           <Box sx={{ mt: 2 }}>
             <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
-              Timeline for {locSelected} (last 31 days)
+              Timeline for {locSelected} ({(locTimeline.series || []).length} days)
             </Typography>
             {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
@@ -712,7 +712,7 @@ export default function StatisticsPage() {
 
       {/* Timeline in separate section */}
       <Paper ref={timelineRef} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Timeline (last 31 days)</Typography>
+        <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Timeline ({(timeline.series || []).length} days)</Typography>
         {/* KPI selector */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
           {KPI_DEFS.map((k) => {

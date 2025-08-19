@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from tasks.tasks import index_csv, index_all_csv_files
 from utils.opensearch import opensearch_config
+from utils.archiver import archive_current_netspeed
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,10 +24,22 @@ class CSVFileHandler(FileSystemEventHandler):
 
     def _is_netspeed_file(self, file_path: Path) -> bool:
         """Check if the file is a netspeed CSV file."""
-        return (file_path.name == "netspeed.csv" or
+        # Ignore anything inside the archive dir
+        try:
+            if file_path.is_relative_to(self.data_dir / "archive"):
+                return False
+        except Exception:
+            # For Python <3.9 compatibility in container, do a manual check
+            if str(self.data_dir / "archive") in str(file_path):
+                return False
+        return (
+            file_path.name == "netspeed.csv" or
+            (
                 file_path.name.startswith("netspeed.csv.") and
                 file_path.suffix == '' and  # netspeed.csv.0, .1, etc. have no extension
-                file_path.name.replace("netspeed.csv.", "").isdigit())
+                file_path.name.replace("netspeed.csv.", "").isdigit()
+            )
+        )
 
     def _should_trigger_reindex(self) -> bool:
         """Check if we should trigger reindexing (cooldown check)."""
@@ -93,6 +106,16 @@ class CSVFileHandler(FileSystemEventHandler):
         """
         try:
             logger.info(f"Processing netspeed files change ({event_type}): {file_info}")
+
+            # Step -1: Archive the current netspeed.csv so we keep every version
+            try:
+                arch = archive_current_netspeed(str(self.data_dir))
+                if arch.get("status") == "success":
+                    logger.info(f"Archived current file to {arch.get('path')}")
+                else:
+                    logger.debug(f"Archive skipped or failed: {arch}")
+            except Exception as e:
+                logger.debug(f"Archival step failed: {e}")
 
             # Step 0: Quickly snapshot today's stats from current netspeed.csv (best-effort)
             try:
