@@ -1,24 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Card,
-  CardContent,
-  Typography,
-  Box,
-  CircularProgress,
-  Avatar,
-  Chip,
-  Fade,
-  IconButton,
-  Paper,
-  Tooltip,
-  Skeleton
-} from '@mui/material';
-import {
-  Refresh,
-  Warning,
-  CheckCircleRounded,
-  HistoryRounded
-} from '@mui/icons-material';
+import { Card, CardContent, Typography, Box, CircularProgress, IconButton, Skeleton, Paper, Tooltip, Chip } from '@mui/material';
+import { Refresh, Warning, CheckCircleRounded } from '@mui/icons-material';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
@@ -30,9 +12,9 @@ const FileInfoBox = React.memo(({ compact = false }) => {
   const isFetchingRef = React.useRef(false);
   const [missingFile, setMissingFile] = useState(false);
   // Index status state (lightweight copy of logic from FileTable)
-  const [idxStatus, setIdxStatus] = useState('idle');
+  const [idxStatus] = useState('idle');
   const [lastSuccess, setLastSuccess] = useState(null);
-  const [progress, setProgress] = useState(null);
+  const [progress] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [justUpdated, setJustUpdated] = useState(false);
   // Guards to prevent redundant work
@@ -165,7 +147,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
 
     // NO INTERVAL - File info is static until page refresh
     // The daily netspeed.csv is loaded at 7:00 AM, user can refresh page to see new data
-  }, []);
+  }, [fetchFileInfo]);
 
   // NOTE: We no longer early-return ONLY for refresh; only for true initial load (no fileInfo yet)
   const initialLoading = loading && !fileInfo && !error && !missingFile;

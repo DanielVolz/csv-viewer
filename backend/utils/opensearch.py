@@ -143,6 +143,28 @@ class OpenSearchConfig:
             }
         }
 
+        # Per-location stats snapshots index (one doc per file/date/location code)
+        self.stats_loc_index = "stats_netspeed_loc"
+        self.stats_loc_index_mappings = {
+            "mappings": {
+                "dynamic": "true",
+                "properties": {
+                    "file": {"type": "keyword"},
+                    "date": {"type": "date", "format": "yyyy-MM-dd"},
+                    "key": {"type": "keyword"},  # location code (AAA01)
+                    "mode": {"type": "keyword"},  # 'code'
+                    "totalPhones": {"type": "long"},
+                    "totalSwitches": {"type": "long"},
+                    "phonesWithKEM": {"type": "long"}
+                }
+            },
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "refresh_interval": "30s"
+            }
+        }
+
         # Archive index to persist full daily snapshots of netspeed.csv
         # Not deleted by file watcher (it only deletes netspeed_* patterns)
         self.archive_index = "archive_netspeed"
@@ -296,6 +318,18 @@ class OpenSearchConfig:
             logger.error(f"Error creating stats index {self.stats_index}: {e}")
             return False
 
+    def create_stats_loc_index(self) -> bool:
+        """Create the per-location stats index if it doesn't exist."""
+        try:
+            if self.client.indices.exists(index=self.stats_loc_index):
+                return True
+            self.client.indices.create(index=self.stats_loc_index, body=self.stats_loc_index_mappings)
+            logger.info(f"Created stats per-location index {self.stats_loc_index}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating stats loc index {self.stats_loc_index}: {e}")
+            return False
+
     def index_stats_snapshot(self, *, file: str, date: str | None, metrics: dict) -> bool:
         """Index a single timeline snapshot document.
 
@@ -315,6 +349,45 @@ class OpenSearchConfig:
             return True
         except Exception as e:
             logger.error(f"Error indexing stats snapshot for {file}@{date}: {e}")
+            return False
+
+    def index_stats_location_snapshots(self, *, file: str, date: str | None, loc_docs: List[Dict[str, Any]]) -> bool:
+        """Bulk index per-location snapshot docs for a given file/date.
+
+        Each doc in loc_docs must contain: { key, mode='code', totalPhones, totalSwitches, phonesWithKEM }
+        """
+        try:
+            self.create_stats_loc_index()
+            if not date:
+                from datetime import datetime as _dt
+                date = _dt.utcnow().strftime('%Y-%m-%d')
+            actions = []
+            for d in loc_docs:
+                key = d.get('key')
+                if not key:
+                    continue
+                body = {
+                    "file": file,
+                    "date": date,
+                    "key": key,
+                    "mode": d.get('mode', 'code'),
+                    "totalPhones": int(d.get('totalPhones', 0)),
+                    "totalSwitches": int(d.get('totalSwitches', 0)),
+                    "phonesWithKEM": int(d.get('phonesWithKEM', 0)),
+                }
+                doc_id = f"{file}:{date}:{key}"
+                actions.append({
+                    "_op_type": "index",
+                    "_index": self.stats_loc_index,
+                    "_id": doc_id,
+                    "_source": body,
+                })
+            if not actions:
+                return True
+            helpers.bulk(self.client, actions)
+            return True
+        except Exception as e:
+            logger.error(f"Error indexing stats per-location for {file}@{date}: {e}")
             return False
 
     def delete_index(self, index_name: str) -> bool:

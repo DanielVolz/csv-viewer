@@ -1,10 +1,5 @@
-import React, { useEffect } from 'react';
-import {
-  IconButton,
-  Tooltip,
-  Box,
-  Badge
-} from '@mui/material';
+import React from 'react';
+import { IconButton, Tooltip, Box } from '@mui/material';
 import { useTheme } from '../theme/ThemeContext';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 

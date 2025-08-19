@@ -3,6 +3,8 @@ from typing import Optional
 import logging
 from config import settings
 from tasks.tasks import search_opensearch
+from tasks.tasks import backfill_location_snapshots
+from tasks.tasks import backfill_stats_snapshots
 from celery.result import AsyncResult
 from utils.opensearch import opensearch_config
 
@@ -126,6 +128,28 @@ async def index_all_csv_files(
             status_code=500,
             detail=f"Failed to start indexing task: {str(e)}"
         )
+
+
+@router.post("/index/backfill-locations")
+async def backfill_locations():
+    """Trigger a background job to backfill per-location snapshots (stats_netspeed_loc)."""
+    try:
+        task = backfill_location_snapshots.delay("/app/data")
+        return {"success": True, "message": "Backfill task started", "task_id": task.id}
+    except Exception as e:
+        logger.error(f"Error starting backfill task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start backfill task: {e}")
+
+
+@router.post("/index/backfill-stats")
+async def backfill_stats():
+    """Trigger a background job to backfill global stats snapshots (stats_netspeed)."""
+    try:
+        task = backfill_stats_snapshots.delay("/app/data")
+        return {"success": True, "message": "Backfill task started", "task_id": task.id}
+    except Exception as e:
+        logger.error(f"Error starting backfill stats task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start backfill stats task: {e}")
 
 
 @router.get("/index/status/{task_id}")

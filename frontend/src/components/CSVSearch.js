@@ -180,10 +180,10 @@ function CSVSearch() {
 
 
   // Remove all whitespace characters from a value
-  const stripAllWhitespace = (v) => String(v ?? '').replace(/\s+/g, '');
+  const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
 
   // Normalize input MACs (handles optional SEP/sep prefix) to canonical condensed 12-hex (uppercase), e.g., AABBCCDDEEFF
-  const normalizeMacInput = (v) => {
+  const normalizeMacInput = useCallback((v) => {
     if (!v) return null;
     let s = stripAllWhitespace(String(v));
     // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
@@ -191,12 +191,12 @@ function CSVSearch() {
     const hex = s.replace(/[^0-9A-Fa-f]/g, '');
     if (hex.length !== 12) return null;
     return hex.toUpperCase();
-  };
+  }, [stripAllWhitespace]);
 
-  const isMacLike = (v) => !!normalizeMacInput(v);
+  // Removed unused isMacLike helper to satisfy lint
 
   // Derive 5-char location (ABC01) from a row's Switch Hostname; exclude ABWRT
-  const deriveLocationFromRow = (row) => {
+  const deriveLocationFromRow = useCallback((row) => {
     try {
       const host = (row?.['Switch Hostname'] || '').toString();
       const m = /([A-Za-z]{3}\d{2})/.exec(host);
@@ -205,10 +205,10 @@ function CSVSearch() {
       if (code === 'ABWRT') return null;
       return code;
     } catch { return null; }
-  };
+  }, []);
 
   // Inspect latest results to map a MAC to a location code
-  const getLocationForMac = (macCanonical) => {
+  const getLocationForMac = useCallback((macCanonical) => {
     try {
       const rows = allResults?.data || results?.data || [];
       if (!Array.isArray(rows) || rows.length === 0) return null;
@@ -220,7 +220,7 @@ function CSVSearch() {
       });
       return deriveLocationFromRow(row);
     } catch { return null; }
-  };
+  }, [allResults, results, deriveLocationFromRow]);
 
   // Backfill location for all history entries when we have results
   useEffect(() => {
@@ -234,7 +234,7 @@ function CSVSearch() {
         }
       });
     } catch { }
-  }, [macHistory, results, allResults, updateMac]);
+  }, [macHistory, results, allResults, updateMac, normalizeMacInput, getLocationForMac]);
   const executeSearch = useCallback((term) => {
     const cleaned = stripAllWhitespace(term);
     if (searchBlocked) {
@@ -257,7 +257,7 @@ function CSVSearch() {
         }
       });
     }
-  }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview, recordMac]);
+  }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview, recordMac, normalizeMacInput, getLocationForMac, stripAllWhitespace]);
 
   const handleMacAddressClick = useCallback((macAddress) => {
     const macCanonical = normalizeMacInput(macAddress) || macAddress;
@@ -274,7 +274,7 @@ function CSVSearch() {
         setHasSearched(true);
       }
     });
-  }, [searchAll, recordMac]);
+  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac]);
 
   const handleSwitchPortClick = useCallback((switchPort) => {
     // Currently just copies to clipboard, but could trigger search
@@ -333,7 +333,7 @@ function CSVSearch() {
         console.debug('[CSVSearch][handleSearch] search executed', { term: cleaned });
       }
     });
-  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac]);
+  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac, normalizeMacInput, getLocationForMac, previewLoading, missingPreview, stripAllWhitespace]);
 
   const handleClearSearch = useCallback(() => {
     setSearchTerm('');

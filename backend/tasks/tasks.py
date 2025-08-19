@@ -76,6 +76,42 @@ def index_csv(file_path: str) -> dict:
                     "cityCodes": sorted(list(city_codes)),
                 }
                 opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+                # Additionally: build per-location snapshot docs and index in bulk
+                # Aggregate per 5-char location code for speed at query-time
+                per_loc_counts: Dict[str, Dict[str, int]] = {}
+                per_loc_switches: Dict[str, set] = {}
+                for r in _rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if not sh:
+                        continue
+                    try:
+                        from api.stats import extract_location as _extract_location
+                        loc = _extract_location(sh)
+                    except Exception:
+                        loc = None
+                    if not loc:
+                        continue
+                    plc = per_loc_counts.setdefault(loc, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+                    plc["totalPhones"] += 1
+                    sset = per_loc_switches.setdefault(loc, set())
+                    if sh not in sset:
+                        sset.add(sh)
+                        plc["totalSwitches"] += 1
+                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                        plc["phonesWithKEM"] += 1
+                loc_docs = []
+                for k, agg in per_loc_counts.items():
+                    loc_docs.append({
+                        "key": k,
+                        "mode": "code",
+                        "totalPhones": agg["totalPhones"],
+                        "totalSwitches": agg["totalSwitches"],
+                        "phonesWithKEM": agg["phonesWithKEM"],
+                    })
+                try:
+                    opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
+                except Exception as _e:
+                    logger.debug(f"Indexing per-location snapshots failed for {file_path}: {_e}")
             except Exception as _e:
                 logger.debug(f"Stats snapshot failed for {file_path}: {_e}")
             # Best-effort: persist full archive snapshot
@@ -107,6 +143,132 @@ def index_csv(file_path: str) -> dict:
             "count": 0
         }
 
+
+@app.task(name='tasks.backfill_location_snapshots')
+def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
+    """Backfill per-location snapshots (stats_netspeed_loc) for all netspeed files.
+
+    Useful if stats_netspeed_loc is empty or partially populated.
+    """
+    try:
+        path = Path(directory_path)
+        files = []
+        for p in sorted(path.glob("netspeed.csv*"), key=lambda x: x.name):
+            name = p.name
+            if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.replace("netspeed.csv.", "").isdigit()):
+                files.append(p)
+        processed = 0
+        total_loc_docs = 0
+        for f in files:
+            try:
+                from models.file import FileModel as _FM
+                fm = _FM.from_path(str(f))
+                date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+                _, rows = read_csv_file_normalized(str(f))
+                per_loc_counts: Dict[str, Dict[str, int]] = {}
+                per_loc_switches: Dict[str, set] = {}
+                for r in rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if not sh:
+                        continue
+                    try:
+                        from api.stats import extract_location as _extract_location
+                        loc = _extract_location(sh)
+                    except Exception:
+                        loc = None
+                    if not loc:
+                        continue
+                    plc = per_loc_counts.setdefault(loc, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+                    plc["totalPhones"] += 1
+                    sset = per_loc_switches.setdefault(loc, set())
+                    if sh not in sset:
+                        sset.add(sh)
+                        plc["totalSwitches"] += 1
+                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                        plc["phonesWithKEM"] += 1
+                loc_docs = []
+                for k, agg in per_loc_counts.items():
+                    loc_docs.append({
+                        "key": k,
+                        "mode": "code",
+                        "totalPhones": agg["totalPhones"],
+                        "totalSwitches": agg["totalSwitches"],
+                        "phonesWithKEM": agg["phonesWithKEM"],
+                    })
+                if loc_docs:
+                    opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
+                    total_loc_docs += len(loc_docs)
+                processed += 1
+            except Exception as _e:
+                logger.warning(f"Backfill failed for {f}: {_e}")
+        return {"status": "success", "files": processed, "loc_docs": total_loc_docs}
+    except Exception as e:
+        logger.error(f"Backfill error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.task(name='tasks.backfill_stats_snapshots')
+def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
+    """Backfill global stats snapshots (stats_netspeed) for all netspeed files.
+
+    This computes metrics from CSV files only and does not touch netspeed_* search indices.
+    Useful when stats_netspeed is empty and you want fast timelines without full reindex.
+    """
+    try:
+        path = Path(directory_path)
+        files = []
+        for p in sorted(path.glob("netspeed.csv*"), key=lambda x: x.name):
+            name = p.name
+            if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.replace("netspeed.csv.", "").isdigit()):
+                files.append(p)
+        processed = 0
+        for f in files:
+            try:
+                from models.file import FileModel as _FM
+                fm = _FM.from_path(str(f))
+                date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+                _, rows = read_csv_file_normalized(str(f))
+                total_phones = len(rows)
+                switches = set()
+                locations = set()
+                city_codes = set()
+                phones_with_kem = 0
+                model_counts: Dict[str, int] = {}
+                for r in rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if sh:
+                        switches.add(sh)
+                        try:
+                            from api.stats import extract_location
+                            loc = extract_location(sh)
+                            if loc:
+                                locations.add(loc)
+                                city_codes.add(loc[:3])
+                        except Exception:
+                            pass
+                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                        phones_with_kem += 1
+                    model = (r.get("Model Name") or "").strip() or "Unknown"
+                    if model != "Unknown":
+                        model_counts[model] = model_counts.get(model, 0) + 1
+                phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                metrics = {
+                    "totalPhones": total_phones,
+                    "totalSwitches": len(switches),
+                    "totalLocations": len(locations),
+                    "totalCities": len(city_codes),
+                    "phonesWithKEM": phones_with_kem,
+                    "phonesByModel": phones_by_model,
+                    "cityCodes": sorted(list(city_codes)),
+                }
+                opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+                processed += 1
+            except Exception as _e:
+                logger.warning(f"Backfill stats failed for {f}: {_e}")
+        return {"status": "success", "files": processed}
+    except Exception as e:
+        logger.error(f"Backfill stats error: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.task(bind=True, name='tasks.index_all_csv_files')
 def index_all_csv_files(self, directory_path: str) -> dict:
@@ -281,6 +443,43 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         "cityCodes": sorted(list(city_codes)),
                     }
                     opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+                    # Additionally: precompute per-location snapshots for fast location timelines
+                    try:
+                        # Aggregate per 5-char location code
+                        per_loc_counts: Dict[str, Dict[str, int]] = {}
+                        per_loc_switches: Dict[str, set] = {}
+                        for r in _rows:
+                            sh2 = (r.get("Switch Hostname") or "").strip()
+                            if not sh2:
+                                continue
+                            try:
+                                from api.stats import extract_location as _extract_location
+                                loc2 = _extract_location(sh2)
+                            except Exception:
+                                loc2 = None
+                            if not loc2:
+                                continue
+                            plc = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+                            plc["totalPhones"] += 1
+                            sset = per_loc_switches.setdefault(loc2, set())
+                            if sh2 not in sset:
+                                sset.add(sh2)
+                                plc["totalSwitches"] += 1
+                            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                                plc["phonesWithKEM"] += 1
+                        loc_docs = []
+                        for k, agg in per_loc_counts.items():
+                            loc_docs.append({
+                                "key": k,
+                                "mode": "code",
+                                "totalPhones": agg["totalPhones"],
+                                "totalSwitches": agg["totalSwitches"],
+                                "phonesWithKEM": agg["phonesWithKEM"],
+                            })
+                        if loc_docs:
+                            opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
+                    except Exception as _e:
+                        logger.debug(f"Per-location snapshot indexing failed for {file_path}: {_e}")
                 except Exception as _e:
                     logger.debug(f"Stats snapshot failed for {file_path}: {_e}")
 
@@ -466,3 +665,106 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
 
 
 # Removed: morning_reindex task (scheduler deprecated; file watcher handles reindexing)
+
+
+@app.task(name='tasks.snapshot_current_stats')
+def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
+    """Snapshot today's global and per-location statistics from the current netspeed.csv.
+
+    This precaches timeline data in stats_netspeed and stats_netspeed_loc so the UI is fast.
+    CSV remains a fallback only.
+    """
+    try:
+        path = Path(directory_path)
+        file_path = (path / "netspeed.csv").resolve()
+        if not file_path.exists():
+            return {"status": "warning", "message": f"{file_path} not found"}
+
+        from models.file import FileModel as _FM
+        fm = _FM.from_path(str(file_path))
+        date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+
+        # Read CSV once
+        _, rows = read_csv_file_normalized(str(file_path))
+
+        # Global metrics
+        total_phones = len(rows)
+        switches = set()
+        locations = set()
+        city_codes = set()
+        phones_with_kem = 0
+        model_counts: Dict[str, int] = {}
+        for r in rows:
+            sh = (r.get("Switch Hostname") or "").strip()
+            if sh:
+                switches.add(sh)
+                try:
+                    from api.stats import extract_location
+                    loc = extract_location(sh)
+                    if loc:
+                        locations.add(loc)
+                        city_codes.add(loc[:3])
+                except Exception:
+                    pass
+            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                phones_with_kem += 1
+            model = (r.get("Model Name") or "").strip() or "Unknown"
+            if model != "Unknown":
+                model_counts[model] = model_counts.get(model, 0) + 1
+
+        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+        metrics = {
+            "totalPhones": total_phones,
+            "totalSwitches": len(switches),
+            "totalLocations": len(locations),
+            "totalCities": len(city_codes),
+            "phonesWithKEM": phones_with_kem,
+            "phonesByModel": phones_by_model,
+            "cityCodes": sorted(list(city_codes)),
+        }
+        opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+
+        # Per-location metrics (aggregate per 5-char code)
+        per_loc_counts: Dict[str, Dict[str, int]] = {}
+        per_loc_switches: Dict[str, set] = {}
+        for r in rows:
+            sh2 = (r.get("Switch Hostname") or "").strip()
+            if not sh2:
+                continue
+            try:
+                from api.stats import extract_location as _extract_location
+                loc2 = _extract_location(sh2)
+            except Exception:
+                loc2 = None
+            if not loc2:
+                continue
+            plc = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+            plc["totalPhones"] += 1
+            sset = per_loc_switches.setdefault(loc2, set())
+            if sh2 not in sset:
+                sset.add(sh2)
+                plc["totalSwitches"] += 1
+            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                plc["phonesWithKEM"] += 1
+        loc_docs = []
+        for k, agg in per_loc_counts.items():
+            loc_docs.append({
+                "key": k,
+                "mode": "code",
+                "totalPhones": agg["totalPhones"],
+                "totalSwitches": agg["totalSwitches"],
+                "phonesWithKEM": agg["phonesWithKEM"],
+            })
+        if loc_docs:
+            opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
+
+        # Optional: persist archive snapshot for the day
+        try:
+            opensearch_config.index_archive_snapshot(file=fm.name, date=date_str, rows=rows)
+        except Exception:
+            pass
+
+        return {"status": "success", "file": fm.name, "date": date_str, "loc_docs": len(loc_docs)}
+    except Exception as e:
+        logger.error(f"snapshot_current_stats error: {e}")
+        return {"status": "error", "message": str(e)}

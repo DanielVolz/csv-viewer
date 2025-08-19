@@ -40,9 +40,7 @@ class CSVFileHandler(FileSystemEventHandler):
         """Handle file creation events."""
         if event.is_directory:
             return
-
-        file_path = Path(event.src_path)
-
+        file_path = Path(str(event.src_path))
         # Check if any netspeed file was created
         if self._is_netspeed_file(file_path):
             logger.info(f"New netspeed file detected: {file_path}")
@@ -53,9 +51,7 @@ class CSVFileHandler(FileSystemEventHandler):
         """Handle file modification events."""
         if event.is_directory:
             return
-
-        file_path = Path(event.src_path)
-
+        file_path = Path(str(event.src_path))
         # Check if any netspeed file was modified
         if self._is_netspeed_file(file_path):
             logger.info(f"netspeed file modified: {file_path}")
@@ -68,10 +64,8 @@ class CSVFileHandler(FileSystemEventHandler):
         """Handle file move/rename events."""
         if event.is_directory:
             return
-
-        src_path = Path(event.src_path)
-        dest_path = Path(event.dest_path)
-
+        src_path = Path(str(event.src_path))
+        dest_path = Path(str(event.dest_path))
         # Check if any netspeed file was moved/renamed
         if (self._is_netspeed_file(src_path) or self._is_netspeed_file(dest_path)):
             logger.info(f"netspeed file moved/renamed: {src_path} -> {dest_path}")
@@ -82,9 +76,7 @@ class CSVFileHandler(FileSystemEventHandler):
         """Handle file deletion events."""
         if event.is_directory:
             return
-
-        file_path = Path(event.src_path)
-
+        file_path = Path(str(event.src_path))
         # Check if any netspeed file was deleted
         if self._is_netspeed_file(file_path):
             logger.info(f"netspeed file deleted: {file_path}")
@@ -101,6 +93,14 @@ class CSVFileHandler(FileSystemEventHandler):
         """
         try:
             logger.info(f"Processing netspeed files change ({event_type}): {file_info}")
+
+            # Step 0: Quickly snapshot today's stats from current netspeed.csv (best-effort)
+            try:
+                logger.info("Queuing snapshot of current stats for timelines (global & per-location)...")
+                from tasks.tasks import snapshot_current_stats
+                snapshot_current_stats.delay(str(self.data_dir))
+            except Exception as e:
+                logger.debug(f"Failed to queue snapshot_current_stats: {e}")
 
             # Step 1: Clean up all existing netspeed indices
             logger.info("Cleaning up all existing netspeed indices...")

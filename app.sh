@@ -174,7 +174,34 @@ up_dev() {
   check_env_file .env.dev
   ensure_dev_network
   echo "🚀 Up (dev)"
-  docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev up -d
+  # Bring up infra services, tolerating pre-existing named containers
+  for svc in opensearch-dev redis-dev; do
+    if docker ps -a --format '{{.Names}}' | grep -qx "$svc"; then
+      # Container exists; ensure it's running
+      RUNNING=$(docker inspect -f '{{.State.Running}}' "$svc" 2>/dev/null || echo false)
+      if [ "$RUNNING" != "true" ]; then
+        echo "Starting existing container: $svc"
+        docker start "$svc" >/dev/null || true
+      fi
+    else
+      # Create via compose for this project
+      docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev up -d "$svc" || true
+    fi
+  done
+
+  # Start app services without deps to avoid compose trying to recreate infra
+  for svc in backend-dev frontend-dev; do
+    cname="csv-viewer-${svc}"
+    if docker ps -a --format '{{.Names}}' | grep -qx "$cname"; then
+      RUNNING=$(docker inspect -f '{{.State.Running}}' "$cname" 2>/dev/null || echo false)
+      if [ "$RUNNING" != "true" ]; then
+        echo "Starting existing container: $cname"
+        docker start "$cname" >/dev/null || true
+      fi
+    else
+      docker compose -p "$DEV_PROJECT" -f docker-compose.dev.yml --env-file .env.dev up -d --no-deps "$svc" || true
+    fi
+  done
   # Load ports for nicer output
   set +u
   set -a; . ./.env.dev 2>/dev/null || true; set +a
@@ -191,6 +218,16 @@ down_dev() {
     echo "ℹ️  No services under project $DEV_PROJECT or compose returned error. Trying legacy project..."
     docker compose -f docker-compose.dev.yml --env-file .env.dev down || true
   fi
+  # Also stop any lingering named containers created outside compose project
+  for cname in csv-viewer-frontend-dev csv-viewer-backend-dev redis-dev opensearch-dev; do
+    if docker ps -a --format '{{.Names}}' | grep -qx "$cname"; then
+      RUNNING=$(docker inspect -f '{{.State.Running}}' "$cname" 2>/dev/null || echo false)
+      if [ "$RUNNING" = "true" ]; then
+        echo "Stopping container: $cname"
+        docker stop "$cname" >/dev/null || true
+      fi
+    fi
+  done
 }
 
 status_dev() {

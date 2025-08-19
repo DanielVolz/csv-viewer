@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Routes, Route, useLocation, useNavigate, Navigate, MemoryRouter } from 'react-router-dom';
 import {
   Container,
   AppBar,
@@ -23,33 +24,40 @@ import useUpdateNotifier from './hooks/useUpdateNotifier';
 function AppContent() {
   // Check for new deployments periodically (dev + prod)
   useUpdateNotifier({ intervalMs: 60000 });
+  const location = useLocation();
+  const navigate = useNavigate();
   const [currentTab, setCurrentTab] = useState('home');
   const [searchResetKey, setSearchResetKey] = useState(0);
   const { setNavigationFunction } = useSettings();
 
-  const handleTabChange = (event, newValue) => {
+  const handleTabChange = React.useCallback((event, newValue) => {
     if (newValue === 'home') {
       // Clear any query params (e.g., ?q=...) and soft-reset the search without full reload
       try {
-        const cleanPath = window.location.pathname || '/';
-        window.history.replaceState(null, '', cleanPath);
+        const cleanPath = '/search';
+        navigate(cleanPath, { replace: true });
       } catch { }
       setCurrentTab('home');
       setSearchResetKey((k) => k + 1);
       return;
     }
     setCurrentTab(newValue);
-  };
+    // Push route for non-home tabs
+    try {
+      if (newValue === 'files') navigate('/files');
+      else if (newValue === 'stats') navigate('/statistics');
+      else if (newValue === 'settings') navigate('/settings');
+    } catch { }
+  }, [navigate]);
 
-  const goHomeAndRefresh = () => {
+  const goHomeAndRefresh = React.useCallback(() => {
     // Clear any query params (e.g., ?q=...) and soft-reset the search without full reload
     try {
-      const cleanPath = window.location.pathname || '/';
-      window.history.replaceState(null, '', cleanPath);
+      navigate('/search', { replace: true });
     } catch { }
     setCurrentTab('home');
     setSearchResetKey((k) => k + 1);
-  };
+  }, [navigate]);
 
   // Set browser tab title once
   React.useEffect(() => {
@@ -61,21 +69,18 @@ function AppContent() {
   // Register navigation function with settings context
   React.useEffect(() => {
     setNavigationFunction(handleTabChange);
-  }, [setNavigationFunction]);
+  }, [setNavigationFunction, handleTabChange]);
 
-  const renderContent = () => {
-    switch (currentTab) {
-      case 'files':
-        return <FilesPage />;
-      case 'stats':
-        return <StatisticsPage />;
-      case 'settings':
-        return <SettingsPage />;
-      case 'home':
-      default:
-        return <HomePage resetKey={searchResetKey} />;
-    }
-  };
+  // Sync currentTab with URL on first load and when location changes (back/forward)
+  React.useEffect(() => {
+    const path = location.pathname || '/';
+    if (path === '/' || path === '/search') setCurrentTab('home');
+    else if (path.startsWith('/files')) setCurrentTab('files');
+    else if (path.startsWith('/statistics')) setCurrentTab('stats');
+    else if (path.startsWith('/settings')) setCurrentTab('settings');
+  }, [location.pathname]);
+
+  // content selection handled via routes below
 
   return (
     <>
@@ -133,10 +138,16 @@ function AppContent() {
           </Toolbar>
         </AppBar>
 
-        {/* Main Content */}
+        {/* Main Content with router */}
         <Container maxWidth="xl" sx={{ pb: 4 }}>
-          {/* Page Content */}
-          {renderContent()}
+          <Routes>
+            <Route path="/" element={<Navigate to="/search" replace />} />
+            <Route path="/search" element={<HomePage resetKey={searchResetKey} />} />
+            <Route path="/files" element={<FilesPage />} />
+            <Route path="/statistics" element={<StatisticsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/search" replace />} />
+          </Routes>
         </Container>
 
         {/* Global Toast Container */}
@@ -169,9 +180,13 @@ function AppContent() {
 }
 
 function App() {
+  const content = <AppContent />;
+  const wrapped = process.env.NODE_ENV === 'test'
+    ? (<MemoryRouter initialEntries={["/search"]}>{content}</MemoryRouter>)
+    : content;
   return (
     <SettingsProvider>
-      <AppContent />
+      {wrapped}
     </SettingsProvider>
   );
 }

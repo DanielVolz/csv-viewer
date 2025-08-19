@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
@@ -92,7 +92,7 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
       abortController.abort();
       console.debug('[useFilePreview] cleanup');
     };
-  }, []); // Empty dependency array - only run once on mount
+  }, []);
 
   return { previewData, loading, error };
 }

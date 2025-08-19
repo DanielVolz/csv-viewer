@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import logging
 import subprocess
@@ -164,8 +164,35 @@ async def get_netspeed_info():
         )
 
 
+def _extract_location_from_hostname(hostname: str) -> str | None:
+    """Extract a 5-char code (AAA01) from a switch hostname.
+
+    Algorithm matches the implementation in stats: collect first 3 letters then next 2 digits.
+    Returns the concatenated code or None if not found.
+    """
+    if not hostname:
+        return None
+    h = hostname.strip().upper()
+    letters = []
+    digits = []
+    i = 0
+    while i < len(h) and len(letters) < 3:
+        ch = h[i]
+        if 'A' <= ch <= 'Z':
+            letters.append(ch)
+        i += 1
+    while i < len(h) and len(digits) < 2:
+        ch = h[i]
+        if '0' <= ch <= '9':
+            digits.append(ch)
+        i += 1
+    if len(letters) == 3 and len(digits) == 2:
+        return ''.join(letters) + ''.join(digits)
+    return None
+
+
 @router.get("/preview")
-async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv"):
+async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", loc: Optional[str] = None):
     """
     Get a preview of a CSV file (first N entries) along with its creation date.
 
@@ -198,13 +225,42 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv"):
         # Read CSV file
         headers, rows = read_csv_file(str(file_path))
 
+    # Optional: filter by location code/prefix if provided
+        loc_filter = (loc or "").strip().upper()
+        if loc_filter:
+            # Accept either 3-letter prefix (AAA) or 5-char code (AAA01)
+            from re import match
+            is_prefix = bool(match(r"^[A-Z]{3}$", loc_filter))
+            is_code = bool(match(r"^[A-Z]{3}[0-9]{2}$", loc_filter))
+            if not (is_prefix or is_code):
+                return {
+                    "success": False,
+                    "message": "Invalid loc parameter. Use 3-letter prefix (AAA) or 5-char code (AAA01).",
+                    "headers": headers,
+                    "data": [],
+                    "creation_date": None,
+                    "file_name": filename
+                }
+            filtered = []
+            for r in rows:
+                sh = str((r.get("Switch Hostname") or "").strip())
+                code = _extract_location_from_hostname(sh) or ""
+                if is_code:
+                    if code == loc_filter:
+                        filtered.append(r)
+                else:
+                    # prefix match against first 3 letters of code
+                    if code.startswith(loc_filter):
+                        filtered.append(r)
+            rows = filtered
+
         # Limit number of rows
         preview_rows = rows[:limit]
 
         return {
             "success": True,
             "message": (f"Showing first {len(preview_rows)} entries of "
-                        f"{len(rows)} total"),
+                        f"{len(rows)} total" + (f" (filtered by {loc_filter})" if loc_filter else "")),
             "headers": headers,
             "data": preview_rows,
             "creation_date": creation_date,

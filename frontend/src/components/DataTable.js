@@ -35,7 +35,7 @@ function DataTable({
   onSwitchPortClick,
   labelMap
 }) {
-  const { columns, getEnabledColumnHeaders, sshUsername, navigateToSettings } = useSettings();
+  const { columns, sshUsername, navigateToSettings } = useSettings();
 
   // Preferred minimum widths per canonical header id to avoid wrapping
   const headerWidthMap = React.useMemo(() => ({
@@ -128,7 +128,7 @@ function DataTable({
     return [typeWeight, ...parts];
   };
 
-  const getKey = (header, value) => {
+  const getKey = React.useCallback((header, value) => {
     switch (header) {
       case 'IP Address':
         return toIpKey(value);
@@ -143,7 +143,7 @@ function DataTable({
       default:
         return (value == null ? '' : String(value).toLowerCase());
     }
-  };
+  }, []);
 
   const compareKeys = (a, b) => {
     if (Array.isArray(a) && Array.isArray(b)) {
@@ -172,7 +172,7 @@ function DataTable({
       return cmp;
     });
     return arr.map(x => x.row);
-  }, [data, orderBy, order]);
+  }, [data, orderBy, order, getKey]);
 
   const getDateColor = (dateString) => {
     if (!dateString) return 'inherit';
