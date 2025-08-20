@@ -271,7 +271,7 @@ export default function StatisticsPage() {
       }
     })();
     return () => { abort = true; controller.abort(); };
-  }, []);
+  }, [getStatisticsPrefs]);
 
   // Persist key preferences when they change
   React.useEffect(() => {
@@ -349,7 +349,7 @@ export default function StatisticsPage() {
       }
     }, 350);
     return () => { abort = true; controller.abort(); clearTimeout(h); };
-  }, [topCount, topExtras, topDays]);
+  }, [topCount, topExtras, topDays, getStatisticsPrefs, topLoadedKey, topTimeline.dates]);
 
   // Build per-location line series for selected KPI
   const topSeriesPerKey = React.useMemo(() => {

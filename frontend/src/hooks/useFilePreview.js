@@ -80,7 +80,8 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
         if (mounted) {
           clearTimeout(timeoutRef.current);
           setLoading(false);
-          console.debug('[useFilePreview] fetchPreview END', { timedOut, success: previewData?.success });
+          const successFlag = !!(previewData && previewData.success);
+          console.debug('[useFilePreview] fetchPreview END', { timedOut, success: successFlag });
         }
       }
     };
@@ -92,7 +93,7 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
       abortController.abort();
       console.debug('[useFilePreview] cleanup');
     };
-  }, []);
+  }, [/* no external deps */]);
 
   return { previewData, loading, error };
 }

@@ -156,6 +156,20 @@ function CSVSearch() {
     };
   }, []);
 
+  // Remove all whitespace characters from a value
+  const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
+
+  // Normalize input MACs (handles optional SEP/sep prefix) to canonical condensed 12-hex (uppercase), e.g., AABBCCDDEEFF
+  const normalizeMacInput = useCallback((v) => {
+    if (!v) return null;
+    let s = stripAllWhitespace(String(v));
+    // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
+    s = s.replace(/^sep[-_:]?/i, '');
+    const hex = s.replace(/[^0-9A-Fa-f]/g, '');
+    if (hex.length !== 12) return null;
+    return hex.toUpperCase();
+  }, [stripAllWhitespace]);
+
   // If there is an initial query (?q=...), trigger search once not blocked
   useEffect(() => {
     if (initialQueryRef.current && !searchBlocked) {
@@ -176,7 +190,7 @@ function CSVSearch() {
         } catch { }
       });
     }
-  }, [searchBlocked, includeHistorical, recordMac, searchAll]);
+  }, [searchBlocked, includeHistorical, recordMac, searchAll, normalizeMacInput, stripAllWhitespace]);
 
   // No stuck timer needed anymore
 
@@ -187,20 +201,6 @@ function CSVSearch() {
   const historyOpen = Boolean(historyAnchor);
 
 
-
-  // Remove all whitespace characters from a value
-  const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
-
-  // Normalize input MACs (handles optional SEP/sep prefix) to canonical condensed 12-hex (uppercase), e.g., AABBCCDDEEFF
-  const normalizeMacInput = useCallback((v) => {
-    if (!v) return null;
-    let s = stripAllWhitespace(String(v));
-    // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
-    s = s.replace(/^sep[-_:]?/i, '');
-    const hex = s.replace(/[^0-9A-Fa-f]/g, '');
-    if (hex.length !== 12) return null;
-    return hex.toUpperCase();
-  }, [stripAllWhitespace]);
 
   // Removed unused isMacLike helper to satisfy lint
 

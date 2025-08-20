@@ -143,7 +143,7 @@ function DataTable({
       default:
         return (value == null ? '' : String(value).toLowerCase());
     }
-  }, []);
+  }, [toPortKey]);
 
   const compareKeys = (a, b) => {
     if (Array.isArray(a) && Array.isArray(b)) {
@@ -228,23 +228,7 @@ function DataTable({
       d.getDate() === now.getDate();
   }, []);
 
-  const getDateColor = (dateString) => {
-    if (!dateString) return 'inherit';
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const fileDate = new Date(dateString);
-    fileDate.setHours(0, 0, 0, 0);
-
-    const diffTime = fileDate - today;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) return 'success.main';
-    else if (diffDays > 0 && diffDays <= 14) return 'warning.main';
-    else if (diffDays < 0 && diffDays >= -14) return 'warning.main';
-    else return 'error.main';
-  };
+  // Removed unused getDateColor helper to satisfy lint
 
   const copyToClipboard = async (text) => {
     try {

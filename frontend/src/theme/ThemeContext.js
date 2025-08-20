@@ -55,13 +55,12 @@ export const ThemeProvider = ({ children }) => {
   }, [isDarkMode]);
 
   // Apply the theme to the body when the component mounts (debug logs only)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     console.log('ThemeProvider mounted, dark mode is:', isDarkMode);
     return () => {
       console.log('ThemeProvider unmounted');
     };
-  }, []);
+  }, [isDarkMode]);
 
   // Provide the current theme and toggle function
   return (
