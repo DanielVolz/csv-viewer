@@ -6,6 +6,17 @@ import {
 import { Home, Folder, BarChart } from '@mui/icons-material';
 
 function Navigation({ currentTab, onTabChange, onHomeClick }) {
+  // Open route in a new tab on middle-click without affecting current tab state
+  const handleMiddleClick = (path) => (event) => {
+    if (event && event.button === 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        window.open(path, '_blank', 'noopener');
+      } catch {}
+    }
+  };
+
   return (
     <Tabs
       value={currentTab}
@@ -36,18 +47,21 @@ function Navigation({ currentTab, onTabChange, onHomeClick }) {
         value="home"
         iconPosition="start"
         onClick={onHomeClick}
+  onMouseDown={handleMiddleClick('/search')}
       />
       <Tab
         icon={<Folder fontSize="small" />}
         label="Files"
         value="files"
         iconPosition="start"
+  onMouseDown={handleMiddleClick('/files')}
       />
       <Tab
         icon={<BarChart fontSize="small" />}
         label="Statistics"
         value="stats"
         iconPosition="start"
+  onMouseDown={handleMiddleClick('/statistics')}
       />
     </Tabs>
   );
