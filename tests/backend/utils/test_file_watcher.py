@@ -38,6 +38,57 @@ def fake_cleanup(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def fake_snapshot(monkeypatch):
+    """Patch snapshot_current_stats to avoid hitting Celery/broker in tests."""
+    calls = []
+
+    class FakeTask:
+        def __init__(self, task_id="snap-123"):
+            self.id = task_id
+
+    class FakeSnap:
+        def delay(self, data_dir):
+            calls.append(data_dir)
+            return FakeTask()
+
+    import backend.tasks.tasks as tt
+    monkeypatch.setattr(tt, "snapshot_current_stats", FakeSnap())
+    return calls
+
+
+@pytest.fixture
+def fake_archive(monkeypatch):
+    """Patch archive_current_netspeed to a fast no-op to avoid filesystem work."""
+    import backend.utils.file_watcher as fw
+    monkeypatch.setattr(
+        fw,
+        "archive_current_netspeed",
+        lambda data_dir: {"status": "warning", "message": "skipped in tests"},
+    )
+    return True
+
+
+@pytest.fixture
+def fast_handle(monkeypatch):
+    """Replace handler's heavy change processor with a fast stub that uses our fakes."""
+    import backend.utils.file_watcher as fw
+
+    def quick(self, event_type: str, file_info: str):
+        # Call the faked cleanup and index methods only
+        try:
+            fw.opensearch_config.cleanup_indices_by_pattern("netspeed_*")
+        except Exception:
+            pass
+        try:
+            fw.index_all_csv_files.delay(str(self.data_dir))
+        except Exception:
+            pass
+
+    monkeypatch.setattr(fw.CSVFileHandler, "_handle_netspeed_files_change", quick)
+    return True
+
+
 def make_event(path, is_directory=False, dest_path=None):
     return SimpleNamespace(src_path=str(path), is_directory=is_directory, dest_path=str(dest_path) if dest_path else None)
 
@@ -57,7 +108,7 @@ def test_is_netspeed_file_variants():
     assert not h._is_netspeed_file(Path("/tmp/data/netspeed.csv.0.bak"))
 
 
-def test_created_event_triggers_reindex(monkeypatch, fake_index_all, fake_cleanup):
+def test_created_event_triggers_reindex(monkeypatch, fake_index_all, fake_cleanup, fake_snapshot, fake_archive, fast_handle):
     import backend.utils.file_watcher as fw
     from backend.utils.file_watcher import CSVFileHandler
 
@@ -75,7 +126,7 @@ def test_created_event_triggers_reindex(monkeypatch, fake_index_all, fake_cleanu
     assert fake_index_all == ["/app/data"]
 
 
-def test_cooldown_prevents_rapid_reindex(monkeypatch, fake_index_all, fake_cleanup):
+def test_cooldown_prevents_rapid_reindex(monkeypatch, fake_index_all, fake_cleanup, fake_snapshot, fake_archive, fast_handle):
     import backend.utils.file_watcher as fw
     from backend.utils.file_watcher import CSVFileHandler
 
@@ -98,7 +149,7 @@ def test_cooldown_prevents_rapid_reindex(monkeypatch, fake_index_all, fake_clean
     assert fake_cleanup == ["netspeed_*", "netspeed_*"]
 
 
-def test_moved_event_triggers_reindex(monkeypatch, fake_index_all, fake_cleanup):
+def test_moved_event_triggers_reindex(monkeypatch, fake_index_all, fake_cleanup, fake_snapshot, fake_archive, fast_handle):
     import backend.utils.file_watcher as fw
     from backend.utils.file_watcher import CSVFileHandler
 

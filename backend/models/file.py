@@ -140,7 +140,7 @@ class FileModel(BaseModel):
 
                 # Detect if file uses semicolons
                 delimiter = ';' if ';' in content else ','
-                logger.info(f"Detected delimiter '{delimiter}' for file {file_path}")
+                logger.debug(f"Detected delimiter '{delimiter}' for file {file_path}")
 
                 # Parse with the detected delimiter
                 csv_reader = csv.reader(f, delimiter=delimiter)
@@ -161,11 +161,11 @@ class FileModel(BaseModel):
                 else:
                     # Log for debugging
                     for i, row in enumerate(rows[:2]):
-                        logger.info(f"Row {i} in {name} has {len(row)} columns")
+                        logger.debug(f"Row {i} in {name} has {len(row)} columns")
 
                     # Check if any rows have 14 columns (new format)
                     new_format_count = sum(1 for row in rows if len(row) == 14)
-                    logger.info(f"New format count for {name}: {new_format_count}/{len(rows)}")
+                    logger.debug(f"New format count for {name}: {new_format_count}/{len(rows)}")
 
                     if new_format_count > 0:  # If any row has 14 columns
                         format_type = "new"
