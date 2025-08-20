@@ -1077,7 +1077,8 @@ class OpenSearchConfig:
                     logger.warning(f"[MAC-first] current-index search failed: {e}")
 
             # Now run the general search across the selected indices
-            indices = self.get_search_indices(include_historical)
+            # For MAC-like queries, always include historical indices to list results from all netspeed.csv files
+            indices = self.get_search_indices(True if looks_like_mac_first else include_historical)
             query_body = self._build_query_body(query, field, size)
             logger.info(f"Search query: indices={indices}, query={query_body}")
             response = self.client.search(index=indices, body=query_body)

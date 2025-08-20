@@ -119,16 +119,16 @@ function DataTable({
     return String(v).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   };
 
-  const toPortKey = (v) => {
-    if (!v || typeof v !== 'string') return [0];
-    const s = convertToCiscoFormat(v) || String(v);
-    const typeWeight = /^Gig\b/.test(s) ? 2 : /^Fas\b/.test(s) ? 1 : 0;
-    const nums = s.match(/\d+/g) || [];
-    const parts = nums.map(n => parseInt(n, 10));
-    return [typeWeight, ...parts];
-  };
-
   const getKey = React.useCallback((header, value) => {
+    // Define port sort key locally to avoid unstable dependency on an outer function
+    const toPortKeyLocal = (v) => {
+      if (!v || typeof v !== 'string') return [0];
+      const s = convertToCiscoFormat(v) || String(v);
+      const typeWeight = /^Gig\b/.test(s) ? 2 : /^Fas\b/.test(s) ? 1 : 0;
+      const nums = s.match(/\d+/g) || [];
+      const parts = nums.map(n => parseInt(n, 10));
+      return [typeWeight, ...parts];
+    };
     switch (header) {
       case 'IP Address':
         return toIpKey(value);
@@ -139,11 +139,11 @@ function DataTable({
       case 'MAC Address':
         return toMacKey(value);
       case 'Switch Port':
-        return toPortKey(value);
+        return toPortKeyLocal(value);
       default:
         return (value == null ? '' : String(value).toLowerCase());
     }
-  }, [toPortKey]);
+  }, []);
 
   const compareKeys = (a, b) => {
     if (Array.isArray(a) && Array.isArray(b)) {
