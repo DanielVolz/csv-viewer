@@ -106,23 +106,51 @@ export const SettingsProvider = ({ children }) => {
 
   // Save settings to localStorage whenever they change
   useEffect(() => {
-    const settings = {
+    // Merge with any existing keys (e.g., statistics) to avoid dropping them
+    let prev = {};
+    try {
+      prev = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+    } catch { prev = {}; }
+    const next = {
+      ...prev,
       sshUsername,
-      columns
+      columns,
     };
-    localStorage.setItem('csv-viewer-settings', JSON.stringify(settings));
+    localStorage.setItem('csv-viewer-settings', JSON.stringify(next));
   }, [sshUsername, columns]);
 
   // Helper to persist immediately (used when actions might trigger a reload)
   const persistSettings = useCallback((nextSsh, nextColumns) => {
     try {
+      let prev = {};
+      try {
+        prev = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      } catch { prev = {}; }
       const settings = {
+        ...prev,
         sshUsername: nextSsh ?? sshUsername,
         columns: Array.isArray(nextColumns) ? nextColumns : columns
       };
       localStorage.setItem('csv-viewer-settings', JSON.stringify(settings));
     } catch { }
   }, [sshUsername, columns]);
+
+  // Stats/Timeline preferences helpers (for Statistics page)
+  const getStatisticsPrefs = useCallback(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      return saved.statistics || {};
+    } catch { return {}; }
+  }, []);
+
+  const saveStatisticsPrefs = useCallback((partial) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      const nextStats = { ...(saved.statistics || {}), ...(partial || {}) };
+      const next = { ...saved, statistics: nextStats };
+      localStorage.setItem('csv-viewer-settings', JSON.stringify(next));
+    } catch { }
+  }, []);
 
   // Get enabled columns in order
   const getEnabledColumns = useCallback(() => {
@@ -204,7 +232,9 @@ export const SettingsProvider = ({ children }) => {
     updateSshUsername,
     setNavigationFunction,
     navigateToSettings,
-    refreshColumns
+    refreshColumns,
+    getStatisticsPrefs,
+    saveStatisticsPrefs
   }), [
     sshUsername,
     columns,
@@ -219,7 +249,9 @@ export const SettingsProvider = ({ children }) => {
     updateSshUsername,
     setNavigationFunction,
     navigateToSettings,
-    refreshColumns
+    refreshColumns,
+    getStatisticsPrefs,
+    saveStatisticsPrefs
   ]);
 
   return (

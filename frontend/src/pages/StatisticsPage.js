@@ -3,6 +3,8 @@ import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText,
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import Terminal from '@mui/icons-material/Terminal';
+import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
 // Heuristic: detect MAC address strings in common formats and exclude from model lists
@@ -43,8 +45,60 @@ function StatCard({ title, value, loading, tone = 'primary' }) {
   );
 }
 
+// Helper: copy to clipboard
+const copyToClipboard = async (text) => {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(String(text));
+      return true;
+    }
+  } catch (_) { }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = String(text);
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'absolute';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (_) {
+    return false;
+  }
+};
+
+// Helper: convert switch port to Cisco format (like DataTable)
+function convertToCiscoFormat(port) {
+  const p = (port || '').toString().trim();
+  if (!p) return '';
+  // Examples: Gi1/0/1, Te1/1/48, Fa0/1, TenGigabitEthernet1/0/1 etc.
+  const map = {
+    'GigabitEthernet': 'Gi',
+    'TenGigabitEthernet': 'Te',
+    'FastEthernet': 'Fa',
+    'TwoGigabitEthernet': 'Tw',
+    'FortyGigabitEthernet': 'Fo',
+    'HundredGigE': 'Hu'
+  };
+  for (const k of Object.keys(map)) {
+    if (p.startsWith(k)) return p.replace(k, map[k]);
+  }
+  return p;
+}
+
+// Helper: unified copy toast like search page
+const showCopyToast = (label, value, opts = {}) => {
+  const s = String(value ?? '');
+  const display = s.length > 48 ? `${s.slice(0, 48)}…` : s;
+  toast.success(`📋 ${label}: ${display}`,
+    { autoClose: 1500, pauseOnHover: false, ...opts }
+  );
+};
+
 export default function StatisticsPage() {
-  const { sshUsername } = useSettings?.() || { sshUsername: '' };
+  const { sshUsername, navigateToSettings, getStatisticsPrefs, saveStatisticsPrefs } = useSettings?.() || { sshUsername: '' };
   const makeSshUrl = (host) => {
     if (!host) return null;
     const userPart = sshUsername ? `${encodeURIComponent(sshUsername)}@` : '';
@@ -73,18 +127,34 @@ export default function StatisticsPage() {
     return map;
   }, [data?.cities]);
   const [fileMeta, setFileMeta] = React.useState(null);
-  // Timeline state (last 31 days)
+  const statsHydratedRef = React.useRef(false);
+  // Timeline state (configurable days)
   const [timeline, setTimeline] = React.useState({ loading: false, error: null, series: [] });
   const [backfillInfo, setBackfillInfo] = React.useState(null);
-  const timelineLoadedRef = React.useRef(false);
+  const [timelineDays, setTimelineDays] = React.useState(0); // 0 = full history by default
+  const timelineLimitRef = React.useRef(0);
   // Top locations aggregate timeline state
   const [topCount, setTopCount] = React.useState(10);
   const [topExtras, setTopExtras] = React.useState('');
-  const [topDays, setTopDays] = React.useState(5); // default 5 days; 0 = full history (last N days if limited)
+  const [topDays, setTopDays] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      const v = saved.statistics?.topDays;
+      if (Number.isFinite(v)) return Math.max(0, v);
+    } catch { /* ignore */ }
+    return 0; // default all days
+  });
   const [topTimeline, setTopTimeline] = React.useState({ loading: false, error: null, dates: [], keys: [], seriesByKey: {}, mode: 'per_key' });
   const [topLoadedKey, setTopLoadedKey] = React.useState('');
   const [topSelectedKeys, setTopSelectedKeys] = React.useState([]);
-  const [topKpi, setTopKpi] = React.useState('totalPhones');
+  const [topKpi, setTopKpi] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      const s = saved.statistics?.topKpi;
+      if (typeof s === 'string' && s) return s;
+    } catch { /* ignore */ }
+    return 'totalPhones';
+  });
   const TOP_KPI_DEFS = React.useMemo(() => ([
     { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
     { id: 'phonesWithKEM', label: 'Phones with KEM', color: '#2e7d32' },
@@ -103,8 +173,16 @@ export default function StatisticsPage() {
   ]), []);
   // For per-location timeline, exclude Locations/Cities which don't make sense in that context
   const KPI_DEFS_LOC = React.useMemo(() => KPI_DEFS.filter(k => k.id !== 'totalLocations' && k.id !== 'totalCities'), [KPI_DEFS]);
-  // Default: exclude the very large 'Total Phones' so other KPIs are readable initially
-  const [selectedKpis, setSelectedKpis] = React.useState(() => KPI_DEFS.filter(k => k.id !== 'totalPhones').map(k => k.id));
+  // Default: exclude the very large 'Total Phones' so other KPIs are readable initially;
+  // initialize from localStorage if available (including empty array)
+  const [selectedKpis, setSelectedKpis] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      const arr = saved.statistics?.selectedKpis;
+      if (Array.isArray(arr)) return arr;
+    } catch { /* ignore */ }
+    return KPI_DEFS.filter(k => k.id !== 'totalPhones').map(k => k.id);
+  });
   const toggleKpi = (id) => {
     setSelectedKpis((prev) => prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]);
   };
@@ -152,6 +230,20 @@ export default function StatisticsPage() {
   };
 
   React.useEffect(() => {
+    // Rehydrate saved statistics preferences on first render
+    try {
+      const prefs = getStatisticsPrefs?.() || {};
+      if (prefs.locSelected) setLocSelected(prefs.locSelected);
+      if (typeof prefs.locInput === 'string') setLocInput(prefs.locInput);
+      if (Array.isArray(prefs.selectedKpis)) setSelectedKpis(prefs.selectedKpis);
+      if (Number.isFinite(prefs.topCount)) setTopCount(prefs.topCount);
+      if (typeof prefs.topExtras === 'string') setTopExtras(prefs.topExtras);
+      if (Number.isFinite(prefs.topDays)) setTopDays(prefs.topDays);
+      if (typeof prefs.topKpi === 'string') setTopKpi(prefs.topKpi);
+      if (Array.isArray(prefs.topSelectedKeys)) setTopSelectedKeys(prefs.topSelectedKeys);
+      if (Number.isFinite(prefs.timelineDays)) setTimelineDays(prefs.timelineDays);
+      statsHydratedRef.current = true;
+    } catch { /* ignore */ }
     let abort = false;
     const controller = new AbortController();
     (async () => {
@@ -181,6 +273,39 @@ export default function StatisticsPage() {
     return () => { abort = true; controller.abort(); };
   }, []);
 
+  // Persist key preferences when they change
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    saveStatisticsPrefs?.({ locSelected });
+  }, [locSelected, saveStatisticsPrefs]);
+
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    saveStatisticsPrefs?.({ locInput });
+  }, [locInput, saveStatisticsPrefs]);
+
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    saveStatisticsPrefs?.({ selectedKpis });
+  }, [selectedKpis, saveStatisticsPrefs]);
+
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    saveStatisticsPrefs?.({ topCount, topExtras, topDays, topKpi });
+  }, [topCount, topExtras, topDays, topKpi, saveStatisticsPrefs]);
+
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    // Persist selected keys but throttle to avoid excessive writes
+    const h = setTimeout(() => saveStatisticsPrefs?.({ topSelectedKeys }), 150);
+    return () => clearTimeout(h);
+  }, [topSelectedKeys, saveStatisticsPrefs]);
+
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    saveStatisticsPrefs?.({ timelineDays });
+  }, [timelineDays, saveStatisticsPrefs]);
+
   // Fetch Top-N locations aggregate timeline when controls change (debounced)
   React.useEffect(() => {
     const key = `${topCount}|${(topExtras || '').trim()}|${topDays}`;
@@ -206,7 +331,14 @@ export default function StatisticsPage() {
           const seriesByKey = json.seriesByKey || {};
           const labels = json.labels || {};
           setTopTimeline({ loading: false, error: null, dates, keys, seriesByKey, labels, mode: 'per_key' });
-          setTopSelectedKeys(keys);
+          // Respect saved selection if available; otherwise select all
+          try {
+            const prefs = getStatisticsPrefs?.() || {};
+            const savedSel = Array.isArray(prefs.topSelectedKeys) ? prefs.topSelectedKeys : [];
+            const set = new Set(keys);
+            const intersect = savedSel.filter(k => set.has(k));
+            setTopSelectedKeys(intersect.length > 0 ? intersect : keys);
+          } catch { setTopSelectedKeys(keys); }
           setTopLoadedKey(key);
         } else {
           setTopTimeline({ loading: false, error: json.message || 'No top-locations timeline available', dates: [], keys: [], seriesByKey: {}, mode: 'per_key' });
@@ -238,44 +370,36 @@ export default function StatisticsPage() {
     }));
   }, [topTimeline, topSelectedKeys, topKpi]);
 
-  // Lazy-load timeline when the timeline section comes into view
-  const timelineRef = React.useRef(null);
+  // Eagerly fetch global timeline on mount and when days changes
   React.useEffect(() => {
-    if (!timelineRef.current || timelineLoadedRef.current) return;
-    const el = timelineRef.current;
-    const observer = new IntersectionObserver((entries) => {
-      const [entry] = entries;
-      if (!entry || !entry.isIntersecting || timelineLoadedRef.current) return;
-      timelineLoadedRef.current = true;
-      let abort = false;
-      const controller = new AbortController();
-      (async () => {
-        try {
-          setTimeline((t) => ({ ...t, loading: true, error: null }));
-          const r = await fetch('/api/stats/timeline?limit=0', { signal: controller.signal });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const json = await r.json();
-          if (abort) return;
-          if (json.success) {
-            const series = json.series || [];
-            if (series.length === 0) {
-              setTimeline({ loading: false, error: json.message || 'No timeline snapshots available yet', series: [] });
-            } else {
-              setTimeline({ loading: false, error: null, series });
-            }
+    let abort = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        setTimeline((t) => ({ ...t, loading: true, error: null }));
+        const limit = Number.isFinite(timelineDays) ? Math.max(0, timelineDays) : 0;
+        const r = await fetch(`/api/stats/timeline?limit=${limit}`, { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = await r.json();
+        if (abort) return;
+        if (json.success) {
+          const series = json.series || [];
+          if (series.length === 0) {
+            setTimeline({ loading: false, error: json.message || 'No timeline snapshots available yet', series: [] });
           } else {
-            setTimeline({ loading: false, error: json.message || 'No timeline available', series: [] });
+            setTimeline({ loading: false, error: null, series });
           }
-        } catch (e) {
-          if (e.name === 'AbortError') return;
-          setTimeline({ loading: false, error: 'Failed to load timeline', series: [] });
+          timelineLimitRef.current = limit;
+        } else {
+          setTimeline({ loading: false, error: json.message || 'No timeline available', series: [] });
         }
-      })();
-      return () => { abort = true; controller.abort(); };
-    }, { threshold: 0.2 });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setTimeline({ loading: false, error: 'Failed to load timeline', series: [] });
+      }
+    })();
+    return () => { abort = true; controller.abort(); };
+  }, [timelineDays]);
 
   const triggerBackfill = React.useCallback(async () => {
     try {
@@ -346,6 +470,33 @@ export default function StatisticsPage() {
     })();
     return () => { abort = true; controller.abort(); };
   }, [locSelected]);
+
+  // If timeline already loaded, refetch when days change
+  React.useEffect(() => {
+    const limit = Number.isFinite(timelineDays) ? Math.max(0, timelineDays) : 0;
+    if (limit === timelineLimitRef.current) return;
+    let abort = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        setTimeline((t) => ({ ...t, loading: true, error: null }));
+        const r = await fetch(`/api/stats/timeline?limit=${limit}`, { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = await r.json();
+        if (abort) return;
+        if (json.success) {
+          setTimeline({ loading: false, error: null, series: json.series || [] });
+          timelineLimitRef.current = limit;
+        } else {
+          setTimeline({ loading: false, error: json.message || 'No timeline available', series: [] });
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setTimeline({ loading: false, error: 'Failed to load timeline', series: [] });
+      }
+    })();
+    return () => { abort = true; controller.abort(); };
+  }, [timelineDays]);
 
   // Fetch per-location timeline whenever the selected location changes
   React.useEffect(() => {
@@ -666,8 +817,84 @@ export default function StatisticsPage() {
                       {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || []).map((s) => ({ hostname: s, vlanCount: 0, vlans: [] }))).map((sw) => (
                         <TableRow key={sw.hostname} hover>
                           <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            <Tooltip arrow placement="top" title={`Open SSH ${sshUsername ? `${sshUsername}@` : ''}${sw.hostname}`}>
-                              <a href={makeSshUrl(sw.hostname)} style={{ textDecoration: 'none' }}>{sw.hostname}</a>
+                            <Tooltip
+                              arrow
+                              placement="top-start"
+                              title={<Box component="span" sx={{ display: 'block', textAlign: 'left', width: '100%' }}>{sshUsername ? `Open SSH ${sshUsername}@${sw.hostname}` : 'Copy hostname (SSH username not set)'}</Box>}
+                              slotProps={{
+                                tooltip: { sx: { textAlign: 'left !important' } },
+                                arrow: { sx: { left: '50% !important', transform: 'translateX(-50%) !important' } },
+                                popper: { sx: { '&[data-popper-placement^="top"] .MuiTooltip-arrow': { left: '50% !important', transform: 'translateX(-50%) !important' } } }
+                              }}
+                            >
+                              <Typography
+                                variant="body2"
+                                component="span"
+                                onClick={() => {
+                                  const url = makeSshUrl(sw.hostname);
+                                  if (url && sshUsername) {
+                                    // Success toast like search page
+                                    toast.success(`🔗 SSH: ${sshUsername}@${sw.hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                    setTimeout(() => { window.location.href = url; }, 150);
+                                  } else {
+                                    // Show settings toast and copy hostname
+                                    const ToastContent = () => (
+                                      <div>
+                                        📋 Copied hostname! ⚠️ SSH username not configured!{' '}
+                                        <span
+                                          onClick={() => { try { navigateToSettings?.(); } catch { } try { toast.dismiss(); } catch { } }}
+                                          style={{ color: '#4f46e5', textDecoration: 'underline', cursor: 'pointer', fontWeight: 'bold' }}
+                                        >
+                                          Go to Settings
+                                        </span>{' '}to set your SSH username.
+                                      </div>
+                                    );
+                                    toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
+                                    copyToClipboard(sw.hostname).catch(() => { });
+                                  }
+                                }}
+                                sx={{
+                                  textDecoration: sshUsername ? 'underline' : 'none',
+                                  color: theme => {
+                                    if (sshUsername) {
+                                      return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32';
+                                    }
+                                    return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary';
+                                  },
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 0.5,
+                                  '&:hover': {
+                                    color: theme => {
+                                      if (sshUsername) {
+                                        return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
+                                      } else {
+                                        return theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00';
+                                      }
+                                    },
+                                    textDecoration: 'underline',
+                                    '& .ssh-icon': {
+                                      color: theme => sshUsername
+                                        ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
+                                        : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
+                                    }
+                                  }
+                                }}
+                              >
+                                {sw.hostname}
+                                <Terminal
+                                  className="ssh-icon"
+                                  sx={{
+                                    color: theme => sshUsername
+                                      ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                                      : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                                    fontSize: '14px',
+                                    ml: 0.5,
+                                    verticalAlign: 'middle'
+                                  }}
+                                />
+                              </Typography>
                             </Tooltip>
                           </TableCell>
                           <TableCell>
@@ -745,28 +972,121 @@ export default function StatisticsPage() {
                             <TableCell sx={{ whiteSpace: 'nowrap' }}>
                               {ip ? (
                                 <Tooltip arrow placement="top" title={`Open http://${ip}`}>
-                                  <a
+                                  <Typography
+                                    variant="body2"
+                                    component="a"
                                     href={`http://${encodeURIComponent(ip)}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    style={{ textDecoration: 'none' }}
+                                    sx={{
+                                      textDecoration: 'underline',
+                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+                                      cursor: 'pointer',
+                                      '&:hover': {
+                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                                        textDecoration: 'underline'
+                                      }
+                                    }}
                                   >
                                     {ip}
-                                  </a>
+                                  </Typography>
                                 </Tooltip>
                               ) : 'n/a'}
                             </TableCell>
                             <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                              {mac ? (<a href={`/?q=${encodeURIComponent(mac)}`} style={{ textDecoration: 'none' }}>{mac}</a>) : 'n/a'}
+                              {mac ? (
+                                <Typography
+                                  variant="body2"
+                                  component="a"
+                                  href={`/?q=${encodeURIComponent(mac)}`}
+                                  sx={{
+                                    textDecoration: 'underline',
+                                    color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+                                    cursor: 'pointer',
+                                    '&:hover': {
+                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                                      textDecoration: 'underline'
+                                    }
+                                  }}
+                                >
+                                  {mac}
+                                </Typography>
+                              ) : 'n/a'}
                             </TableCell>
                             <TableCell sx={{ whiteSpace: 'nowrap' }}>
                               {p['Switch Hostname'] ? (
-                                <Tooltip arrow placement="top" title={`Open SSH ${sshUsername ? `${sshUsername}@` : ''}${p['Switch Hostname']}`}>
-                                  <a href={makeSshUrl(p['Switch Hostname'])} style={{ textDecoration: 'none' }}>
+                                <Tooltip
+                                  arrow
+                                  placement="top-start"
+                                  title={<Box component="span" sx={{ display: 'block', textAlign: 'left', width: '100%' }}>{`Open SSH ${sshUsername ? `${sshUsername}@` : ''}${p['Switch Hostname']}`}</Box>}
+                                  slotProps={{
+                                    tooltip: { sx: { textAlign: 'left !important' } },
+                                    arrow: { sx: { left: '50% !important', transform: 'translateX(-50%) !important' } },
+                                    popper: { sx: { '&[data-popper-placement^="top"] .MuiTooltip-arrow': { left: '50% !important', transform: 'translateX(-50%) !important' } } }
+                                  }}
+                                >
+                                  <Typography
+                                    variant="body2"
+                                    component="span"
+                                    onClick={async () => {
+                                      const host = p['Switch Hostname'];
+                                      const url = makeSshUrl(host);
+                                      if (sshUsername && url) {
+                                        // Try to copy Cisco port before navigating
+                                        const port = p['Switch Port'] || '';
+                                        const cisco = convertToCiscoFormat(port);
+                                        if (cisco) {
+                                          try {
+                                            const copied = await copyToClipboard(cisco);
+                                            if (copied) showCopyToast('Copied Cisco port', cisco, { autoClose: 1200, pauseOnHover: true });
+                                            else toast.error(`❌ Failed to copy Cisco port: ${cisco}`, { autoClose: 2000, pauseOnHover: true });
+                                          } catch { /* ignore */ }
+                                        }
+                                        toast.success(`🔗 SSH: ${sshUsername}@${host}`, { autoClose: 1000, pauseOnHover: false });
+                                        setTimeout(() => { window.location.href = url; }, 150);
+                                      } else {
+                                        const ToastContent = () => (
+                                          <div>
+                                            📋 Copied hostname! ⚠️ SSH username not configured!{' '}
+                                            <span
+                                              onClick={() => { try { navigateToSettings?.(); } catch { } try { toast.dismiss(); } catch { } }}
+                                              style={{ color: '#4f46e5', textDecoration: 'underline', cursor: 'pointer', fontWeight: 'bold' }}
+                                            >
+                                              Go to Settings
+                                            </span>{' '}to set your SSH username.
+                                          </div>
+                                        );
+                                        toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
+                                        copyToClipboard(host).catch(() => { });
+                                      }
+                                    }}
+                                    sx={{
+                                      textDecoration: sshUsername ? 'underline' : 'none',
+                                      color: theme => sshUsername
+                                        ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32')
+                                        : (theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary'),
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 0.5,
+                                      '&:hover': {
+                                        color: theme => sshUsername
+                                          ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
+                                          : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00'),
+                                        textDecoration: 'underline',
+                                        '& .ssh-icon': {
+                                          color: theme => sshUsername
+                                            ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
+                                            : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
+                                        }
+                                      }
+                                    }}
+                                  >
                                     {p['Switch Hostname']}
-                                  </a>
+                                    <Terminal className="ssh-icon" sx={{ color: theme => sshUsername ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50') : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'), fontSize: '14px', ml: 0.5, verticalAlign: 'middle' }} />
+                                  </Typography>
                                 </Tooltip>
-                              ) : ''}
+                              ) : 'n/a'}
                             </TableCell>
                             <TableCell align="right">{kemCount}</TableCell>
                           </TableRow>
@@ -784,8 +1104,21 @@ export default function StatisticsPage() {
       </Paper>
 
       {/* Timeline in separate section */}
-      <Paper ref={timelineRef} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Timeline ({(timeline.series || []).length} days)</Typography>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Timeline ({(timeline.series || []).length} days)</Typography>
+          <TextField
+            size="small"
+            type="number"
+            label="Days (0 = full)"
+            value={timelineDays}
+            onChange={(e) => {
+              const v = parseInt(e.target.value || '0', 10);
+              setTimelineDays(Number.isFinite(v) ? Math.max(0, v) : 0);
+            }}
+            sx={{ width: 160, ml: 'auto' }}
+          />
+        </Box>
         {/* KPI selector */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
           {KPI_DEFS.map((k) => {
