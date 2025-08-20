@@ -650,6 +650,8 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
                         logger.warning(f"Error getting file format for {file_name}: {e}")
                         doc['File Format'] = 'unknown'
 
+    # Note: CSV fallback used during testing has been removed. OpenSearch results are used exclusively.
+
         # Apply same column filtering as Preview API for consistency
         from utils.csv_utils import filter_display_columns
 

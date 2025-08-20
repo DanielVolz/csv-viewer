@@ -55,8 +55,18 @@ class OpenSearchConfig:
                     # If numeric range queries are needed later, introduce a parallel long form field.
                     "IP Address": self.text_with_keyword,
                     "Line Number": self.text_with_keyword,  # Now contains KEM info
-                    "MAC Address": self.text_with_keyword,
-                    "MAC Address 2": self.text_with_keyword,
+                    "MAC Address": {
+                        "type": "text",
+                        "fields": {
+                            "keyword": {"type": "keyword"}
+                        }
+                    },
+                    "MAC Address 2": {
+                        "type": "text",
+                        "fields": {
+                            "keyword": {"type": "keyword"}
+                        }
+                    },
                     "Serial Number": self.keyword_type,
                     "Model Name": {"type": "text"},
                     "Subnet Mask": self.keyword_type,
@@ -257,8 +267,20 @@ class OpenSearchConfig:
             logger.info(f"Available indices: {indices}")
 
             if include_historical:
-                # If including historical files, search all indices starting with "netspeed_"
-                return ["netspeed_*"]
+                # If including historical files, prefer the current index first (if present)
+                # and then include all netspeed_* indices. This guarantees the current file
+                # (netspeed.csv) is part of the search even if wildcard expansion behaves unexpectedly
+                # in some environments.
+                current_index = "netspeed_netspeed_csv"
+                legacy_index = "netspeed_netspeed"  # backward-compat older naming
+                ordered: list[str] = []
+                if current_index in indices:
+                    ordered.append(current_index)
+                elif legacy_index in indices:
+                    ordered.append(legacy_index)
+                # Add wildcard covering all netspeed indices (including the current one)
+                ordered.append("netspeed_*")
+                return ordered
             else:
                 # If not including historical files, search only the current netspeed file index
                 # A netspeed.csv file should be indexed as "netspeed_netspeed_csv"
@@ -784,7 +806,7 @@ class OpenSearchConfig:
             Dict[str, Any]: Query body
         """
         # Log what kind of query we're building for debugging
-        logger.info(f"Building query body for query: {query}, field: {field}, size: {size}")
+        logger.debug(f"Building query body for query: {query}, field: {field}, size: {size}")
 
         if field:
             # Field-specific search with both exact and partial matching
@@ -828,13 +850,15 @@ class OpenSearchConfig:
                             {"term": {"Line Number": query}},
                             {"term": {"MAC Address": query}},
                             {"term": {"Line Number": f"+{query}"}},
+                            # Prefer current file where applicable
+                            {"term": {"File Name": {"value": "netspeed.csv", "boost": 2.0}}},
 
                             # Add case-insensitive wildcard search for all text/keyword fields
-                            # MAC Address fields
-                            {"wildcard": {"MAC Address": f"*{query.lower()}*"}},
-                            {"wildcard": {"MAC Address": f"*{query.upper()}*"}},
-                            {"wildcard": {"MAC Address 2": f"*{query.lower()}*"}},
-                            {"wildcard": {"MAC Address 2": f"*{query.upper()}*"}},
+                            # MAC Address fields (use keyword subfields for wildcard substring search)
+                            {"wildcard": {"MAC Address.keyword": f"*{query.lower()}*"}},
+                            {"wildcard": {"MAC Address.keyword": f"*{query.upper()}*"}},
+                            {"wildcard": {"MAC Address 2.keyword": f"*{query.lower()}*"}},
+                            {"wildcard": {"MAC Address 2.keyword": f"*{query.upper()}*"}},
 
                             # Serial Number and IDs
                             {"wildcard": {"Serial Number": f"*{query.lower()}*"}},
@@ -883,6 +907,18 @@ class OpenSearchConfig:
                 "size": size
             }
 
+            # Strengthen MAC address matching: try exact keyword matches and SEP-prefixed variant
+            try:
+                # Exact match on keyword subfields (case-sensitive)
+                search_query["query"]["bool"]["should"].append({"term": {"MAC Address.keyword": query}})
+                search_query["query"]["bool"]["should"].append({"term": {"MAC Address 2.keyword": query}})
+                # Also try SEP-prefixed form on MAC Address 2
+                if isinstance(query, str) and len(query) >= 12:
+                    sep_variant = f"SEP{query.upper()}"
+                    search_query["query"]["bool"]["should"].append({"term": {"MAC Address 2.keyword": sep_variant}})
+            except Exception as e:
+                logger.warning(f"Failed to add strengthened MAC keyword terms: {e}")
+
             # Add IP Address partial search with range query if query looks like a valid IP prefix
             # Use a regex that allows for trailing dots to handle formats like "10.0.0."
             ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}\.?$')
@@ -918,7 +954,7 @@ class OpenSearchConfig:
                     logger.warning(f"Failed to add IP range search for '{query}': {e}")
 
             # Log the final query for debugging
-            logger.info(f"Final search query: {search_query}")
+            logger.debug(f"Final search query: {search_query}")
 
             # Additional heuristic: if query is a long numeric substring (>=5 digits) and does not already start with '+',
             # add variant with leading '+' to increase chances of match in 'Line Number' field that may store it so.
@@ -934,10 +970,10 @@ class OpenSearchConfig:
                 mac_core = re.sub(r'[^A-Fa-f0-9]', '', query)
                 if mac_core:
                     try:
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address": f"*{mac_core.lower()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address": f"*{mac_core.upper()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2": f"*{mac_core.lower()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2": f"*{mac_core.upper()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address.keyword": f"*{mac_core.lower()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address.keyword": f"*{mac_core.upper()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2.keyword": f"*{mac_core.lower()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2.keyword": f"*{mac_core.upper()}*"}})
                     except Exception as e:
                         logger.warning(f"Failed to add MAC core variants for '{query}': {e}")
 
@@ -964,18 +1000,21 @@ class OpenSearchConfig:
             from utils.csv_utils import DESIRED_ORDER
             search_query["_source"] = DESIRED_ORDER
 
-            # Add simple sorting by Creation Date (we'll do file name sorting client-side)
+            # Add sorting by Creation Date then a tie-breaker to prioritize netspeed.csv
             search_query["sort"] = [
+                {"Creation Date": {"order": "desc"}},
                 {
-                    "Creation Date": {
-                        "order": "desc"
+                    "_script": {
+                        "type": "number",
+                        "order": "asc",
+                        "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }
                     }
                 },
-                {
-                    "_score": {
-                        "order": "desc"
-                    }
-                }
+                {"_score": {"order": "desc"}}
             ]
 
             return search_query
@@ -995,35 +1034,108 @@ class OpenSearchConfig:
             Tuple[List[str], List[Dict[str, Any]]]: (headers, matching documents)
         """
         try:
-            # Get indices to search
+            # Prepare containers for documents
+            documents: List[Dict[str, Any]] = []
+
+            # If the query looks like a MAC, first search the current index only to prefer today's file
+            try:
+                mac_core_first = re.sub(r'[^A-Fa-f0-9]', '', query or '')
+                looks_like_mac_first = isinstance(query, str) and len(mac_core_first) == 12
+            except Exception:
+                looks_like_mac_first = False
+
+            if looks_like_mac_first:
+                try:
+                    curr_indices_first = self.get_search_indices(False)
+                    mac_upper_first = mac_core_first.upper()
+                    targeted_first = {
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    {"term": {"File Name": "netspeed.csv"}}
+                                ],
+                                "should": [
+                                    {"term": {"MAC Address.keyword": mac_upper_first}},
+                                    {"term": {"MAC Address 2.keyword": mac_upper_first}},
+                                    {"term": {"MAC Address 2.keyword": f"SEP{mac_upper_first}"}},
+                                    {"wildcard": {"MAC Address.keyword": f"*{mac_upper_first}*"}},
+                                    {"wildcard": {"MAC Address 2.keyword": f"*{mac_upper_first}*"}}
+                                ],
+                                "minimum_should_match": 1
+                            }
+                        },
+                        "_source": ["File Name", "Creation Date", "MAC Address", "MAC Address 2", "IP Address", "Line Number", "Switch Hostname", "Switch Port", "Serial Number", "Model Name"],
+                        "size": 200
+                    }
+                    logger.info(f"[MAC-first] indices={curr_indices_first} body={targeted_first}")
+                    resp_first = self.client.search(index=curr_indices_first, body=targeted_first)
+                    docs_first = [h.get('_source', {}) for h in resp_first.get('hits', {}).get('hits', [])]
+                    if docs_first:
+                        documents.extend(docs_first)
+                        logger.info(f"[MAC-first] seeded {len(docs_first)} docs from current index")
+                except Exception as e:
+                    logger.warning(f"[MAC-first] current-index search failed: {e}")
+
+            # Now run the general search across the selected indices
             indices = self.get_search_indices(include_historical)
-
-            # Build query
             query_body = self._build_query_body(query, field, size)
-
-            # Log the query for debugging
             logger.info(f"Search query: indices={indices}, query={query_body}")
-
-            # Execute search
-            response = self.client.search(
-                index=indices,
-                body=query_body
-            )
-
-            # Log response for debugging
+            response = self.client.search(index=indices, body=query_body)
             logger.info(f"Search response: {response}")
+            hits = response.get("hits", {}).get("hits", [])
+            documents.extend([hit.get("_source", {}) for hit in hits])
 
-            # Extract results
-            hits = response["hits"]["hits"]
-            documents = [hit["_source"] for hit in hits]
-
-            # Log the raw documents from OpenSearch for debugging
-            logger.info(f"Raw documents from OpenSearch (first 10):")
-            for i, doc in enumerate(documents[:10]):
-                logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - {doc.get('Creation Date', 'unknown')} - MAC: {doc.get('MAC Address', 'unknown')}")
+            # Reduce noisy debug logging used during testing
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Raw documents sample: %s", [
+                    {
+                        'file': d.get('File Name'),
+                        'date': d.get('Creation Date'),
+                        'mac': d.get('MAC Address')
+                    } for d in documents[:5]
+                ])
 
             # Deduplicate documents while preserving sort order
             unique_documents = self._deduplicate_documents_preserve_order(documents)
+
+            # If it's a MAC-like query and still no netspeed.csv in results, try a wildcard-indices fallback
+            try:
+                mac_core_fb = re.sub(r'[^A-Fa-f0-9]', '', query or '')
+                looks_like_mac_fb = isinstance(query, str) and len(mac_core_fb) == 12
+            except Exception:
+                looks_like_mac_fb = False
+            if looks_like_mac_fb and not any((d.get('File Name') or '') == 'netspeed.csv' for d in unique_documents):
+                try:
+                    mac_upper_fb = mac_core_fb.upper()
+                    fb_body = {
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    {"term": {"File Name": "netspeed.csv"}}
+                                ],
+                                "should": [
+                                    {"term": {"MAC Address.keyword": mac_upper_fb}},
+                                    {"term": {"MAC Address 2.keyword": mac_upper_fb}},
+                                    {"term": {"MAC Address 2.keyword": f"SEP{mac_upper_fb}"}},
+                                    {"wildcard": {"MAC Address.keyword": f"*{mac_upper_fb}*"}},
+                                    {"wildcard": {"MAC Address 2.keyword": f"*{mac_upper_fb}*"}}
+                                ],
+                                "minimum_should_match": 1
+                            }
+                        },
+                        "_source": ["File Name", "Creation Date", "MAC Address", "MAC Address 2", "IP Address", "Line Number", "Switch Hostname", "Switch Port", "Serial Number", "Model Name"],
+                        "size": 200
+                    }
+                    logger.info("[MAC-fallback] searching netspeed_* for File Name=netspeed.csv")
+                    resp_fb = self.client.search(index=["netspeed_*"], body=fb_body)
+                    docs_fb = [h.get('_source', {}) for h in resp_fb.get('hits', {}).get('hits', [])]
+                    if docs_fb:
+                        unique_documents.extend(docs_fb)
+                        unique_documents = self._deduplicate_documents_preserve_order(unique_documents)
+                except Exception as e:
+                    logger.warning(f"[MAC-fallback] wildcard indices search failed: {e}")
+
+            # (Removed: secondary MAC fallback, now handled up-front)
 
             # Sort the deduplicated documents by file name priority, then by Creation Date
             def get_file_priority(doc):
@@ -1055,6 +1167,8 @@ class OpenSearchConfig:
 
             except Exception as e:
                 logger.warning(f"Error sorting documents by file name priority: {e}")
+
+            # CSV fallback used during testing has been removed. Search relies on OpenSearch only.
 
             # Apply display column filtering for consistency
             from utils.csv_utils import DESIRED_ORDER

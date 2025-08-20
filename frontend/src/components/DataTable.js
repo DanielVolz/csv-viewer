@@ -174,6 +174,60 @@ function DataTable({
     return arr.map(x => x.row);
   }, [data, orderBy, order, getKey]);
 
+  // Compute date range for gradient coloring (newest -> orange, oldest -> red)
+  const dateRange = React.useMemo(() => {
+    try {
+      if (!Array.isArray(data) || data.length === 0) return null;
+      let minMs = Number.POSITIVE_INFINITY;
+      let maxMs = Number.NEGATIVE_INFINITY;
+      data.forEach((row) => {
+        const v = row && row['Creation Date'];
+        if (!v) return;
+        const t = Date.parse(v);
+        if (!Number.isFinite(t)) return;
+        if (t < minMs) minMs = t;
+        if (t > maxMs) maxMs = t;
+      });
+      if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return null;
+      if (minMs === Number.POSITIVE_INFINITY || maxMs === Number.NEGATIVE_INFINITY) return null;
+      return { minMs, maxMs };
+    } catch { return null; }
+  }, [data]);
+
+  // Map a date to a brighter orange (newest) -> deep red (oldest)
+  // Also return a soft background pill color for better visibility
+  const getDateVisual = React.useCallback((dateString) => {
+    if (!dateString || !dateRange) return { color: 'text.primary', bg: 'transparent' };
+    const tMs = Date.parse(dateString);
+    if (!Number.isFinite(tMs)) return { color: 'text.primary', bg: 'transparent' };
+    const { minMs, maxMs } = dateRange;
+    const span = Math.max(1, maxMs - minMs);
+    // Normalize so newest (maxMs) -> 0, oldest (minMs) -> 1
+    const t = Math.min(1, Math.max(0, (maxMs - tMs) / span));
+    // Hue: 35 (bright orange) -> 0 (red)
+    const hue = 35 * (1 - t);
+    const sat = 100; // %
+    // Lightness: start brighter at newest (65%), fade to 40% at oldest
+    const light = 40 + (65 - 40) * (1 - t);
+    const color = `hsl(${hue} ${sat}% ${light}%)`;
+    // Soft background pill using same hue, moderate lightness, low alpha
+    const bgLight = 52; // middle lightness for background
+    const alphaBg = 0.16; // subtle but visible
+    const bg = `hsla(${hue}, ${sat}%, ${bgLight}%, ${alphaBg})`;
+    return { color, bg };
+  }, [dateRange]);
+
+  // Helper: check if a date string is today (local time)
+  const isToday = React.useCallback((dateString) => {
+    if (!dateString) return false;
+    const d = new Date(dateString);
+    if (!Number.isFinite(d.getTime())) return false;
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+  }, []);
+
   const getDateColor = (dateString) => {
     if (!dateString) return 'inherit';
 
@@ -515,13 +569,33 @@ function DataTable({
       );
     }
 
-    // Creation Date mit Farb-Kodierung
+    // Creation Date mit Farb-Gradient (neueste = helles Orange -> älteste = tiefes Rot)
     if (header === "Creation Date" && content) {
+      if (isToday(content)) {
+        return (
+          <Typography sx={{
+            color: (theme) => theme.palette.success.main,
+            fontWeight: 800,
+            fontSize: '0.9rem',
+            backgroundColor: 'rgba(76, 175, 80, 0.18)', // soft green pill
+            px: 0.75,
+            py: 0.25,
+            borderRadius: 1
+          }}>
+            {content}
+          </Typography>
+        );
+      }
+      const { color, bg } = getDateVisual(content);
       return (
         <Typography sx={{
-          color: getDateColor(content),
-          fontWeight: 500,
-          fontSize: '0.9rem'
+          color,
+          fontWeight: 700,
+          fontSize: '0.9rem',
+          backgroundColor: bg,
+          px: 0.75,
+          py: 0.25,
+          borderRadius: 1
         }}>
           {content}
         </Typography>
