@@ -192,7 +192,16 @@ class OpenSearchConfig:
             "settings": {
                 "number_of_shards": 1,
                 "number_of_replicas": 0,
-                "refresh_interval": "30s"
+                "refresh_interval": "30s",
+                # Ensure the same normalizer exists for fields referencing it (e.g., Switch Hostname.lower)
+                "analysis": {
+                    "normalizer": {
+                        "lowercase_normalizer": {
+                            "type": "custom",
+                            "filter": ["lowercase"]
+                        }
+                    }
+                }
             }
         }
 
