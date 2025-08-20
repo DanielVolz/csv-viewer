@@ -190,12 +190,12 @@ export default function StatisticsPage() {
     const h = setTimeout(async () => {
       try {
         setTopTimeline((t) => ({ ...t, loading: true, error: null }));
-  const params = new URLSearchParams();
+        const params = new URLSearchParams();
         params.set('count', String(topCount));
         params.set('limit', String(topDays || 0));
         if ((topExtras || '').trim()) params.set('extra', (topExtras || '').trim());
-  params.set('mode', 'per_key');
-  params.set('group', 'city');
+        params.set('mode', 'per_key');
+        params.set('group', 'city');
         const r = await fetch(`/api/stats/timeline/top_locations?${params.toString()}`, { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
@@ -843,9 +843,9 @@ export default function StatisticsPage() {
         )}
       </Paper>
 
-  {/* Top Cities Timeline */}
+      {/* Top Cities Timeline */}
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.primary.main}`, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.06 : 0.04) }}>
-  <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Top Cities Timeline — {TOP_KPI_DEFS.find(d => d.id === topKpi)?.label || ''} ({(topTimeline.dates || []).length} days)</Typography>
+        <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Top Cities Timeline — {TOP_KPI_DEFS.find(d => d.id === topKpi)?.label || ''} ({(topTimeline.dates || []).length} days)</Typography>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, alignItems: 'center' }}>
           <Typography variant="body2" color="text.secondary">Show:</Typography>
           {[
@@ -895,11 +895,11 @@ export default function StatisticsPage() {
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
             <Chip size="small" label="Select all" variant="outlined" onClick={selectAllTopKeys} />
             <Chip size="small" label="Clear all" variant="outlined" onClick={clearAllTopKeys} />
-      {(topTimeline.keys || []).map((k) => (
+            {(topTimeline.keys || []).map((k) => (
               <Chip
                 key={k}
                 size="small"
-        label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
+                label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
                 color={topSelectedKeys.includes(k) ? 'success' : 'default'}
                 variant={topSelectedKeys.includes(k) ? 'filled' : 'outlined'}
                 onClick={() => toggleTopKey(k)}
