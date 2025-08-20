@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
@@ -19,12 +19,18 @@ function useSearchCSV() {
 
   // Use ref to stabilize the search function reference
   const searchAllRef = useRef();
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // The actual search function implementation
   const searchAllImpl = useCallback(async (searchTerm, includeHistorical = true, showToasts = true) => {
     if (!searchTerm) {
       const errorMessage = 'Please enter a search term';
-      setError(errorMessage);
+      if (mountedRef.current) setError(errorMessage);
       if (showToasts) {
         toast.warning(errorMessage);
       }
@@ -32,8 +38,8 @@ function useSearchCSV() {
     }
 
     try {
-      setLoading(true);
-      setError(null);
+      if (mountedRef.current) setLoading(true);
+      if (mountedRef.current) setError(null);
 
       // The actual API call happens regardless of showToasts
       const response = await axios.get('/api/search/', {
@@ -50,10 +56,10 @@ function useSearchCSV() {
 
       // Use data as provided by backend (backend controls what's displayed)
       if (originalData.success && Array.isArray(originalData.data) && originalData.data.length > 0) {
-        setResults(originalData);
+        if (mountedRef.current) setResults(originalData);
       } else {
         // If no data or error, just set the original response
-        setResults(originalData);
+        if (mountedRef.current) setResults(originalData);
 
         // Show a toast notification for no results
         if (showToasts && originalData.success && (!Array.isArray(originalData.data) || originalData.data.length === 0)) {
@@ -76,7 +82,7 @@ function useSearchCSV() {
           });
         }
 
-        setPagination(prevPagination => {
+        if (mountedRef.current) setPagination(prevPagination => {
           const pageSize = prevPagination.pageSize;
           const totalPages = Math.ceil(totalItems / pageSize);
           return {
@@ -95,30 +101,30 @@ function useSearchCSV() {
       let errorMessage = '';
       if (err.code === 'ECONNABORTED') {
         errorMessage = 'Search timed out. Please try a more specific search term.';
-        setError(errorMessage);
+        if (mountedRef.current) setError(errorMessage);
         if (showToasts) {
           toast.error(errorMessage);
         }
       } else if (err.response && err.response.status === 504) {
         errorMessage = 'Search timed out on the server. Please try a more specific search term.';
-        setError(errorMessage);
+        if (mountedRef.current) setError(errorMessage);
         if (showToasts) {
           toast.error(errorMessage);
         }
       } else {
         errorMessage = 'Failed to search. Please try again later.';
-        setError(errorMessage);
+        if (mountedRef.current) setError(errorMessage);
         if (showToasts) {
           toast.error(errorMessage);
         }
       }
 
       // Clear results
-      setResults(null);
+      if (mountedRef.current) setResults(null);
 
       return false;
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []); // Empty dependency array since searchAll doesn't depend on any state
 

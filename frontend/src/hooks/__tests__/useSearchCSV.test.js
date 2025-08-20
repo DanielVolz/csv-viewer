@@ -1,5 +1,4 @@
-import { renderHook } from '@testing-library/react-hooks';
-import { act } from 'react-dom/test-utils';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import useSearchCSV from '../useSearchCSV';
 
@@ -67,7 +66,7 @@ describe('useSearchCSV Hook', () => {
     axios.get.mockResolvedValue({ data: mockSearchResults });
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useSearchCSV());
+    const { result } = renderHook(() => useSearchCSV());
 
     // Perform search
     let success;
@@ -79,7 +78,7 @@ describe('useSearchCSV Hook', () => {
     expect(result.current.loading).toBe(true);
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // Should have resolved to true
     await expect(success).resolves.toBe(true);
@@ -130,7 +129,7 @@ describe('useSearchCSV Hook', () => {
     axios.get.mockRejectedValue(new Error('Network Error'));
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useSearchCSV());
+    const { result } = renderHook(() => useSearchCSV());
 
     // Perform search
     let success;
@@ -139,7 +138,7 @@ describe('useSearchCSV Hook', () => {
     });
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // Should have resolved to false
     await expect(success).resolves.toBe(false);
@@ -160,7 +159,7 @@ describe('useSearchCSV Hook', () => {
     axios.get.mockRejectedValue(timeoutError);
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useSearchCSV());
+    const { result } = renderHook(() => useSearchCSV());
 
     // Perform search
     act(() => {
@@ -168,7 +167,7 @@ describe('useSearchCSV Hook', () => {
     });
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.error).toBe('Search timed out. Please try a more specific search term.'));
 
     // After timeout, should set specific error message
     expect(result.current.error).toBe('Search timed out. Please try a more specific search term.');
@@ -183,7 +182,7 @@ describe('useSearchCSV Hook', () => {
     });
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useSearchCSV());
+    const { result } = renderHook(() => useSearchCSV());
 
     // Perform search
     act(() => {
@@ -191,7 +190,7 @@ describe('useSearchCSV Hook', () => {
     });
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.error).toBe('Search timed out on the server. Please try a more specific search term.'));
 
     // After server timeout, should set specific error message
     expect(result.current.error).toBe('Search timed out on the server. Please try a more specific search term.');
@@ -300,7 +299,7 @@ describe('useSearchCSV Hook', () => {
     axios.get.mockResolvedValue({ data: largeResults });
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useSearchCSV());
+    const { result } = renderHook(() => useSearchCSV());
 
     // Perform search
     act(() => {
@@ -308,7 +307,7 @@ describe('useSearchCSV Hook', () => {
     });
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // Page 1 results should contain items 0-99
     expect(result.current.results.data.length).toBe(100);

@@ -13,7 +13,7 @@ function Navigation({ currentTab, onTabChange, onHomeClick }) {
       event.stopPropagation();
       try {
         window.open(path, '_blank', 'noopener');
-      } catch {}
+      } catch { }
     }
   };
 
@@ -47,21 +47,21 @@ function Navigation({ currentTab, onTabChange, onHomeClick }) {
         value="home"
         iconPosition="start"
         onClick={onHomeClick}
-  onMouseDown={handleMiddleClick('/search')}
+        onMouseDown={handleMiddleClick('/search')}
       />
       <Tab
         icon={<Folder fontSize="small" />}
         label="Files"
         value="files"
         iconPosition="start"
-  onMouseDown={handleMiddleClick('/files')}
+        onMouseDown={handleMiddleClick('/files')}
       />
       <Tab
         icon={<BarChart fontSize="small" />}
         label="Statistics"
         value="stats"
         iconPosition="start"
-  onMouseDown={handleMiddleClick('/statistics')}
+        onMouseDown={handleMiddleClick('/statistics')}
       />
     </Tabs>
   );

@@ -1,5 +1,4 @@
-import { renderHook } from '@testing-library/react-hooks';
-import { act } from 'react-dom/test-utils';
+import { renderHook, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import useFilePreview from '../useFilePreview';
 
@@ -62,7 +61,7 @@ describe('useFilePreview Hook', () => {
     });
 
     // Render the hook with default limit
-    const { result, waitForNextUpdate } = renderHook(() => useFilePreview());
+    const { result } = renderHook(() => useFilePreview());
 
     // Initially should be in loading state
     expect(result.current.loading).toBe(true);
@@ -70,7 +69,7 @@ describe('useFilePreview Hook', () => {
     expect(result.current.error).toBeNull();
 
     // Wait for the API calls to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // After API calls, should have data and not be loading
     expect(result.current.loading).toBe(false);
@@ -102,13 +101,13 @@ describe('useFilePreview Hook', () => {
     axios.get.mockRejectedValue(new Error('Network Error'));
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useFilePreview());
+    const { result } = renderHook(() => useFilePreview());
 
     // Initially should be in loading state
     expect(result.current.loading).toBe(true);
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // After API error, should set error message and fallback data
     expect(result.current.loading).toBe(false);
@@ -135,8 +134,8 @@ describe('useFilePreview Hook', () => {
       return Promise.reject(new Error('Unknown URL'));
     });
 
-    const { result, waitForNextUpdate } = renderHook(() => useFilePreview());
-    await waitForNextUpdate();
+    const { result } = renderHook(() => useFilePreview());
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.error).toBeNull();
     expect(result.current.loading).toBe(false);

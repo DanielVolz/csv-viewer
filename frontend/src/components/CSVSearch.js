@@ -66,6 +66,7 @@ function CSVSearch() {
   const [hasSearched, setHasSearched] = useState(false);
   const searchFieldRef = useRef(null);
   const initialQueryRef = useRef(null);
+  const mountedRef = useRef(true);
 
   const {
     searchAll,
@@ -137,6 +138,7 @@ function CSVSearch() {
 
   useEffect(() => {
     console.debug('[CSVSearch] mounted');
+    mountedRef.current = true;
     try {
       const params = new URLSearchParams(window.location.search);
       const q = params.get('q');
@@ -146,6 +148,12 @@ function CSVSearch() {
         console.debug('[CSVSearch] initial query param detected', { q });
       }
     } catch { }
+    return () => {
+      mountedRef.current = false;
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
   }, []);
 
   // If there is an initial query (?q=...), trigger search once not blocked
@@ -159,6 +167,7 @@ function CSVSearch() {
       const hist = macCanonical ? true : includeHistorical;
       if (macCanonical) recordMac(macCanonical);
       searchAll(cleaned, hist, true).then(success => {
+        if (!mountedRef.current) return;
         if (success) setHasSearched(true);
         // After using the initial query once, clean the URL to remove ?q
         try {
@@ -252,6 +261,7 @@ function CSVSearch() {
       }
       // Keep the user's typed term for search to maximize matches
       searchAll(cleaned, hist, true).then(success => {
+        if (!mountedRef.current) return;
         if (success) {
           setHasSearched(true);
         }
@@ -270,6 +280,7 @@ function CSVSearch() {
     }
     // Use the displayed condensed MAC for searching as well
     searchAll(macCanonical, true, true).then(success => { // always historical for MAC click
+      if (!mountedRef.current) return;
       if (success) {
         setHasSearched(true);
       }
@@ -328,6 +339,7 @@ function CSVSearch() {
     }
     // Use the input as-is for search; history stores canonical MAC
     searchAll(cleaned, hist, true).then(success => {
+      if (!mountedRef.current) return;
       if (success) {
         setHasSearched(true);
         console.debug('[CSVSearch][handleSearch] search executed', { term: cleaned });
@@ -498,6 +510,7 @@ function CSVSearch() {
                           lastSearchTermRef.current = item.mac;
                           recordMac(item.mac, displayLoc || undefined);
                           searchAll(item.mac, true, true).then(success => {
+                            if (!mountedRef.current) return;
                             if (success) {
                               setHasSearched(true);
                             }

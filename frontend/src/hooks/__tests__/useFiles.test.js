@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react-hooks';
+import { renderHook, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import useFiles from '../useFiles';
 
@@ -29,7 +29,7 @@ describe('useFiles Hook', () => {
     axios.get.mockResolvedValue({ data: mockFiles });
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useFiles());
+    const { result } = renderHook(() => useFiles());
 
     // Initially should be in loading state with empty files array
     expect(result.current.loading).toBe(true);
@@ -37,7 +37,7 @@ describe('useFiles Hook', () => {
     expect(result.current.error).toBeNull();
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // After API call, should have files data and not be loading
     expect(result.current.loading).toBe(false);
@@ -53,13 +53,13 @@ describe('useFiles Hook', () => {
     axios.get.mockRejectedValue(new Error('Network Error'));
 
     // Render the hook
-    const { result, waitForNextUpdate } = renderHook(() => useFiles());
+    const { result } = renderHook(() => useFiles());
 
     // Initially should be in loading state
     expect(result.current.loading).toBe(true);
 
     // Wait for the API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
     // After API error, should set error message and fallback data
     expect(result.current.loading).toBe(false);
@@ -102,10 +102,10 @@ describe('useFiles Hook', () => {
     axios.get.mockResolvedValue({ data: mockFiles });
 
     // Render the hook
-    const { rerender, waitForNextUpdate } = renderHook(() => useFiles());
+    const { rerender } = renderHook(() => useFiles());
 
     // Wait for the initial API call to complete
-    await waitForNextUpdate();
+    await waitFor(() => { });
 
     // Clear the mock to track new calls
     axios.get.mockClear();
