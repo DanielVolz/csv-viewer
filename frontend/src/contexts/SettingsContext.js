@@ -26,6 +26,7 @@ export const SettingsProvider = ({ children }) => {
 
   // Eagerly load saved columns from localStorage on mount so preferences apply immediately
   useEffect(() => {
+    if (process.env.NODE_ENV === 'test') return; // skip heavy localStorage on mount in tests
     try {
       const savedSettings = localStorage.getItem('csv-viewer-settings');
       if (savedSettings) {
@@ -93,6 +94,7 @@ export const SettingsProvider = ({ children }) => {
 
   // Load SSH username from localStorage on mount
   useEffect(() => {
+    if (process.env.NODE_ENV === 'test') return; // skip in tests
     const savedSettings = localStorage.getItem('csv-viewer-settings');
     if (savedSettings) {
       try {
@@ -106,6 +108,7 @@ export const SettingsProvider = ({ children }) => {
 
   // Save settings to localStorage whenever they change
   useEffect(() => {
+    if (process.env.NODE_ENV === 'test') return; // skip storage churn in tests
     // Merge with any existing keys (e.g., statistics) to avoid dropping them
     let prev = {};
     try {

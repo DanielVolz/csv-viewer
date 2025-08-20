@@ -3,6 +3,9 @@
 // expect(element).toBeInTheDocument();
 import '@testing-library/jest-dom';
 
+// Use fake timers by default to prevent long-running intervals from third-party libs
+jest.useFakeTimers();
+
 // Mock react-toastify to avoid timers and state updates during tests
 jest.mock('react-toastify', () => {
   const toast = {
@@ -65,6 +68,12 @@ global.fetch.mockImplementation(async (url, options = {}) => {
   }
   // Fallback generic response
   return { ok: true, status: 200, headers: headersMock, json: async () => ({}), text: async () => '' };
+});
+
+// Clean up any pending timers and mocks between tests
+afterEach(() => {
+  try { jest.clearAllTimers(); } catch { }
+  try { jest.clearAllMocks(); } catch { }
 });
 
 // Provide a stable mock for useColumns so SettingsProvider doesn't hit the network in tests

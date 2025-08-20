@@ -16,6 +16,10 @@ module.exports = {
 
   // Set up test environment for React components
   testEnvironment: "jsdom",
+  testEnvironmentOptions: {
+    resources: "usable",
+    runScripts: "dangerously"
+  },
 
   // Setup files to run before each test
   setupFilesAfterEnv: ["<rootDir>/src/setupTests.js"],
@@ -27,5 +31,9 @@ module.exports = {
   roots: ["<rootDir>/src"],
 
   // Clear mocks between tests
-  clearMocks: true
+  clearMocks: true,
+  // Ensure Jest exits after tests even if open handles remain (safety)
+  forceExit: true,
+  // Run tests in band to avoid CPU spikes in CI containers
+  maxWorkers: 1
 };

@@ -8,7 +8,7 @@ export default function useUpdateNotifier({ intervalMs = 60000 } = {}) {
   const toastIdRef = useRef(null);
 
   useEffect(() => {
-    // In test environments, skip installing timers to avoid open handles and speed up Jest
+    // In test environments, completely no-op to avoid timers/open handles
     if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'test') {
       return () => { };
     }
