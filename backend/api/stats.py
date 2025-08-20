@@ -23,6 +23,7 @@ CITY_CODE_MAP: Dict[str, str] = {}
 _CURRENT_STATS_CACHE: Dict[str, Any] = {"key": None, "data": None}
 _TIMELINE_CACHE: Dict[int, Tuple[float, Dict]] = {}  # key: limit, value: (expires_at, result)
 _TIMELINE_BY_LOC_CACHE: Dict[Tuple[str, int], Tuple[float, Dict]] = {}  # key: (q, limit)
+_TIMELINE_TOP_CACHE: Dict[Tuple[int, Tuple[str, ...], int], Tuple[float, Dict]] = {}
 try:
     from utils.city_codes_loader import get_city_code_map
 except Exception as _e:
@@ -383,179 +384,540 @@ async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> D
             # If a limit is set, keep the first N entries (oldest-first)
             if eff_limit and len(series) > eff_limit:
                 series = series[:eff_limit]
-        result = {"success": True, "message": f"Computed {len(series)} timeline points (snapshot)", "series": series}
+        # Build result and cache
+        result = {
+            "success": True,
+            "message": f"Computed {len(series)} stats timeline points (snapshot)",
+            "series": series,
+        } if by_date else {
+            "success": True,
+            "message": "No timeline data available (snapshot)",
+            "series": [],
+        }
         _TIMELINE_CACHE[eff_limit] = (now + 60.0, result)
         return result
+
     except Exception as e:
         logger.error(f"Error building stats timeline: {e}")
         return {"success": True, "message": "No timeline data available (snapshot)", "series": []}
 
 
 @router.get("/timeline/by_location")
-async def get_stats_timeline_by_location(q: str, limit: int = 0, include_backups: bool = False) -> Dict:
-    """Build a time series of key metrics for a specific location code (AAA01) or prefix (AAA).
+async def get_stats_timeline_by_location(q: str, limit: int = 0) -> Dict:
+    """Build a time series for a location code (AAA01) or a 3-letter prefix (AAA).
 
-    Scans recent netspeed files and computes metrics for the subset of rows matching the location query.
-    Caches results for 60 seconds.
+    - Snapshot-only from stats_netspeed_loc.
+    - Series starts at the earliest available date and carries forward gaps.
+    - If limit > 0, returns the first N days from earliest; 0 = full history.
     """
     try:
         if not q or not q.strip():
             return {"success": False, "message": "Missing query parameter 'q'", "series": []}
-        query = q.strip().upper()
-        mode = "code" if len(query) == 5 else ("prefix" if len(query) == 3 else "invalid")
+        term = q.strip().upper()
+        mode = "code" if len(term) == 5 else ("prefix" if len(term) == 3 else "invalid")
         if mode == "invalid":
             return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)", "series": []}
 
-        # limit==0 means full history; otherwise truncate to first N days from earliest
         eff_limit = limit if limit and limit > 0 else 0
         now = time.time()
-        cache_key = (query, eff_limit)
+        cache_key = (f"{mode}:{term}", eff_limit)
         cached = _TIMELINE_BY_LOC_CACHE.get(cache_key)
         if cached and cached[0] > now:
             return cached[1]
 
-        # Only use OpenSearch snapshots, never CSV fallback
         from utils.opensearch import opensearch_config
-        series: List[Dict] = []
-        if mode == "code":
-            # Fetch more than needed to build a continuous window ending at the latest date
-            max_docs = 10000
-            body = {
-                "size": max_docs,
-                "sort": [{"date": {"order": "asc"}}, {"file": {"order": "desc"}}],
-                "query": {"term": {"key": {"value": query}}},
-                "_source": ["file", "date", "totalPhones", "totalSwitches", "phonesWithKEM"],
-            }
-            # If per-location index is missing, try on-demand backfill once
+        client = opensearch_config.client
+        # Ensure index exists or try one-off backfill
+        try:
+            exists = client.indices.exists(index=opensearch_config.stats_loc_index)
+        except Exception:
+            exists = False
+        if not exists:
+            result = {"success": True, "message": "No timeline available for this location (index missing)", "series": [], "selected": []}
+            _TIMELINE_BY_LOC_CACHE[cache_key] = (now + 30.0, result)
+            return result
+        else:
+            # Index exists; ensure it's populated at least once
             try:
-                exists_loc = opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index)
-            except Exception:
-                exists_loc = False
-            if not exists_loc:
-                try:
+                c = client.count(index=opensearch_config.stats_loc_index, body={"query": {"match_all": {}}})
+                if int(c.get("count", 0)) == 0:
                     from tasks.tasks import backfill_location_snapshots
                     backfill_location_snapshots("/app/data")
                     try:
-                        opensearch_config.client.indices.refresh(index=opensearch_config.stats_loc_index)
+                        client.indices.refresh(index=opensearch_config.stats_loc_index)
                     except Exception:
                         pass
-                except Exception:
-                    pass
-            res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
-            hits = res.get("hits", {}).get("hits", [])
-            if hits:
-                # Reduce to one entry per date (prefer netspeed.csv if multiple)
-                by_date: Dict[str, Dict] = {}
-                for h in hits:
-                    s = h.get("_source", {})
-                    d = s.get("date")
-                    if not d or d in by_date:
-                        # allow update below if this one is netspeed.csv
-                        if s.get("file") != "netspeed.csv":
-                            continue
-                    by_date[d] = {
-                        "file": s.get("file"),
-                        "date": d,
-                        "metrics": {
-                            "totalPhones": s.get("totalPhones", 0),
-                            "totalSwitches": s.get("totalSwitches", 0),
-                            "phonesWithKEM": s.get("phonesWithKEM", 0),
-                            "phonesByModel": [],
-                            "cityCodes": [],
-                        },
-                    }
-                # Build window from earliest to latest, carry-forward gaps
-                from datetime import datetime as _dt, timedelta as _td
-                fmt = "%Y-%m-%d"
-                if by_date:
-                    min_date_str = min(by_date.keys())
-                    max_date_str = max(by_date.keys())
-                    min_date = _dt.strptime(min_date_str, fmt)
-                    max_date = _dt.strptime(max_date_str, fmt)
-                    current = by_date.get(min_date_str)
-                    out: List[Dict] = []
-                    day = min_date
-                    while day <= max_date:
-                        dstr = day.strftime(fmt)
-                        if dstr in by_date:
-                            current = by_date[dstr]
-                        if current is not None:
-                            out.append({
-                                "file": current.get("file"),
-                                "date": dstr,
-                                "metrics": current.get("metrics", {}),
-                            })
-                        day += _td(days=1)
-                    if eff_limit and len(out) > eff_limit:
-                        out = out[:eff_limit]
-                    series = out
+            except Exception:
+                pass
+
+        # Build query and aggregations across all snapshot files (dedup per day by key)
+        filters: List[Dict] = []
+        if mode == "code":
+            filters.append({"term": {"key": {"value": term}}})
         else:
-            # prefix mode: aggregate sums per date over all matching location codes
-            body = {
-                "size": 0,
-                "query": {"prefix": {"key": {"value": query}}},
-                "aggs": {
-                    "by_date": {
-                        "date_histogram": {"field": "date", "calendar_interval": "1d"},
-                        "aggs": {
-                            "sumPhones": {"sum": {"field": "totalPhones"}},
-                            "sumSwitches": {"sum": {"field": "totalSwitches"}},
-                            "sumKEM": {"sum": {"field": "phonesWithKEM"}},
+            filters.append({"prefix": {"key": {"value": term}}})
+        body = {
+            "size": 0,
+            "query": {"bool": {"filter": filters}},
+            "aggs": {
+                "by_date": {
+                    "date_histogram": {"field": "date", "calendar_interval": "1d"},
+                    "aggs": {
+                        "by_key": {
+                            "terms": {"field": "key", "size": 10000},
+                            "aggs": {
+                                "mPhones": {"max": {"field": "totalPhones"}},
+                                "mSwitches": {"max": {"field": "totalSwitches"}},
+                                "mKEM": {"max": {"field": "phonesWithKEM"}},
+                            }
                         },
-                    }
+                        "sumPhones": {"sum_bucket": {"buckets_path": "by_key>mPhones"}},
+                        "sumSwitches": {"sum_bucket": {"buckets_path": "by_key>mSwitches"}},
+                        "sumKEM": {"sum_bucket": {"buckets_path": "by_key>mKEM"}},
+                    },
                 }
             }
-            res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
-            buckets = res.get("aggregations", {}).get("by_date", {}).get("buckets", [])
-            buckets_sorted = sorted(buckets, key=lambda b: b.get("key", 0))
-            if buckets_sorted:
-                # Map to per-date metrics
-                by_date = {}
-                for b in buckets_sorted:
-                    d = b.get("key_as_string")
-                    if not d:
-                        continue
-                    by_date[d] = {
+        }
+        res = client.search(index=opensearch_config.stats_loc_index, body=body)
+        buckets = res.get("aggregations", {}).get("by_date", {}).get("buckets", [])
+        by_date: Dict[str, Dict] = {}
+        for b in buckets:
+            d = b.get("key_as_string")
+            if not d:
+                continue
+            by_date[d] = {
+                "file": None,
+                "date": d,
+                "metrics": {
+                    "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
+                    "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
+                    "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
+                    "phonesByModel": [],
+                    "cityCodes": [],
+                }
+            }
+        series: List[Dict] = []
+        if by_date:
+            from datetime import datetime as _dt, timedelta as _td
+            fmt = "%Y-%m-%d"
+            min_date_str = min(by_date.keys())
+            max_date_str = max(by_date.keys())
+            min_date = _dt.strptime(min_date_str, fmt)
+            max_date = _dt.strptime(max_date_str, fmt)
+            current = by_date.get(min_date_str)
+            day = min_date
+            while day <= max_date:
+                dstr = day.strftime(fmt)
+                if dstr in by_date:
+                    current = by_date[dstr]
+                if current is not None:
+                    series.append({
                         "file": None,
-                        "date": d,
-                        "metrics": {
-                            "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
-                            "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
-                            "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
-                            "phonesByModel": [],
-                            "cityCodes": [],
-                        },
-                    }
-                from datetime import datetime as _dt, timedelta as _td
-                fmt = "%Y-%m-%d"
-                min_date_str = min(by_date.keys())
-                max_date_str = max(by_date.keys())
-                min_date = _dt.strptime(min_date_str, fmt)
-                max_date = _dt.strptime(max_date_str, fmt)
-                current = by_date.get(min_date_str)
-                out: List[Dict] = []
-                day = min_date
-                while day <= max_date:
-                    dstr = day.strftime(fmt)
-                    if dstr in by_date:
-                        current = by_date[dstr]
-                    if current is not None:
-                        out.append({
-                            "file": None,
-                            "date": dstr,
-                            "metrics": current.get("metrics", {}),
-                        })
-                    day += _td(days=1)
-                if eff_limit and len(out) > eff_limit:
-                    out = out[:eff_limit]
-                series = out
+                        "date": dstr,
+                        "metrics": current.get("metrics", {}),
+                    })
+                day += _td(days=1)
+            if eff_limit and len(series) > eff_limit:
+                series = series[:eff_limit]
 
-        result = {"success": True, "message": f"Computed {len(series)} location timeline points (snapshot)", "series": series}
+        result = {
+            "success": True,
+            "message": f"Computed {len(series)} location timeline points (snapshot)",
+            "series": series,
+            "mode": mode,
+            "query": term,
+        } if by_date else {
+            "success": True,
+            "message": "No timeline data available for this location (snapshot)",
+            "series": [],
+            "mode": mode,
+            "query": term,
+        }
         _TIMELINE_BY_LOC_CACHE[cache_key] = (now + 60.0, result)
         return result
     except Exception as e:
-        logger.error(f"Error building location timeline: {e}")
-        return {"success": True, "message": "No location timeline data available (snapshot)", "series": []}
+        logger.error(f"Error building timeline by location for {q}: {e}")
+        return {"success": True, "message": "No timeline available for this location (snapshot)", "series": []}
+
+
+@router.get("/timeline/top_locations")
+async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", limit: int = 0, mode: str = "per_key", from_mmdd: str = "", group: str = "city") -> Dict:
+    """Top-N timeline from snapshots grouped by city (default) or location code.
+
+    - mode=per_key returns per-group lines aligned by date; mode=aggregate returns a single summed series.
+    - limit>0 returns last N days (or from anchor if from_mmdd provided); 0 returns full range from earliest.
+    - group=city groups by first 3 letters of location key (e.g., NXX); group=location uses full codes (e.g., NXX01).
+    """
+    try:
+        n = max(1, min(int(count or 10), 500))
+        # Extras: allow full codes (NXX01) and prefixes (NXX)
+        extras_list: List[str] = []
+        if extra:
+            for token in str(extra).replace(";", ",").split(','):
+                s = token.strip().upper()
+                if not s:
+                    continue
+                if len(s) == 5 and s[:3].isalpha() and s[3:].isdigit():
+                    extras_list.append(s)
+                elif len(s) == 3 and s.isalpha():
+                    extras_list.append(s)
+        extras_tuple = tuple(sorted(set(extras_list)))
+
+        eff_limit = limit if limit and limit > 0 else 0
+        now = time.time()
+        cache_key = (
+            n,
+            ("mode:" + (mode or "per_key"), "from:" + (from_mmdd or ""), "group:" + (group or "")) + extras_tuple,
+            eff_limit,
+        )
+        cached = _TIMELINE_TOP_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
+
+        from utils.opensearch import opensearch_config
+        client = opensearch_config.client
+
+        # Ensure index exists
+        try:
+            exists = client.indices.exists(index=opensearch_config.stats_loc_index)
+        except Exception:
+            exists = False
+        if not exists:
+            try:
+                from tasks.tasks import backfill_location_snapshots
+                backfill_location_snapshots("/app/data")
+                try:
+                    client.indices.refresh(index=opensearch_config.stats_loc_index)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # Latest snapshot date (prefer netspeed.csv; fallback: any file)
+        latest_date = None
+        latest_date_current = None
+        try:
+            body_latest = {"size": 0, "query": {"term": {"file": {"value": "netspeed.csv"}}}, "aggs": {"max_date": {"max": {"field": "date"}}}}
+            r_latest = client.search(index=opensearch_config.stats_loc_index, body=body_latest)
+            max_date_val = r_latest.get("aggregations", {}).get("max_date", {}).get("value")
+            latest_date_current = r_latest.get("aggregations", {}).get("max_date", {}).get("value_as_string") if max_date_val is not None else None
+            latest_date = latest_date_current
+        except Exception:
+            latest_date = None
+        if not latest_date:
+            try:
+                r_latest_any = client.search(index=opensearch_config.stats_loc_index, body={"size": 0, "aggs": {"max_date": {"max": {"field": "date"}}}})
+                max_date_val = r_latest_any.get("aggregations", {}).get("max_date", {}).get("value")
+                latest_date = r_latest_any.get("aggregations", {}).get("max_date", {}).get("value_as_string") if max_date_val is not None else None
+            except Exception:
+                latest_date = None
+        if not latest_date:
+            result = {"success": True, "message": "No top timeline data available (no snapshots)", "series": [], "selected": []}
+            _TIMELINE_TOP_CACHE[cache_key] = (now + 30.0, result)
+            return result
+        had_current = latest_date_current is not None and latest_date_current == latest_date
+
+        # Determine Top-N groups on latest date
+        if (group or "city").lower() == "city":
+            # Group by city using script-based terms (first 3 letters of key)
+            body_top = {
+                "size": 0,
+                "query": {"bool": {"filter": ([
+                    {"range": {"date": {"gte": latest_date, "lte": latest_date}}},
+                ] + ([{"term": {"file": {"value": "netspeed.csv"}}}] if had_current else []))}},
+                "aggs": {"top_keys": {"terms": {"script": {"source": "doc['key'].value.substring(0,3)"}, "size": n, "order": {"sumPhones": "desc"}}, "aggs": {"sumPhones": {"sum": {"field": "totalPhones"}}}}}
+            }
+            r_top = client.search(index=opensearch_config.stats_loc_index, body=body_top)
+            buckets = r_top.get("aggregations", {}).get("top_keys", {}).get("buckets", [])
+            keys = [b.get("key") for b in buckets if b.get("key")]
+            extra_prefixes = [e[:3] for e in extras_tuple]
+            selected_keys = sorted(set(keys) | set(extra_prefixes))
+            # Fallback: if city terms failed, derive city prefixes from top locations on the latest date
+            if not selected_keys:
+                body_top_loc = {
+                    "size": 0,
+                    "query": {"bool": {"filter": [
+                        {"term": {"file": {"value": "netspeed.csv"}}},
+                        {"range": {"date": {"gte": latest_date, "lte": latest_date}}},
+                    ]}},
+                    "aggs": {"top_keys": {"terms": {"field": "key", "size": n, "order": {"sumPhones": "desc"}}, "aggs": {"sumPhones": {"sum": {"field": "totalPhones"}}}}}
+                }
+                r_top2 = client.search(index=opensearch_config.stats_loc_index, body=body_top_loc)
+                buckets2 = r_top2.get("aggregations", {}).get("top_keys", {}).get("buckets", [])
+                loc_keys = [b.get("key") for b in buckets2 if b.get("key")]
+                prefixes = [k[:3] for k in loc_keys if isinstance(k, str) and len(k) >= 3]
+                selected_keys = sorted(set(prefixes) | set(extra_prefixes))
+        else:
+            body_top = {
+                "size": 0,
+                "query": {"bool": {"filter": ([
+                    {"range": {"date": {"gte": latest_date, "lte": latest_date}}},
+                ] + ([{"term": {"file": {"value": "netspeed.csv"}}}] if had_current else []))}},
+                "aggs": {"top_keys": {"terms": {"field": "key", "size": n, "order": {"sumPhones": "desc"}}, "aggs": {"sumPhones": {"sum": {"field": "totalPhones"}}}}}
+            }
+            r_top = client.search(index=opensearch_config.stats_loc_index, body=body_top)
+            buckets = r_top.get("aggregations", {}).get("top_keys", {}).get("buckets", [])
+            keys = [b.get("key") for b in buckets if b.get("key")]
+            selected_keys = sorted(set(keys) | set(extras_tuple))
+        if not selected_keys:
+            result = {"success": True, "message": "No top groups found for latest date", "series": [], "selected": []}
+            _TIMELINE_TOP_CACHE[cache_key] = (now + 60.0, result)
+            return result
+
+        def build_anchor_window(min_date_str: str, max_date_str: str) -> List[str]:
+            from datetime import datetime as _dt, timedelta as _td
+            fmt = "%Y-%m-%d"
+            min_date = _dt.strptime(min_date_str, fmt)
+            max_date = _dt.strptime(max_date_str, fmt)
+            all_dates: List[str] = []
+            day = min_date
+            while day <= max_date:
+                all_dates.append(day.strftime(fmt))
+                day += _td(days=1)
+            mmdd = (from_mmdd or "").strip()
+            if eff_limit and eff_limit > 0:
+                if len(mmdd) == 5 and mmdd[2] == '-':
+                    start_idx = 0
+                    for i, d in enumerate(all_dates):
+                        if d[5:] == mmdd:
+                            start_idx = i
+                            break
+                    return all_dates[start_idx: start_idx + eff_limit]
+                return all_dates[-eff_limit:]
+            if len(mmdd) == 5 and mmdd[2] == '-':
+                for i, d in enumerate(all_dates):
+                    if d[5:] == mmdd:
+                        return all_dates[i:]
+            return all_dates
+
+        if (mode or "per_key").lower() == "aggregate":
+            # Aggregate single series
+            if (group or "city").lower() == "city":
+                # Add date filter for last N days to reduce query load if limit is set and no anchor
+                date_filters: List[Dict] = []
+                mmdd = (from_mmdd or "").strip()
+                if eff_limit and eff_limit > 0 and not (len(mmdd) == 5 and mmdd[2] == '-'):
+                    from datetime import datetime as _dt, timedelta as _td
+                    try:
+                        end_dt = _dt.strptime(latest_date, "%Y-%m-%d")
+                        start_dt = end_dt - _td(days=max(0, eff_limit - 1))
+                        date_filters.append({"range": {"date": {"gte": start_dt.strftime("%Y-%m-%d"), "lte": end_dt.strftime("%Y-%m-%d")}}})
+                    except Exception:
+                        pass
+                body_series = {
+                    "size": 0,
+                    "query": {"bool": {"filter": ([
+                        {"bool": {"should": [{"prefix": {"key": {"value": c}}} for c in selected_keys], "minimum_should_match": 1}}
+                    ] + date_filters)}},
+                    "aggs": {
+                        "by_date": {
+                            "date_histogram": {"field": "date", "calendar_interval": "1d"},
+                            "aggs": {
+                                "by_city": {
+                                    "terms": {"script": {"source": "doc['key'].value.substring(0,3)"}, "size": len(selected_keys)},
+                                    "aggs": {
+                                        "by_key": {
+                                            "terms": {"field": "key", "size": 10000},
+                                            "aggs": {
+                                                "mPhones": {"max": {"field": "totalPhones"}},
+                                                "mSwitches": {"max": {"field": "totalSwitches"}},
+                                                "mKEM": {"max": {"field": "phonesWithKEM"}},
+                                            }
+                                        },
+                                        "cityPhones": {"sum_bucket": {"buckets_path": "by_key>mPhones"}},
+                                        "citySwitches": {"sum_bucket": {"buckets_path": "by_key>mSwitches"}},
+                                        "cityKEM": {"sum_bucket": {"buckets_path": "by_key>mKEM"}},
+                                    }
+                                },
+                                "sumPhones": {"sum_bucket": {"buckets_path": "by_city>cityPhones"}},
+                                "sumSwitches": {"sum_bucket": {"buckets_path": "by_city>citySwitches"}},
+                                "sumKEM": {"sum_bucket": {"buckets_path": "by_city>cityKEM"}},
+                            }
+                        }
+                    }
+                }
+            else:
+                body_series = {
+                    "size": 0,
+                    "query": {"bool": {"filter": [
+                        {"terms": {"key": selected_keys}},
+                    ]}},
+                    "aggs": {
+                        "by_date": {
+                            "date_histogram": {"field": "date", "calendar_interval": "1d"},
+                            "aggs": {
+                                "by_key": {
+                                    "terms": {"field": "key", "size": len(selected_keys)},
+                                    "aggs": {
+                                        "mPhones": {"max": {"field": "totalPhones"}},
+                                        "mSwitches": {"max": {"field": "totalSwitches"}},
+                                        "mKEM": {"max": {"field": "phonesWithKEM"}},
+                                    }
+                                },
+                                "sumPhones": {"sum_bucket": {"buckets_path": "by_key>mPhones"}},
+                                "sumSwitches": {"sum_bucket": {"buckets_path": "by_key>mSwitches"}},
+                                "sumKEM": {"sum_bucket": {"buckets_path": "by_key>mKEM"}},
+                            }
+                        }
+                    }
+                }
+            r_series = client.search(index=opensearch_config.stats_loc_index, body=body_series)
+            buckets = r_series.get("aggregations", {}).get("by_date", {}).get("buckets", [])
+            by_date: Dict[str, Dict] = {}
+            for b in buckets:
+                d = b.get("key_as_string")
+                if not d:
+                    continue
+                by_date[d] = {"file": None, "date": d, "metrics": {
+                    "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
+                    "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
+                    "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
+                }}
+            series: List[Dict] = []
+            if by_date:
+                window = build_anchor_window(min(by_date.keys()), max(by_date.keys()))
+                current = by_date.get(window[0])
+                for dstr in window:
+                    if dstr in by_date:
+                        current = by_date[dstr]
+                    if current is not None:
+                        series.append({"file": None, "date": dstr, "metrics": current.get("metrics", {})})
+            label = "cities" if (group or "city").lower() == "city" else "locations"
+            result = {"success": True, "message": f"Computed {len(series)} top-{label} timeline points (aggregate)", "series": series, "selected": selected_keys, "mode": "aggregate", "group": (group or "city").lower()}
+        else:
+            # Per-group series
+            if (group or "city").lower() == "city":
+                body_series = {
+                    "size": 0,
+                    "query": {"bool": {"filter": [
+                        {"bool": {"should": [{"prefix": {"key": {"value": c}}} for c in selected_keys], "minimum_should_match": 1}}
+                    ]}},
+                    "aggs": {
+                        "by_city": {
+                            "terms": {"script": {"source": "doc['key'].value.substring(0,3)"}, "size": len(selected_keys)},
+                            "aggs": {
+                                "by_date": {
+                                    "date_histogram": {"field": "date", "calendar_interval": "1d"},
+                                    "aggs": {
+                                        "by_key": {
+                                            "terms": {"field": "key", "size": 10000},
+                                            "aggs": {
+                                                "mPhones": {"max": {"field": "totalPhones"}},
+                                                "mSwitches": {"max": {"field": "totalSwitches"}},
+                                                "mKEM": {"max": {"field": "phonesWithKEM"}},
+                                            }
+                                        },
+                                        "sumPhones": {"sum_bucket": {"buckets_path": "by_key>mPhones"}},
+                                        "sumSwitches": {"sum_bucket": {"buckets_path": "by_key>mSwitches"}},
+                                        "sumKEM": {"sum_bucket": {"buckets_path": "by_key>mKEM"}},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                r_series = client.search(index=opensearch_config.stats_loc_index, body=body_series)
+                buckets_by_city = r_series.get("aggregations", {}).get("by_city", {}).get("buckets", [])
+                dates_set: set[str] = set()
+                per_key_map: Dict[str, Dict[str, Dict[str, int]]] = {}
+                for cb in buckets_by_city:
+                    ckey = cb.get("key")
+                    if ckey not in selected_keys:
+                        continue
+                    bdates = cb.get("by_date", {}).get("buckets", []) if isinstance(cb, dict) else []
+                    dmap: Dict[str, Dict[str, int]] = {}
+                    for b in bdates:
+                        d = b.get("key_as_string")
+                        if not d:
+                            continue
+                        dates_set.add(d)
+                        dmap[d] = {
+                            "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
+                            "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
+                            "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
+                        }
+                    if ckey:
+                        per_key_map[str(ckey)] = dmap
+                if not dates_set:
+                    labels_map = {str(k): f"{resolve_city_name(str(k))} ({str(k)})" for k in selected_keys}
+                    result = {"success": True, "message": "No top-cities timeline data available (per_key)", "dates": [], "keys": selected_keys, "seriesByKey": {}, "labels": labels_map, "mode": "per_key", "group": "city"}
+                    _TIMELINE_TOP_CACHE[cache_key] = (now + 60.0, result)
+                    return result
+                window = build_anchor_window(min(dates_set), max(dates_set))
+                seriesByKey: Dict[str, Dict[str, List[int]]] = {}
+                for k in selected_keys:
+                    dmap = per_key_map.get(k, {})
+                    last = {"totalPhones": 0, "totalSwitches": 0, "phonesWithKEM": 0}
+                    arrays = {"totalPhones": [], "totalSwitches": [], "phonesWithKEM": []}
+                    for dstr in window:
+                        if dstr in dmap:
+                            last = dmap[dstr]
+                        arrays["totalPhones"].append(int(last.get("totalPhones", 0)))
+                        arrays["totalSwitches"].append(int(last.get("totalSwitches", 0)))
+                        arrays["phonesWithKEM"].append(int(last.get("phonesWithKEM", 0)))
+                    seriesByKey[k] = arrays
+                labels_map = {str(k): f"{resolve_city_name(str(k))} ({str(k)})" for k in selected_keys}
+                result = {"success": True, "message": f"Computed top-cities per-key timeline over {len(window)} days (snapshot)", "dates": window, "keys": selected_keys, "seriesByKey": seriesByKey, "labels": labels_map, "mode": "per_key", "group": "city"}
+            else:
+                body_series = {
+                    "size": 0,
+                    "query": {"bool": {"filter": [
+                        {"terms": {"key": selected_keys}},
+                    ]}},
+                    "aggs": {"by_key": {"terms": {"field": "key", "size": len(selected_keys)}, "aggs": {
+                        "by_date": {"date_histogram": {"field": "date", "calendar_interval": "1d"}, "aggs": {
+                            "sumPhones": {"max": {"field": "totalPhones"}},
+                            "sumSwitches": {"max": {"field": "totalSwitches"}},
+                            "sumKEM": {"max": {"field": "phonesWithKEM"}},
+                        }},
+                    }}}
+                }
+                r_series = client.search(index=opensearch_config.stats_loc_index, body=body_series)
+                buckets_by_key = r_series.get("aggregations", {}).get("by_key", {}).get("buckets", [])
+                dates_set: set[str] = set()
+                per_key_map: Dict[str, Dict[str, Dict[str, int]]] = {}
+                for kb in buckets_by_key:
+                    key_val = kb.get("key")
+                    bdates = kb.get("by_date", {}).get("buckets", []) if isinstance(kb, dict) else []
+                    dmap: Dict[str, Dict[str, int]] = {}
+                    for b in bdates:
+                        d = b.get("key_as_string")
+                        if not d:
+                            continue
+                        dates_set.add(d)
+                        dmap[d] = {
+                            "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
+                            "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
+                            "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
+                        }
+                    if key_val:
+                        per_key_map[str(key_val)] = dmap
+                if not dates_set:
+                    label = "cities" if (group or "city").lower() == "city" else "locations"
+                    result = {"success": True, "message": f"No top-{label} timeline data available (per_key)", "dates": [], "keys": selected_keys, "seriesByKey": {}, "mode": "per_key", "group": (group or "city").lower()}
+                    _TIMELINE_TOP_CACHE[cache_key] = (now + 60.0, result)
+                    return result
+                window = build_anchor_window(min(dates_set), max(dates_set))
+                seriesByKey: Dict[str, Dict[str, List[int]]] = {}
+                for k in selected_keys:
+                    dmap = per_key_map.get(k, {})
+                    last = {"totalPhones": 0, "totalSwitches": 0, "phonesWithKEM": 0}
+                    arrays = {"totalPhones": [], "totalSwitches": [], "phonesWithKEM": []}
+                    for dstr in window:
+                        if dstr in dmap:
+                            last = dmap[dstr]
+                        arrays["totalPhones"].append(int(last.get("totalPhones", 0)))
+                        arrays["totalSwitches"].append(int(last.get("totalSwitches", 0)))
+                        arrays["phonesWithKEM"].append(int(last.get("phonesWithKEM", 0)))
+                    seriesByKey[k] = arrays
+                label = "cities" if (group or "city").lower() == "city" else "locations"
+                result = {"success": True, "message": f"Computed top-{label} per-key timeline over {len(window)} days (snapshot)", "dates": window, "keys": selected_keys, "seriesByKey": seriesByKey, "mode": "per_key", "group": (group or "city").lower()}
+
+        _TIMELINE_TOP_CACHE[cache_key] = (now + 60.0, result)
+        return result
+    except Exception as e:
+        logger.error(f"Error building top timeline: {e}")
+        return {"success": True, "message": "No top timeline data available (snapshot)", "series": [], "selected": []}
 
 
 @router.get("/archive")

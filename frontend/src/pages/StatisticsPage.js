@@ -77,6 +77,22 @@ export default function StatisticsPage() {
   const [timeline, setTimeline] = React.useState({ loading: false, error: null, series: [] });
   const [backfillInfo, setBackfillInfo] = React.useState(null);
   const timelineLoadedRef = React.useRef(false);
+  // Top locations aggregate timeline state
+  const [topCount, setTopCount] = React.useState(10);
+  const [topExtras, setTopExtras] = React.useState('');
+  const [topDays, setTopDays] = React.useState(5); // default 5 days; 0 = full history (last N days if limited)
+  const [topTimeline, setTopTimeline] = React.useState({ loading: false, error: null, dates: [], keys: [], seriesByKey: {}, mode: 'per_key' });
+  const [topLoadedKey, setTopLoadedKey] = React.useState('');
+  const [topSelectedKeys, setTopSelectedKeys] = React.useState([]);
+  const [topKpi, setTopKpi] = React.useState('totalPhones');
+  const TOP_KPI_DEFS = React.useMemo(() => ([
+    { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
+    { id: 'phonesWithKEM', label: 'Phones with KEM', color: '#2e7d32' },
+    { id: 'totalSwitches', label: 'Total Switches', color: '#0288d1' },
+  ]), []);
+  const toggleTopKey = (k) => setTopSelectedKeys((prev) => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+  const selectAllTopKeys = () => setTopSelectedKeys(Array.isArray(topTimeline.keys) ? [...topTimeline.keys] : []);
+  const clearAllTopKeys = () => setTopSelectedKeys([]);
   // KPI selection for the timeline (controls which series are shown)
   const KPI_DEFS = React.useMemo(() => ([
     { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
@@ -164,6 +180,63 @@ export default function StatisticsPage() {
     })();
     return () => { abort = true; controller.abort(); };
   }, []);
+
+  // Fetch Top-N locations aggregate timeline when controls change (debounced)
+  React.useEffect(() => {
+    const key = `${topCount}|${(topExtras || '').trim()}|${topDays}`;
+    if (topLoadedKey === key && (topTimeline.dates || []).length) return;
+    let abort = false;
+    const controller = new AbortController();
+    const h = setTimeout(async () => {
+      try {
+        setTopTimeline((t) => ({ ...t, loading: true, error: null }));
+  const params = new URLSearchParams();
+        params.set('count', String(topCount));
+        params.set('limit', String(topDays || 0));
+        if ((topExtras || '').trim()) params.set('extra', (topExtras || '').trim());
+  params.set('mode', 'per_key');
+  params.set('group', 'city');
+        const r = await fetch(`/api/stats/timeline/top_locations?${params.toString()}`, { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = await r.json();
+        if (abort) return;
+        if (json.success) {
+          const dates = json.dates || [];
+          const keys = json.keys || [];
+          const seriesByKey = json.seriesByKey || {};
+          const labels = json.labels || {};
+          setTopTimeline({ loading: false, error: null, dates, keys, seriesByKey, labels, mode: 'per_key' });
+          setTopSelectedKeys(keys);
+          setTopLoadedKey(key);
+        } else {
+          setTopTimeline({ loading: false, error: json.message || 'No top-locations timeline available', dates: [], keys: [], seriesByKey: {}, mode: 'per_key' });
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setTopTimeline({ loading: false, error: 'Failed to load top-locations timeline', dates: [], keys: [], seriesByKey: {}, mode: 'per_key' });
+      }
+    }, 350);
+    return () => { abort = true; controller.abort(); clearTimeout(h); };
+  }, [topCount, topExtras, topDays]);
+
+  // Build per-location line series for selected KPI
+  const topSeriesPerKey = React.useMemo(() => {
+    const dates = topTimeline.dates || [];
+    const byKey = topTimeline.seriesByKey || {};
+    const palette = ['#1976d2', '#2e7d32', '#0288d1', '#f57c00', '#6a1b9a', '#d32f2f', '#455a64', '#7b1fa2', '#00796b', '#c2185b'];
+    const lastIdx = Math.max(0, dates.length - 1);
+    const sortedKeys = [...(topSelectedKeys || [])].sort((a, b) => {
+      const av = Number(byKey[a]?.[topKpi]?.[lastIdx] ?? 0);
+      const bv = Number(byKey[b]?.[topKpi]?.[lastIdx] ?? 0);
+      return bv - av; // desc
+    });
+    return sortedKeys.map((k, idx) => ({
+      id: k,
+      label: (topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k,
+      color: palette[idx % palette.length],
+      data: (byKey[k]?.[topKpi] || new Array(dates.length).fill(0)),
+    }));
+  }, [topTimeline, topSelectedKeys, topKpi]);
 
   // Lazy-load timeline when the timeline section comes into view
   const timelineRef = React.useRef(null);
@@ -765,6 +838,107 @@ export default function StatisticsPage() {
             <Button size="small" variant="outlined" onClick={triggerBackfill}>Backfill snapshots</Button>
             {backfillInfo && (
               <Typography variant="caption" color="text.secondary">{backfillInfo}</Typography>
+            )}
+          </Box>
+        )}
+      </Paper>
+
+  {/* Top Cities Timeline */}
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.primary.main}`, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.06 : 0.04) }}>
+  <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Top Cities Timeline — {TOP_KPI_DEFS.find(d => d.id === topKpi)?.label || ''} ({(topTimeline.dates || []).length} days)</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, alignItems: 'center' }}>
+          <Typography variant="body2" color="text.secondary">Show:</Typography>
+          {[
+            { n: 10, label: 'Top 10' },
+          ].map(({ n, label }) => (
+            <Chip
+              key={n}
+              label={label}
+              size="small"
+              color={topCount === n ? 'success' : 'default'}
+              variant={topCount === n ? 'filled' : 'outlined'}
+              onClick={() => { setTopCount(n); setTopLoadedKey(''); }}
+            />
+          ))}
+          <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>KPI:</Typography>
+          {TOP_KPI_DEFS.map((k) => (
+            <Chip
+              key={k.id}
+              label={k.label}
+              size="small"
+              color={topKpi === k.id ? 'success' : 'default'}
+              variant={topKpi === k.id ? 'filled' : 'outlined'}
+              onClick={() => setTopKpi(k.id)}
+            />
+          ))}
+          <TextField
+            size="small"
+            type="number"
+            label="Days (0 = full)"
+            value={topDays}
+            onChange={(e) => { const v = parseInt(e.target.value || '0', 10); setTopDays(Number.isFinite(v) ? Math.max(0, v) : 0); setTopLoadedKey(''); }}
+            sx={{ width: 140 }}
+          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto', minWidth: 300 }}>
+            <TextField
+              size="small"
+              fullWidth
+              label="Add city codes (3 letters, comma-separated)"
+              placeholder="e.g., ABC, XYZ"
+              value={topExtras}
+              onChange={(e) => { setTopExtras(e.target.value); setTopLoadedKey(''); }}
+            />
+          </Box>
+        </Box>
+        {/* Select/deselect locations */}
+        {(topTimeline.keys || []).length > 0 && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+            <Chip size="small" label="Select all" variant="outlined" onClick={selectAllTopKeys} />
+            <Chip size="small" label="Clear all" variant="outlined" onClick={clearAllTopKeys} />
+      {(topTimeline.keys || []).map((k) => (
+              <Chip
+                key={k}
+                size="small"
+        label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
+                color={topSelectedKeys.includes(k) ? 'success' : 'default'}
+                variant={topSelectedKeys.includes(k) ? 'filled' : 'outlined'}
+                onClick={() => toggleTopKey(k)}
+              />
+            ))}
+          </Box>
+        )}
+        {/* KPIs fixed for this timeline: Total Phones, Phones with KEM, Total Switches (aggregated over selected keys) */}
+        {topTimeline.loading ? (
+          <Skeleton variant="rectangular" height={220} />
+        ) : topTimeline.error ? (
+          <Alert severity="info" variant="outlined">{topTimeline.error}</Alert>
+        ) : (
+          <Box sx={{ width: '100%', overflowX: 'auto' }}>
+            <LineChart
+              height={380}
+              xAxis={[{ data: (topTimeline.dates || []).map((d) => String(d).slice(5)), scaleType: 'point' }]}
+              series={topSeriesPerKey}
+              margin={{ left: 40, right: 20, top: 16, bottom: 24 }}
+              slotProps={{
+                legend: { hidden: true },
+                tooltip: {
+                  sx: {
+                    maxWidth: 640,
+                    '& ul': {
+                      columns: topCount >= 50 ? 4 : topCount >= 25 ? 2 : 1,
+                      columnGap: 16,
+                      margin: 0,
+                      padding: 0,
+                    },
+                  },
+                },
+              }}
+              sx={{ minWidth: 520 }}
+            />
+            {(topSelectedKeys || []).length > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                Showing {topSelectedKeys.length} location lines
+              </Typography>
             )}
           </Box>
         )}
