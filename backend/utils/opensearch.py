@@ -1108,6 +1108,126 @@ class OpenSearchConfig:
             # Deduplicate documents while preserving sort order
             unique_documents = self._deduplicate_documents_preserve_order(documents)
 
+            # For MAC-like searches, ensure at least one matching document per netspeed file present in /app/data
+            # This guarantees all netspeed.csv* files show up in the results list
+            try:
+                mac_core_seed = re.sub(r'[^A-Fa-f0-9]', '', query or '')
+                looks_like_mac_seed = isinstance(query, str) and len(mac_core_seed) == 12
+            except Exception:
+                looks_like_mac_seed = False
+            if looks_like_mac_seed:
+                try:
+                    from pathlib import Path as _Path
+                    mac_upper_seed = mac_core_seed.upper()
+                    data_dir = _Path('/app/data')
+                    netspeed_files = []
+                    if data_dir.exists():
+                        # Collect netspeed.csv and numeric suffixed history (.0, .1, ...)
+                        for p in sorted(data_dir.glob('netspeed.csv*'), key=lambda x: x.name):
+                            n = p.name
+                            if n == 'netspeed.csv' or (n.startswith('netspeed.csv.') and n.replace('netspeed.csv.', '').isdigit()):
+                                netspeed_files.append(n)
+                    # Seed order: current first, then .0, .1, ...
+                    def _seed_priority(name: str):
+                        if name == 'netspeed.csv':
+                            return (0, 0)
+                        try:
+                            return (1, int(name.split('netspeed.csv.')[1]))
+                        except Exception:
+                            return (999, 999)
+                    netspeed_files.sort(key=_seed_priority)
+
+                    # Determine which file names are already present in results
+                    present_files = set((d.get('File Name') or '') for d in unique_documents)
+                    seed_docs: List[Dict[str, Any]] = []
+                    if netspeed_files:
+                        # Build a small targeted body per file
+                        for fname in netspeed_files:
+                            if fname in present_files:
+                                continue  # already represented
+                            try:
+                                seed_body = {
+                                    'query': {
+                                        'bool': {
+                                            'must': [
+                                                {'term': {'File Name': fname}}
+                                            ],
+                                            'should': [
+                                                {'term': {'MAC Address.keyword': mac_upper_seed}},
+                                                {'term': {'MAC Address 2.keyword': mac_upper_seed}},
+                                                {'term': {'MAC Address 2.keyword': f'SEP{mac_upper_seed}'}},
+                                                {'wildcard': {'MAC Address.keyword': f'*{mac_upper_seed}*'}},
+                                                {'wildcard': {'MAC Address 2.keyword': f'*{mac_upper_seed}*'}}
+                                            ],
+                                            'minimum_should_match': 1
+                                        }
+                                    },
+                                    '_source': [
+                                        'File Name', 'Creation Date', 'MAC Address', 'MAC Address 2', 'IP Address',
+                                        'Line Number', 'Switch Hostname', 'Switch Port', 'Serial Number', 'Model Name'
+                                    ],
+                                    'size': 1
+                                }
+                                # Search across netspeed_* indices; avoid relying on exact index per file
+                                resp_seed = self.client.search(index=['netspeed_*'], body=seed_body)
+                                hit = next((h.get('_source', {}) for h in resp_seed.get('hits', {}).get('hits', [])), None)
+                                if hit:
+                                    seed_docs.append(hit)
+                            except Exception as _e:
+                                logger.debug(f"Seed query for {fname} failed: {_e}")
+                    if seed_docs:
+                        # Prepend seeds to ensure they survive later capping; then re-dedupe preserving order
+                        combined = seed_docs + unique_documents
+                        unique_documents = self._deduplicate_documents_preserve_order(combined)
+                except Exception as _e:
+                    logger.debug(f"MAC per-file seeding failed: {_e}")
+
+            # For MAC-like queries, promote one representative hit per netspeed file to the top
+            # so the user immediately sees one row for each netspeed.csv(.N)
+            promoted: List[Dict[str, Any]] = []
+            if looks_like_mac_seed:
+                try:
+                    # Build list of netspeed files from /app/data in desired order
+                    from pathlib import Path as _Path
+                    data_dir2 = _Path('/app/data')
+                    netspeed_files2: List[str] = []
+                    if data_dir2.exists():
+                        for p in sorted(data_dir2.glob('netspeed.csv*'), key=lambda x: x.name):
+                            n = p.name
+                            if n == 'netspeed.csv' or (n.startswith('netspeed.csv.') and n.replace('netspeed.csv.', '').isdigit()):
+                                netspeed_files2.append(n)
+                    def _prio2(name: str):
+                        if name == 'netspeed.csv':
+                            return (0, 0)
+                        try:
+                            return (1, int(name.split('netspeed.csv.')[1]))
+                        except Exception:
+                            return (999, 999)
+                    netspeed_files2.sort(key=_prio2)
+
+                    # First doc per file from current unique_documents
+                    first_by_file: Dict[str, Dict[str, Any]] = {}
+                    for d in unique_documents:
+                        fn = (d.get('File Name') or '')
+                        if not fn:
+                            continue
+                        if fn.startswith('netspeed.csv') and fn not in first_by_file:
+                            first_by_file[fn] = d
+
+                    # Assemble promoted list following netspeed order
+                    for fn in netspeed_files2:
+                        doc = first_by_file.get(fn)
+                        if doc:
+                            promoted.append(doc)
+
+                    if promoted:
+                        # For MAC searches: return exactly one row per netspeed file
+                        # Replace full results with the promoted representatives
+                        unique_documents = promoted
+                        logger.info(f"Returning {len(promoted)} per-file representatives for MAC query")
+                except Exception as _e:
+                    logger.debug(f"Per-file promotion failed: {_e}")
+
             # If it's a MAC-like query and still no netspeed.csv in results, try a wildcard-indices fallback
             try:
                 mac_core_fb = re.sub(r'[^A-Fa-f0-9]', '', query or '')
@@ -1179,6 +1299,16 @@ class OpenSearchConfig:
                 logger.warning(f"Error sorting documents by file name priority: {e}")
 
             # CSV fallback used during testing has been removed. Search relies on OpenSearch only.
+
+            # Enforce a hard cap on number of returned documents to avoid huge payloads
+            try:
+                cap = int(size) if isinstance(size, int) else 20000
+            except Exception:
+                cap = 20000
+            if cap and len(unique_documents) > cap:
+                before = len(unique_documents)
+                unique_documents = unique_documents[:cap]
+                logger.info(f"Capped results from {before} to {cap}")
 
             # Apply display column filtering for consistency
             from utils.csv_utils import DESIRED_ORDER

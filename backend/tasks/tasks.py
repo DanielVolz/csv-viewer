@@ -572,7 +572,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
 
 
 @app.task(name='tasks.search_opensearch')
-def search_opensearch(query: str, field: Optional[str] = None, include_historical: bool = False) -> dict:
+def search_opensearch(query: str, field: Optional[str] = None, include_historical: bool = False, size: int = 20000) -> dict:
     """
     Task to search OpenSearch.
 
@@ -591,64 +591,56 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
         headers, documents = opensearch_config.search(
             query=query,
             field=field,
-            include_historical=include_historical
+            include_historical=include_historical,
+            size=size
         )
 
-        # Process documents to ensure file creation dates are included
+        # Process documents to ensure file creation dates and formats are included
+        # Avoid heavy per-row filesystem work by caching per file name within this search
+        meta_cache: dict[str, dict] = {}
+
+        def get_file_meta(_file_name: str) -> dict:
+            if _file_name in meta_cache:
+                return meta_cache[_file_name]
+            meta: dict = {"date": None, "format": None}
+            file_path = f"/app/data/{_file_name}"
+            try:
+                from models.file import FileModel as _FM
+                fm = _FM.from_path(file_path)
+                meta["date"] = fm.date.strftime('%Y-%m-%d') if fm.date else None
+                meta["format"] = fm.format or None
+            except Exception as _e:
+                logger.debug(f"File meta probe failed for {_file_name}: {_e}")
+            # Minimal fallbacks
+            if meta["date"] is None:
+                try:
+                    from pathlib import Path as _Path
+                    from datetime import datetime as _dt
+                    p = _Path(file_path)
+                    if p.exists():
+                        meta["date"] = _dt.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d')
+                except Exception:
+                    pass
+            if meta["format"] is None:
+                # Heuristic: current netspeed.csv likely "new", historical default to "old"
+                meta["format"] = "new" if _file_name == "netspeed.csv" else "old"
+            meta_cache[_file_name] = meta
+            return meta
+
         for doc in documents:
-            # Check if the document has a file name
-            if 'File Name' in doc:
-                file_name = doc['File Name']
-
-                # Only add Creation Date if it's missing from the document
-                if 'Creation Date' not in doc or not doc['Creation Date']:
-                    # Create a file model to get the date info
-                    try:
-                        file_path = f"/app/data/{file_name}"
-                        # Get a complete FileModel to get the correct date
-                        from models.file import FileModel
-                        file_model = FileModel.from_path(file_path)
-
-                        # Use the date from FileModel which already handles all the details correctly
-                        if file_model.date:
-                            doc['Creation Date'] = file_model.date.strftime('%Y-%m-%d')
-                        else:
-                            # Fallback if date is not available
-                            import subprocess
-                            from pathlib import Path
-                            from datetime import datetime
-
-                            try:
-                                # Match the same stat command used in FileModel.from_path
-                                process = subprocess.run(
-                                    ["stat", "-c", "%w", file_path],
-                                    capture_output=True,
-                                    text=True,
-                                    check=True
-                                )
-                                creation_time_str = process.stdout.strip()
-                                # Extract just the date part (YYYY-MM-DD) from the timestamp
-                                date_part = creation_time_str.split()[0]
-                                doc['Creation Date'] = date_part
-                            except subprocess.CalledProcessError:
-                                # Fallback to modification time if stat fails
-                                file_path_obj = Path(file_path)
-                                mtime = file_path_obj.stat().st_mtime
-                                date = datetime.fromtimestamp(mtime)
-                                doc['Creation Date'] = date.strftime('%Y-%m-%d')
-                    except Exception as e:
-                        logger.warning(f"Error getting file info for {file_name}: {e}")
-
-                # For file format, always add it if missing
-                if 'File Format' not in doc:
-                    try:
-                        file_path = f"/app/data/{file_name}"
-                        from models.file import FileModel
-                        file_model = FileModel.from_path(file_path)
-                        doc['File Format'] = file_model.format
-                    except Exception as e:
-                        logger.warning(f"Error getting file format for {file_name}: {e}")
-                        doc['File Format'] = 'unknown'
+            file_name = doc.get('File Name')
+            if not file_name:
+                continue
+            meta = None
+            # Only fetch meta if any field is missing
+            need_date = ('Creation Date' not in doc) or (not doc.get('Creation Date'))
+            need_format = ('File Format' not in doc)
+            if need_date or need_format:
+                meta = get_file_meta(file_name)
+            if need_date and meta and meta.get('date'):
+                doc['Creation Date'] = meta['date']
+            if need_format and meta and meta.get('format'):
+                doc['File Format'] = meta['format']
 
     # Note: CSV fallback used during testing has been removed. OpenSearch results are used exclusively.
 

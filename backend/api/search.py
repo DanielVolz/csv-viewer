@@ -29,6 +29,10 @@ async def search_files(
     field: Optional[str] = Query(
         None,
         description="Specific field to search (e.g., ip_address, mac_address)"
+    ),
+    limit: Optional[int] = Query(
+        None,
+        description="Maximum number of results to return (server will cap to 20000)."
     )
 ):
     """
@@ -52,15 +56,23 @@ async def search_files(
         # General search
         if query:
             # Submit search task to Celery
+            # Apply sane default and cap
+            default_limit = getattr(settings, "SEARCH_MAX_RESULTS", 5000)
+            req_limit = limit if (isinstance(limit, int) and limit > 0) else default_limit
+            eff_limit = min(max(1, req_limit), 20000)
+
             task = search_opensearch.delay(
                 query=query,
                 field=field,
-                include_historical=include_historical
+                include_historical=include_historical,
+                size=eff_limit
             )
 
             # Wait for task to complete (with timeout)
             # This is a synchronous operation, but the work is done by Celery
-            result = task.get(timeout=10)
+            # Wait up to configured timeout (configurable via SEARCH_TIMEOUT_SECONDS)
+            timeout_s = getattr(settings, "SEARCH_TIMEOUT_SECONDS", 10)
+            result = task.get(timeout=timeout_s)
 
             if result["status"] == "success":
                 return {
