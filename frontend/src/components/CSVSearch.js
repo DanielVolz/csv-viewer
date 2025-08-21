@@ -67,6 +67,21 @@ function CSVSearch() {
   const searchFieldRef = useRef(null);
   const initialQueryRef = useRef(null);
   const mountedRef = useRef(true);
+  const sanitizeTimeoutRef = useRef(null);
+
+  // Sanitize display value in the input: remove optional SEP/sep prefix and any non-hex separators
+  function sanitizeForDisplay(v) {
+    if (v == null) return '';
+    let s = String(v);
+    // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
+    s = s.replace(/^sep[-_:]?/i, '');
+    // remove all whitespace (spaces, tabs, NBSP, etc.)
+    s = s.replace(/\s+/g, '');
+    // remove common delimiters (':', '-', ';', '.') and any other non-hex characters
+    s = s.replace(/[^0-9A-Fa-f]/g, '');
+    // present as uppercase condensed hex for a "normal" MAC look
+    return s.toUpperCase();
+  }
 
   const {
     searchAll,
@@ -143,15 +158,26 @@ function CSVSearch() {
       const params = new URLSearchParams(window.location.search);
       const q = params.get('q');
       if (q && typeof q === 'string') {
+        // Show raw first; sanitize later only if MAC-like
         setSearchTerm(q);
         initialQueryRef.current = q;
         console.debug('[CSVSearch] initial query param detected', { q });
+        // Delayed sanitize for MAC-like inputs
+        if (sanitizeTimeoutRef.current) clearTimeout(sanitizeTimeoutRef.current);
+        sanitizeTimeoutRef.current = setTimeout(() => {
+          if (!mountedRef.current) return;
+          const macCan = normalizeMacInput(q);
+          if (macCan) setSearchTerm(sanitizeForDisplay(q));
+        }, 1000);
       }
     } catch { }
     return () => {
       mountedRef.current = false;
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
+      }
+      if (sanitizeTimeoutRef.current) {
+        clearTimeout(sanitizeTimeoutRef.current);
       }
     };
   }, []);
@@ -178,7 +204,7 @@ function CSVSearch() {
       const cleaned = stripAllWhitespace(term);
       lastSearchTermRef.current = cleaned;
       const macCanonical = normalizeMacInput(cleaned);
-      const hist = macCanonical ? true : includeHistorical;
+      const hist = includeHistorical; // respect user selection only
       if (macCanonical) recordMac(macCanonical);
       searchAll(cleaned, hist, true).then(success => {
         if (!mountedRef.current) return;
@@ -245,16 +271,16 @@ function CSVSearch() {
     } catch { }
   }, [macHistory, results, allResults, updateMac, normalizeMacInput, getLocationForMac]);
   const executeSearch = useCallback((term) => {
+    // Use raw term for display; only strip whitespace for search
     const cleaned = stripAllWhitespace(term);
     if (searchBlocked) {
       console.debug('[CSVSearch][executeSearch] prevented (blocked)', { term, previewLoading, missingPreview });
       return;
     }
     if (cleaned.length >= 3 && cleaned !== lastSearchTermRef.current) {
-      if (cleaned !== term) setSearchTerm(cleaned);
       lastSearchTermRef.current = cleaned;
       const macCanonical = normalizeMacInput(cleaned);
-      const hist = macCanonical ? true : includeHistorical;
+      const hist = includeHistorical; // do not auto-enable historical
       if (macCanonical) {
         const loc = getLocationForMac(macCanonical);
         recordMac(macCanonical, loc || undefined);
@@ -278,14 +304,14 @@ function CSVSearch() {
       const loc = getLocationForMac(macCanonical);
       recordMac(macCanonical, loc || undefined);
     }
-    // Use the displayed condensed MAC for searching as well
-    searchAll(macCanonical, true, true).then(success => { // always historical for MAC click
+    // Use current checkbox selection for historical
+    searchAll(macCanonical, includeHistorical, true).then(success => {
       if (!mountedRef.current) return;
       if (success) {
         setHasSearched(true);
       }
     });
-  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac]);
+  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac, includeHistorical]);
 
   const handleSwitchPortClick = useCallback((switchPort) => {
     // Currently just copies to clipboard, but could trigger search
@@ -294,7 +320,18 @@ function CSVSearch() {
 
   const handleInputChange = useCallback((e) => {
     const term = e.target.value;
+    // Show what the user typed immediately
     setSearchTerm(term);
+    // Schedule a delayed sanitize only if the input is MAC-like
+    if (sanitizeTimeoutRef.current) clearTimeout(sanitizeTimeoutRef.current);
+    sanitizeTimeoutRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      const macCan = normalizeMacInput(term);
+      if (macCan) {
+        const displaySanitized = sanitizeForDisplay(term);
+        if (displaySanitized !== searchTerm) setSearchTerm(displaySanitized);
+      }
+    }, 1000);
     setIsTyping(true);
     console.debug('[CSVSearch][handleInputChange] value', { term });
 
@@ -302,17 +339,18 @@ function CSVSearch() {
       clearTimeout(typingTimeoutRef.current);
     }
 
-    if (term === '') {
+    const cleaned = stripAllWhitespace(term);
+    if (cleaned === '') {
       setHasSearched(false);
       lastSearchTermRef.current = '';
       setIsTyping(false);
-    } else if (term.length >= 3) {
+    } else if (cleaned.length >= 3) {
       typingTimeoutRef.current = setTimeout(() => {
         setIsTyping(false);
         executeSearch(term);
       }, 1000);
     }
-  }, [executeSearch]);
+  }, [executeSearch, normalizeMacInput, stripAllWhitespace, searchTerm]);
 
   const handleSearch = useCallback(() => {
     if (searchBlocked) {
@@ -329,10 +367,9 @@ function CSVSearch() {
       clearTimeout(typingTimeoutRef.current);
     }
     const cleaned = stripAllWhitespace(searchTerm);
-    if (cleaned !== searchTerm) setSearchTerm(cleaned);
     lastSearchTermRef.current = cleaned;
     const macCanonical = normalizeMacInput(cleaned);
-    const hist = macCanonical ? true : includeHistorical;
+    const hist = includeHistorical; // do not auto-enable historical
     if (macCanonical) {
       const loc = getLocationForMac(macCanonical);
       recordMac(macCanonical, loc || undefined);
@@ -509,7 +546,7 @@ function CSVSearch() {
                           setSearchTerm(item.mac);
                           lastSearchTermRef.current = item.mac;
                           recordMac(item.mac, displayLoc || undefined);
-                          searchAll(item.mac, true, true).then(success => {
+                          searchAll(item.mac, includeHistorical, true).then(success => {
                             if (!mountedRef.current) return;
                             if (success) {
                               setHasSearched(true);

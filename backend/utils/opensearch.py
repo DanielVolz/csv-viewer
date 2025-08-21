@@ -287,8 +287,8 @@ class OpenSearchConfig:
                     ordered.append(current_index)
                 elif legacy_index in indices:
                     ordered.append(legacy_index)
-                # Add wildcard covering all netspeed indices (including the current one)
-                ordered.append("netspeed_*")
+                # Add wildcard covering only canonical netspeed.csv.N indices (exclude archives)
+                ordered.append("netspeed_netspeed_csv_*")
                 return ordered
             else:
                 # If not including historical files, search only the current netspeed file index
@@ -802,7 +802,7 @@ class OpenSearchConfig:
         return unique_documents
 
     def _build_query_body(self, query: str, field: Optional[str] = None,
-                        size: int = 20000) -> Dict[str, Any]:
+                          size: int = 20000) -> Dict[str, Any]:
         """
         Build query body for OpenSearch.
 
@@ -814,219 +814,451 @@ class OpenSearchConfig:
         Returns:
             Dict[str, Any]: Query body
         """
-        # Log what kind of query we're building for debugging
         logger.debug(f"Building query body for query: {query}, field: {field}, size: {size}")
 
         if field:
-            # Field-specific search with both exact and partial matching
             from utils.csv_utils import DESIRED_ORDER
+            # Phone-like Line Number exact-only
+            if field == "Line Number" and isinstance(query, str):
+                qn = query.strip()
+                if re.fullmatch(r"\+?\d{7,}", qn or ""):
+                    # Include both variants: with and without leading plus
+                    variants = [qn]
+                    if qn.startswith('+'):
+                        variants.append(qn.lstrip('+'))
+                    else:
+                        variants.append(f"+{qn}")
+                    return {
+                        "query": {"bool": {"should": [
+                            *([{ "term": {"Line Number.keyword": v} } for v in variants])
+                        ], "minimum_should_match": 1}},
+                        "_source": DESIRED_ORDER,
+                        "size": 1,
+                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                    }
+
+            # Switch Hostname exact-only (case-insensitive; robust via script filter)
+            if field == "Switch Hostname" and isinstance(query, str):
+                qh = query.strip()
+                if qh:
+                    return {
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {
+                                        "script": {
+                                            "script": {
+                                                "lang": "painless",
+                                                "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
+                                                "params": {"q": qh}
+                                            }
+                                        }
+                                    }
+                                ],
+                                "should": [
+                                    {"term": {"Switch Hostname": qh}},
+                                    {"term": {"Switch Hostname.lower": qh.lower()}}
+                                ],
+                                "minimum_should_match": 0
+                            }
+                        },
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [
+                            {"Creation Date": {"order": "desc"}},
+                            {"_script": {"type": "number", "order": "asc", "script": {
+                                "lang": "painless",
+                                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                                "params": {"f": "netspeed.csv"}
+                            }}},
+                            {"_score": {"order": "desc"}}
+                        ]
+                    }
+
+            # Switch Port exact-only
+            if field == "Switch Port":
+                # Enforce exact match ignoring surrounding spaces and case
+                return {
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "script": {
+                                        "script": {
+                                            "lang": "painless",
+                                            "source": "return doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value != null && doc['Switch Port'].value.trim().equalsIgnoreCase(params.q.trim());",
+                                            "params": {"q": str(query)}
+                                        }
+                                    }
+                                }
+                            ],
+                            "should": [
+                                {"term": {"Switch Port": query}}
+                            ],
+                            "minimum_should_match": 0
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                }
+
+            # MAC exact-only when 12-hex provided
+            if field in ("MAC Address", "MAC Address 2") and isinstance(query, str):
+                mac_core = re.sub(r"[^A-Fa-f0-9]", "", query)
+                if len(mac_core) == 12:
+                    mac_up = mac_core.upper()
+                    target_field = f"{field}.keyword"
+                    should = [{"term": {target_field: mac_up}}]
+                    if field == "MAC Address 2":
+                        should.append({"term": {target_field: f"SEP{mac_up}"}})
+                    return {
+                        "query": {"bool": {"should": should, "minimum_should_match": 1}},
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                    }
+
+            # IP exact-only for full IPv4
+            if field == "IP Address" and isinstance(query, str) and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", query or ""):
+                return {
+                    "query": {"bool": {"must": [{"term": {"IP Address.keyword": query}}]}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                }
+
+            # Serial Number exact-only (fielded)
+            if field == "Serial Number" and isinstance(query, str):
+                qsn = query.strip()
+                if qsn:
+                    return {
+                        "query": {"bool": {"must": [{"term": {"Serial Number": qsn}}]}},
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                    }
+
+            # Field-specific: exact, prefix, wildcard
             should_clauses = [
                 {"term": {field: query}},
                 {"prefix": {field: query}},
                 {"wildcard": {field: f"*{query}*"}}
             ]
-            # Add cleaned variant if searching Line Number with leading '+'
-            if field == "Line Number" and query.startswith('+'):
+            if field == "Line Number" and isinstance(query, str) and query.startswith('+'):
                 cleaned = query.lstrip('+')
-                if cleaned:
+                if cleaned and not re.fullmatch(r"\d{7,}", cleaned or ""):
                     should_clauses.append({"wildcard": {field: f"*{cleaned}*"}})
-            # Add case variants for MAC/IP if relevant
-            if field in ("MAC Address", "MAC Address 2", "Model Name", "Switch Hostname") and query.lower() != query.upper():
+            if field in ("MAC Address", "MAC Address 2", "Model Name") and isinstance(query, str) and query.lower() != query.upper():
                 should_clauses.append({"wildcard": {field: f"*{query.lower()}*"}})
                 should_clauses.append({"wildcard": {field: f"*{query.upper()}*"}})
+
+            fk = None
+            if field in ("Line Number", "MAC Address", "MAC Address 2"):
+                fk = f"{field}.keyword"
+
             return {
-                "query": {
-                    "bool": {
-                        "should": should_clauses,
-                        "minimum_should_match": 1
-                    }
-                },
+                "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
                 "_source": DESIRED_ORDER,
                 "size": size,
-                "sort": [
-                    {"Creation Date": {"order": "desc"}},
-                    {"_score": {"order": "desc"}}
-                ]
-            }
-        else:
-            # General search across all fields with improved partial matching
-            search_query = {
-                "query": {
-                    "bool": {
-                        "should": [
-                            # Original exact matches
-                            {"multi_match": {"query": query, "fields": ["*"]}},
-                            {"term": {"Line Number": query}},
-                            {"term": {"MAC Address": query}},
-                            {"term": {"Line Number": f"+{query}"}},
-                            # Prefer current file where applicable
-                            {"term": {"File Name": {"value": "netspeed.csv", "boost": 2.0}}},
-
-                            # Add case-insensitive wildcard search for all text/keyword fields
-                            # MAC Address fields (use keyword subfields for wildcard substring search)
-                            {"wildcard": {"MAC Address.keyword": f"*{query.lower()}*"}},
-                            {"wildcard": {"MAC Address.keyword": f"*{query.upper()}*"}},
-                            {"wildcard": {"MAC Address 2.keyword": f"*{query.lower()}*"}},
-                            {"wildcard": {"MAC Address 2.keyword": f"*{query.upper()}*"}},
-
-                            # Serial Number and IDs
-                            {"wildcard": {"Serial Number": f"*{query.lower()}*"}},
-                            {"wildcard": {"Serial Number": f"*{query.upper()}*"}},
-                            {"wildcard": {"Line Number": f"*{query}*"}},
-                            # Plus handling for line numbers
-                            # If query starts with '+', also search without it; else add a variant with leading '+'
-                            *(
-                                [ {"wildcard": {"Line Number": f"*{query.lstrip('+')}*"}} ]
-                                if query.startswith('+') and query.lstrip('+') else
-                                [ {"wildcard": {"Line Number": f"*+{query}*"}} ]
-                            ),
-
-                            # Network/Switch related fields
-                            {"wildcard": {"Switch Hostname": f"*{query.lower()}*"}},
-                            {"wildcard": {"Switch Hostname": f"*{query.upper()}*"}},
-                            # Lowercased subfield (requires reindex after mapping change)
-                            {"wildcard": {"Switch Hostname.lower": f"*{query.lower()}*"}},
-                            {"wildcard": {"Switch Port": f"*{query}*"}},
-                            {"wildcard": {"Subnet Mask": f"*{query}*"}},
-                            {"wildcard": {"Voice VLAN": f"*{query}*"}},
-
-                            # Speed measurements
-                            {"wildcard": {"Speed 1": f"*{query}*"}},
-                            {"wildcard": {"Speed 2": f"*{query}*"}},
-                            {"wildcard": {"Speed 3": f"*{query}*"}},
-                            {"wildcard": {"Speed 4": f"*{query}*"}},
-
-                            # Model and file information
-                            {"wildcard": {"Model Name": f"*{query.lower()}*"}},
-                            {"wildcard": {"Model Name": f"*{query.upper()}*"}},
-                            {"wildcard": {"File Name": f"*{query}*"}},
-                            # IP Address partial match (now text field) – allow substring search
-                            {"wildcard": {"IP Address": f"*{query}*"}},
-                            # Additional variants (lowercase already same for digits / dots)
-                            # Add plus-handling expansion for numeric-like queries for safety in Line Number
-                            # Already covered above but reinforce without duplication risk
-
-                            # Fuzzy matching disabled per user request
-                            # {"fuzzy": {"MAC Address": {"value": query, "fuzziness": "AUTO"}}},
-                            # {"fuzzy": {"Model Name": {"value": query, "fuzziness": "AUTO"}}}
-                        ],
-                        "minimum_should_match": 1
-                    }
-                },
-                "size": size
-            }
-
-            # Strengthen MAC address matching: try exact keyword matches and SEP-prefixed variant
-            try:
-                # Exact match on keyword subfields (case-sensitive)
-                search_query["query"]["bool"]["should"].append({"term": {"MAC Address.keyword": query}})
-                search_query["query"]["bool"]["should"].append({"term": {"MAC Address 2.keyword": query}})
-                # Also try SEP-prefixed form on MAC Address 2
-                if isinstance(query, str) and len(query) >= 12:
-                    sep_variant = f"SEP{query.upper()}"
-                    search_query["query"]["bool"]["should"].append({"term": {"MAC Address 2.keyword": sep_variant}})
-            except Exception as e:
-                logger.warning(f"Failed to add strengthened MAC keyword terms: {e}")
-
-            # Add IP Address partial search with range query if query looks like a valid IP prefix
-            # Use a regex that allows for trailing dots to handle formats like "10.0.0."
-            ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}\.?$')
-            if ip_pattern.match(query):
-                try:
-                    # For partial IP matching, we'll construct a range query
-                    # If query = "10.0", search all IPs from "10.0.0.0" to "10.0.255.255"
-                    # First strip any trailing dot for processing
-                    clean_query = query.rstrip('.')
-                    ip_parts = clean_query.split('.')
-
-                    if 1 <= len(ip_parts) <= 3:  # Partial IP with 1-3 octets
-                        # Construct lower bound
-                        lower_bound = clean_query
-                        while lower_bound.count('.') < 3:
-                            lower_bound += ".0"
-
-                        # Construct upper bound
-                        upper_bound = clean_query
-                        while upper_bound.count('.') < 3:
-                            upper_bound += ".255"
-
-                        # Add the range query
-                        search_query["query"]["bool"]["should"].append({
-                            "range": {
-                                "IP Address": {
-                                    "gte": lower_bound,
-                                    "lte": upper_bound
-                                }
-                            }
-                        })
-                except Exception as e:
-                    logger.warning(f"Failed to add IP range search for '{query}': {e}")
-
-            # Log the final query for debugging
-            logger.debug(f"Final search query: {search_query}")
-
-            # Additional heuristic: if query is a long numeric substring (>=5 digits) and does not already start with '+',
-            # add variant with leading '+' to increase chances of match in 'Line Number' field that may store it so.
-            if query.isdigit() and len(query) >= 5:
-                try:
-                    pref_variant = f"+{query}"
-                    search_query["query"]["bool"]["should"].append({"wildcard": {"Line Number": f"*{pref_variant}*"}})
-                except Exception as e:
-                    logger.warning(f"Failed to append plus-prefixed numeric variant for query '{query}': {e}")
-
-            # For MAC addresses that might be entered without separators, add a flexible wildcard with removal of common separators
-            if any(c.isalpha() for c in query) and len(query.replace(':','').replace('-','').replace('.','')) >= 6:
-                mac_core = re.sub(r'[^A-Fa-f0-9]', '', query)
-                if mac_core:
-                    try:
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address.keyword": f"*{mac_core.lower()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address.keyword": f"*{mac_core.upper()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2.keyword": f"*{mac_core.lower()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2.keyword": f"*{mac_core.upper()}*"}})
-                    except Exception as e:
-                        logger.warning(f"Failed to add MAC core variants for '{query}': {e}")
-
-            # For switch hostname partials ensure lowercase + uppercase variants already there; add dotted-segment fallback
-            if '.' in query and any(c.isalpha() for c in query):
-                try:
-                    parts = [p for p in query.split('.') if p]
-                    if len(parts) >= 2:
-                        short = parts[0]
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.lower()}*"}})
-                        search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.upper()}*"}})
-                except Exception as e:
-                    logger.warning(f"Failed to add hostname short variants for '{query}': {e}")
-
-            # Ensure model name case variants present for partial alphanumeric queries
-            if any(c.isalpha() for c in query) and any(c.isdigit() for c in query):
-                try:
-                    search_query["query"]["bool"]["should"].append({"wildcard": {"Model Name": f"*{query.lower()}*"}})
-                    search_query["query"]["bool"]["should"].append({"wildcard": {"Model Name": f"*{query.upper()}*"}})
-                except Exception as e:
-                    logger.warning(f"Failed to add model name variants for '{query}': {e}")
-
-            # Add _source filtering to only return desired columns
-            from utils.csv_utils import DESIRED_ORDER
-            search_query["_source"] = DESIRED_ORDER
-
-            # Add sorting by Creation Date then a tie-breaker to prioritize netspeed.csv
-            search_query["sort"] = [
-                {"Creation Date": {"order": "desc"}},
-                {
+                "sort": [{
                     "_script": {
-                        "type": "number",
-                        "order": "asc",
+                        "type": "number", "order": "asc",
                         "script": {
+                            "lang": "painless",
+                            "source": "def q = params.q; def f = params.f; def fk = params.fk; if (q == null) return 1; if (fk != null && doc.containsKey(fk) && doc[fk].size()>0 && doc[fk].value == q) return 0; if (doc.containsKey(f) && doc[f].size()>0 && doc[f].value == q) return 0; return 1;",
+                            "params": {"q": query, "f": field, "fk": fk}
+                        }
+                    }
+                }, {"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+            }
+
+        # General search across all fields
+        if isinstance(query, str):
+            qn = query.strip()
+            # MAC exact-only when 12-hex provided
+            mac_core = re.sub(r"[^A-Fa-f0-9]", "", qn)
+            if len(mac_core) == 12:
+                from utils.csv_utils import DESIRED_ORDER
+                mac_up = mac_core.upper()
+                return {
+                    "query": {"bool": {"should": [
+                        {"term": {"MAC Address.keyword": mac_up}},
+                        {"term": {"MAC Address 2.keyword": mac_up}},
+                        {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
+                        {"multi_match": {"query": mac_up, "fields": ["*"], "boost": 0.01}}
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
                             "lang": "painless",
                             "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
                             "params": {"f": "netspeed.csv"}
-                        }
-                    }
-                },
-                {"_score": {"order": "desc"}}
-            ]
+                        }}
+                    }]
+                }
 
-            return search_query
+            # Switch Hostname-like (FQDN) exact-only: contains dot and letters (not IP)
+            if any(c.isalpha() for c in qn) and "." in qn and "/" not in qn and " " not in qn:
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "script": {
+                                        "script": {
+                                            "lang": "painless",
+                                            "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
+                                            "params": {"q": qn}
+                                        }
+                                    }
+                                }
+                            ],
+                            "should": [
+                                {"term": {"Switch Hostname": qn}},
+                                {"term": {"Switch Hostname.lower": qn.lower()}}
+                            ],
+                            "minimum_should_match": 0
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}},
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
+            # Full IPv4 exact-only
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {"bool": {"must": [{"term": {"IP Address.keyword": qn}}]}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}
+                    }]
+                }
+
+            # Switch Port pattern exact-only
+            if '/' in qn and len(qn) >= 5:
+                from utils.csv_utils import DESIRED_ORDER
+                # Enforce exact match ignoring surrounding spaces and case
+                return {
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "script": {
+                                        "script": {
+                                            "lang": "painless",
+                                            "source": "return doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value != null && doc['Switch Port'].value.trim().equalsIgnoreCase(params.q.trim());",
+                                            "params": {"q": qn}
+                                        }
+                                    }
+                                }
+                            ],
+                            "should": [
+                                {"term": {"Switch Port": qn}}
+                            ],
+                            "minimum_should_match": 0
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}
+                    }]
+                }
+
+            # Serial Number exact-only (general): long alphanumeric token (not pure digits)
+            if re.fullmatch(r"[A-Za-z0-9]{8,}", qn or "") and not re.fullmatch(r"\d{8,}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                variants = [qn]
+                up = qn.upper()
+                if up != qn:
+                    variants.append(up)
+                return {
+                    "query": {"bool": {"should": [
+                        *([{ "term": {"Serial Number": v} } for v in variants])
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}
+                    }, {"_score": {"order": "desc"}}]
+                }
+
+            # Phone-like exact-only
+            if re.fullmatch(r"\+?\d{7,}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                # Include both variants: with and without leading plus
+                variants = [qn]
+                if qn.startswith('+'):
+                    variants.append(qn.lstrip('+'))
+                else:
+                    variants.append(f"+{qn}")
+                return {
+                    "query": {"bool": {"should": [
+                        *([{ "term": {"Line Number.keyword": v} } for v in variants])
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": 1,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}
+                    }, {"_score": {"order": "desc"}}]
+                }
+
+        # Broad query: allow partials but with exact-first sort
+        search_query = {
+            "query": {"bool": {"should": [
+                {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
+                {"multi_match": {"query": query, "fields": ["*"]}},
+                {"term": {"Line Number": query}},
+                {"term": {"MAC Address": query}},
+                {"term": {"Line Number": f"+{query}"}},
+                {"term": {"File Name": {"value": "netspeed.csv", "boost": 2.0}}},
+
+                {"wildcard": {"MAC Address.keyword": f"*{str(query).lower()}*"}},
+                {"wildcard": {"MAC Address.keyword": f"*{str(query).upper()}*"}},
+                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).lower()}*"}},
+                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
+
+                # No Serial Number wildcards to keep serial searches exact-only
+                {"wildcard": {"Line Number": f"*{query}*"}},
+                *([ {"wildcard": {"Line Number": f"*{str(query).lstrip('+')}*"}} ]
+                  if str(query).startswith('+') and str(query).lstrip('+') else
+                  [ {"wildcard": {"Line Number": f"*+{query}*"}} ]),
+
+
+                {"wildcard": {"Switch Port": f"*{query}*"}},
+                {"wildcard": {"Subnet Mask": f"*{query}*"}},
+                {"wildcard": {"Voice VLAN": f"*{query}*"}},
+
+                {"wildcard": {"Speed 1": f"*{query}*"}},
+                {"wildcard": {"Speed 2": f"*{query}*"}},
+                {"wildcard": {"Speed 3": f"*{query}*"}},
+                {"wildcard": {"Speed 4": f"*{query}*"}},
+
+                {"wildcard": {"Model Name": f"*{str(query).lower()}*"}},
+                {"wildcard": {"Model Name": f"*{str(query).upper()}*"}},
+                {"wildcard": {"File Name": f"*{query}*"}},
+                {"wildcard": {"IP Address": f"*{query}*"}}
+            ], "minimum_should_match": 1}},
+            "size": size
+        }
+
+        # Strengthen MAC exact matches
+        try:
+            search_query["query"]["bool"]["should"].append({"term": {"MAC Address.keyword": query}})
+            search_query["query"]["bool"]["should"].append({"term": {"MAC Address 2.keyword": query}})
+            if isinstance(query, str) and len(query) >= 12:
+                sep_variant = f"SEP{str(query).upper()}"
+                search_query["query"]["bool"]["should"].append({"term": {"MAC Address 2.keyword": sep_variant}})
+        except Exception as e:
+            logger.warning(f"Failed to add strengthened MAC keyword terms: {e}")
+
+        # Add IP range for partial prefixes
+        ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}\.?$')
+        if isinstance(query, str) and ip_pattern.match(query):
+            try:
+                clean_query = query.rstrip('.')
+                ip_parts = clean_query.split('.')
+                if 1 <= len(ip_parts) <= 3:
+                    lower_bound = clean_query
+                    while lower_bound.count('.') < 3:
+                        lower_bound += ".0"
+                    upper_bound = clean_query
+                    while upper_bound.count('.') < 3:
+                        upper_bound += ".255"
+                    search_query["query"]["bool"]["should"].append({
+                        "range": {"IP Address": {"gte": lower_bound, "lte": upper_bound}}
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to add IP range search for '{query}': {e}")
+
+        # Long numeric substring: add plus-prefixed exact variant
+        if isinstance(query, str) and query.isdigit() and len(query) >= 5:
+            try:
+                pref_variant = f"+{query}"
+                search_query["query"]["bool"]["should"].append({"term": {"Line Number.keyword": pref_variant}})
+            except Exception as e:
+                logger.warning(f"Failed to append plus-prefixed numeric variant for query '{query}': {e}")
+
+        # MAC core wildcards for condensed entries
+        if isinstance(query, str) and any(c.isalpha() for c in query) and len(query.replace(':','').replace('-','').replace('.','')) >= 6:
+            mac_core = re.sub(r'[^A-Fa-f0-9]', '', query)
+            if mac_core:
+                try:
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address.keyword": f"*{mac_core.lower()}*"}})
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address.keyword": f"*{mac_core.upper()}*"}})
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2.keyword": f"*{mac_core.lower()}*"}})
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"MAC Address 2.keyword": f"*{mac_core.upper()}*"}})
+                except Exception as e:
+                    logger.warning(f"Failed to add MAC core variants for '{query}': {e}")
+
+        # Hostname dotted-segment fallback
+        if isinstance(query, str) and '.' in query and any(c.isalpha() for c in query):
+            try:
+                parts = [p for p in query.split('.') if p]
+                if len(parts) >= 2:
+                    short = parts[0]
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.lower()}*"}})
+                    search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.upper()}*"}})
+            except Exception as e:
+                logger.warning(f"Failed to add hostname short variants for '{query}': {e}")
+
+        # Alphanumeric model name variants
+        if isinstance(query, str) and any(c.isalpha() for c in query) and any(c.isdigit() for c in query):
+            try:
+                search_query["query"]["bool"]["should"].append({"wildcard": {"Model Name": f"*{str(query).lower()}*"}})
+                search_query["query"]["bool"]["should"].append({"wildcard": {"Model Name": f"*{str(query).upper()}*"}})
+            except Exception as e:
+                logger.warning(f"Failed to add model name variants for '{query}': {e}")
+
+        from utils.csv_utils import DESIRED_ORDER
+        search_query["_source"] = DESIRED_ORDER
+
+        search_query["sort"] = [
+            {"_script": {"type": "number", "order": "asc", "script": {
+                "lang": "painless",
+                "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value == q) return 0; if (doc.containsKey('Line Number.keyword') && doc['Line Number.keyword'].size()>0 && doc['Line Number.keyword'].value == q) return 0; if (doc.containsKey('MAC Address.keyword') && doc['MAC Address.keyword'].size()>0 && doc['MAC Address.keyword'].value == q) return 0; if (doc.containsKey('MAC Address 2.keyword') && doc['MAC Address 2.keyword'].size()>0 && doc['MAC Address 2.keyword'].value == q) return 0; if (doc.containsKey('IP Address') && doc['IP Address'].size()>0 && doc['IP Address'].value == q) return 0; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0 && doc['Serial Number'].value == q) return 0; return 1;",
+                "params": {"q": query}
+            }}},
+            {"Creation Date": {"order": "desc"}},
+            {"_script": {"type": "number", "order": "asc", "script": {
+                "lang": "painless",
+                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                "params": {"f": "netspeed.csv"}
+            }}},
+            {"_score": {"order": "desc"}}
+        ]
+
+        return search_query
 
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False,
               size: int = 20000) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -1046,17 +1278,32 @@ class OpenSearchConfig:
             # Prepare containers for documents
             documents: List[Dict[str, Any]] = []
 
+            # Helper to normalize user input into canonical 12-hex MAC (uppercase)
+            def _normalize_mac(q: Optional[str]) -> Optional[str]:
+                if not isinstance(q, str) or not q:
+                    return None
+                s = q.strip()
+                import re as _re
+                # Strip optional Cisco SEP prefix (case-insensitive) with optional separator
+                s = _re.sub(r'(?i)^sep[-_:]?', '', s)
+                # Remove all non-hex characters (handle '-', ':', '.')
+                core = _re.sub(r'[^0-9A-Fa-f]', '', s)
+                if len(core) == 12:
+                    return core.upper()
+                return None
+
             # If the query looks like a MAC, first search the current index only to prefer today's file
             try:
-                mac_core_first = re.sub(r'[^A-Fa-f0-9]', '', query or '')
-                looks_like_mac_first = isinstance(query, str) and len(mac_core_first) == 12
+                canonical_mac = _normalize_mac(query)
+                looks_like_mac_first = canonical_mac is not None
             except Exception:
+                canonical_mac = None
                 looks_like_mac_first = False
 
             if looks_like_mac_first:
                 try:
                     curr_indices_first = self.get_search_indices(False)
-                    mac_upper_first = mac_core_first.upper()
+                    mac_upper_first = str(canonical_mac)
                     targeted_first = {
                         "query": {
                             "bool": {
@@ -1085,10 +1332,207 @@ class OpenSearchConfig:
                 except Exception as e:
                     logger.warning(f"[MAC-first] current-index search failed: {e}")
 
+            # Early exact branch: phone-like (+digits) returns exactly 1 result
+            try:
+                looks_like_phone = False
+                if isinstance(query, str):
+                    qn_phone = query.strip()
+                    looks_like_phone = bool(re.fullmatch(r"\+?\d{7,}", qn_phone or ""))
+            except Exception:
+                looks_like_phone = False
+            if looks_like_phone:
+                try:
+                    qn_phone = query.strip()
+                    # Always include both variants: with and without leading '+'
+                    if qn_phone.startswith('+'):
+                        digits = qn_phone.lstrip('+')
+                        cands = [qn_phone]
+                        if digits:
+                            cands.append(digits)
+                    else:
+                        digits = qn_phone
+                        cands = [digits, f"+{digits}"] if digits else []
+                    from utils.csv_utils import DESIRED_ORDER
+                    if include_historical:
+                        # Return one exact match per netspeed file, newest first
+                        from pathlib import Path as _Path
+                        data_dir = _Path('/app/data')
+                        netspeed_files: List[str] = []
+                        if data_dir.exists():
+                            for p in sorted(data_dir.glob('netspeed.csv*'), key=lambda x: x.name):
+                                n = p.name
+                                if n == 'netspeed.csv' or (n.startswith('netspeed.csv.') and n.replace('netspeed.csv.', '').isdigit()):
+                                    netspeed_files.append(n)
+                        def _prio(name: str):
+                            if name == 'netspeed.csv':
+                                return (0, 0)
+                            try:
+                                return (1, int(name.split('netspeed.csv.')[1]))
+                            except Exception:
+                                return (999, 999)
+                        netspeed_files.sort(key=_prio)
+
+                        results: List[Dict[str, Any]] = []
+                        for fname in netspeed_files:
+                            try:
+                                seed_body = {
+                                    "query": {
+                                        "bool": {
+                                            "must": [
+                                                {"term": {"File Name": fname}}
+                                            ],
+                                            "should": [{"term": {"Line Number.keyword": c}} for c in cands],
+                                            "minimum_should_match": 1
+                                        }
+                                    },
+                                    "_source": DESIRED_ORDER,
+                                    "size": 1
+                                }
+                                # Search across current + historical indices to include netspeed.csv as well
+                                resp = self.client.search(index=self.get_search_indices(True), body=seed_body)
+                                hit = next((h.get('_source', {}) for h in resp.get('hits', {}).get('hits', [])), None)
+                                if hit:
+                                    results.append(hit)
+                            except Exception as _e:
+                                logger.debug(f"[PHONE] per-file seed failed for {fname}: {_e}")
+                        return DESIRED_ORDER, results
+                    else:
+                        # Only current file (netspeed.csv), exact-only and size=1
+                        indices_phone = self.get_search_indices(False)
+                        phone_body = {
+                            "query": {"bool": {"should": [{"term": {"Line Number.keyword": c}} for c in cands], "minimum_should_match": 1}},
+                            "_source": DESIRED_ORDER,
+                            "size": 1
+                        }
+                        logger.info(f"[PHONE] indices={indices_phone} body={phone_body}")
+                        resp_phone = self.client.search(index=indices_phone, body=phone_body)
+                        phone_hit = next((h.get('_source', {}) for h in resp_phone.get('hits', {}).get('hits', [])), None)
+                        if phone_hit:
+                            return DESIRED_ORDER, [phone_hit]
+                        return DESIRED_ORDER, []
+                except Exception as e:
+                    logger.warning(f"Phone exact search failed, falling back to general: {e}")
+
+            # Early exact branch: Serial Number-like (long alphanumeric, not pure digits)
+            try:
+                looks_like_serial = False
+                if isinstance(query, str):
+                    qn_sn = query.strip()
+                    looks_like_serial = bool(re.fullmatch(r"[A-Za-z0-9]{8,}", qn_sn or "")) and not bool(re.fullmatch(r"\d{8,}", qn_sn or ""))
+            except Exception:
+                looks_like_serial = False
+            if looks_like_serial and not looks_like_mac_first:
+                try:
+                    qn_sn = query.strip()
+                    variants = [qn_sn]
+                    up = qn_sn.upper()
+                    if up != qn_sn:
+                        variants.append(up)
+                    from utils.csv_utils import DESIRED_ORDER
+                    indices_sn = self.get_search_indices(include_historical)
+                    body_sn = {
+                        "query": {"bool": {"should": [
+                            *([{ "term": {"Serial Number": v} } for v in variants])
+                        ], "minimum_should_match": 1}},
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [{"Creation Date": {"order": "desc"}}, {
+                            "_script": {"type": "number", "order": "asc", "script": {
+                                "lang": "painless",
+                                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                                "params": {"f": "netspeed.csv"}
+                            }}
+                        }, {"_score": {"order": "desc"}}]
+                    }
+                    logger.info(f"[SERIAL] indices={indices_sn} body={body_sn}")
+                    resp_sn = self.client.search(index=indices_sn, body=body_sn)
+                    docs_sn = [h.get('_source', {}) for h in resp_sn.get('hits', {}).get('hits', [])]
+                    # Filter out archived filenames; keep only netspeed.csv and netspeed.csv.N
+                    def _is_allowed_file(fn: str) -> bool:
+                        if not fn:
+                            return False
+                        if fn == 'netspeed.csv':
+                            return True
+                        if fn.startswith('netspeed.csv.'):
+                            suf = fn.split('netspeed.csv.', 1)[1]
+                            return suf.isdigit()
+                        return False
+                    docs_sn = [d for d in docs_sn if _is_allowed_file((d.get('File Name') or '').strip())]
+                    return DESIRED_ORDER, docs_sn
+                except Exception as e:
+                    logger.warning(f"Serial exact search failed, falling back to general: {e}")
+
+            # Early exact branch: Hostname/FQDN (contains dot and letters, not IP)
+            try:
+                looks_like_hostname_early = False
+                if isinstance(query, str):
+                    qn_hn = query.strip()
+                    looks_like_hostname_early = ('.' in qn_hn and any(c.isalpha() for c in qn_hn) and '/' not in qn_hn and ' ' not in qn_hn and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn_hn or ""))
+            except Exception:
+                looks_like_hostname_early = False
+            if looks_like_hostname_early and not looks_like_mac_first:
+                try:
+                    qn_hn = query.strip()
+                    from utils.csv_utils import DESIRED_ORDER
+                    indices_hn = self.get_search_indices(include_historical)
+                    body_hn = {
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {
+                                        "script": {
+                                            "script": {
+                                                "lang": "painless",
+                                                "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
+                                                "params": {"q": qn_hn}
+                                            }
+                                        }
+                                    }
+                                ],
+                                "should": [
+                                    {"term": {"Switch Hostname": qn_hn}},
+                                    {"term": {"Switch Hostname.lower": qn_hn.lower()}}
+                                ],
+                                "minimum_should_match": 0
+                            }
+                        },
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [
+                            {"Creation Date": {"order": "desc"}},
+                            {"_script": {"type": "number", "order": "asc", "script": {
+                                "lang": "painless",
+                                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                                "params": {"f": "netspeed.csv"}
+                            }}}
+                        ]
+                    }
+                    resp_hn = self.client.search(index=indices_hn, body=body_hn)
+                    docs_hn = [h.get('_source', {}) for h in resp_hn.get('hits', {}).get('hits', [])]
+                    # Filter allowed files
+                    def _is_allowed_file(fn: str) -> bool:
+                        if not fn:
+                            return False
+                        if fn == 'netspeed.csv':
+                            return True
+                        if fn.startswith('netspeed.csv.'):
+                            suf = fn.split('netspeed.csv.', 1)[1]
+                            return suf.isdigit()
+                        return False
+                    docs_hn = [d for d in docs_hn if _is_allowed_file((d.get('File Name') or '').strip())]
+                    return DESIRED_ORDER, docs_hn
+                except Exception as e:
+                    logger.warning(f"Hostname exact search failed, falling back to general: {e}")
+
             # Now run the general search across the selected indices
             # For MAC-like queries, always include historical indices to list results from all netspeed.csv files
-            indices = self.get_search_indices(True if looks_like_mac_first else include_historical)
-            query_body = self._build_query_body(query, field, size)
+            indices = self.get_search_indices(include_historical)
+            if looks_like_mac_first:
+                # Force historical for the general phase regardless of caller flag
+                indices = self.get_search_indices(True)
+            # Use canonical MAC inside the general body for MAC queries
+            qb_query = str(canonical_mac) if looks_like_mac_first and canonical_mac else query
+            query_body = self._build_query_body(qb_query, field, size)
             logger.info(f"Search query: indices={indices}, query={query_body}")
             response = self.client.search(index=indices, body=query_body)
             logger.info(f"Search response: {response}")
@@ -1108,17 +1552,38 @@ class OpenSearchConfig:
             # Deduplicate documents while preserving sort order
             unique_documents = self._deduplicate_documents_preserve_order(documents)
 
+            # Always restrict results to canonical netspeed files only:
+            # - netspeed.csv
+            # - netspeed.csv.N (where N is a number)
+            def _is_allowed_file(fn: str) -> bool:
+                if not fn:
+                    return False
+                if fn == 'netspeed.csv':
+                    return True
+                if fn.startswith('netspeed.csv.'):
+                    suf = fn.split('netspeed.csv.', 1)[1]
+                    return suf.isdigit()
+                return False
+
+            before_cnt = len(unique_documents)
+            unique_documents = [d for d in unique_documents if _is_allowed_file((d.get('File Name') or '').strip())]
+            after_cnt = len(unique_documents)
+            if after_cnt != before_cnt:
+                logger.info(f"Filtered out {before_cnt - after_cnt} non-canonical files (kept netspeed.csv and netspeed.csv.N only)")
+
+            # (Removed) Hostname deduplication: return all exact matches for a host
+
             # For MAC-like searches, ensure at least one matching document per netspeed file present in /app/data
             # This guarantees all netspeed.csv* files show up in the results list
             try:
-                mac_core_seed = re.sub(r'[^A-Fa-f0-9]', '', query or '')
-                looks_like_mac_seed = isinstance(query, str) and len(mac_core_seed) == 12
+                mac_core_seed = canonical_mac
+                looks_like_mac_seed = mac_core_seed is not None
             except Exception:
                 looks_like_mac_seed = False
-            if looks_like_mac_seed:
+            if looks_like_mac_seed and include_historical:
                 try:
                     from pathlib import Path as _Path
-                    mac_upper_seed = mac_core_seed.upper()
+                    mac_upper_seed = str(mac_core_seed)
                     data_dir = _Path('/app/data')
                     netspeed_files = []
                     if data_dir.exists():
@@ -1169,7 +1634,7 @@ class OpenSearchConfig:
                                     'size': 1
                                 }
                                 # Search across netspeed_* indices; avoid relying on exact index per file
-                                resp_seed = self.client.search(index=['netspeed_*'], body=seed_body)
+                                resp_seed = self.client.search(index=['netspeed_netspeed_csv_*'], body=seed_body)
                                 hit = next((h.get('_source', {}) for h in resp_seed.get('hits', {}).get('hits', [])), None)
                                 if hit:
                                     seed_docs.append(hit)
@@ -1185,7 +1650,7 @@ class OpenSearchConfig:
             # For MAC-like queries, promote one representative hit per netspeed file to the top
             # so the user immediately sees one row for each netspeed.csv(.N)
             promoted: List[Dict[str, Any]] = []
-            if looks_like_mac_seed:
+            if looks_like_mac_seed and include_historical:
                 try:
                     # Build list of netspeed files from /app/data in desired order
                     from pathlib import Path as _Path
@@ -1230,13 +1695,13 @@ class OpenSearchConfig:
 
             # If it's a MAC-like query and still no netspeed.csv in results, try a wildcard-indices fallback
             try:
-                mac_core_fb = re.sub(r'[^A-Fa-f0-9]', '', query or '')
-                looks_like_mac_fb = isinstance(query, str) and len(mac_core_fb) == 12
+                mac_core_fb = canonical_mac
+                looks_like_mac_fb = mac_core_fb is not None
             except Exception:
                 looks_like_mac_fb = False
             if looks_like_mac_fb and not any((d.get('File Name') or '') == 'netspeed.csv' for d in unique_documents):
                 try:
-                    mac_upper_fb = mac_core_fb.upper()
+                    mac_upper_fb = str(mac_core_fb)
                     fb_body = {
                         "query": {
                             "bool": {
@@ -1267,6 +1732,29 @@ class OpenSearchConfig:
 
             # (Removed: secondary MAC fallback, now handled up-front)
 
+            # For Switch Port-like queries, return one row per switch (and per file when historical)
+            looks_like_port = isinstance(query, str) and ('/' in str(query))
+            if looks_like_port and not looks_like_mac_seed:
+                try:
+                    seen_keys = set()
+                    deduped_by_switch: List[Dict[str, Any]] = []
+                    for d in unique_documents:
+                        sh = (d.get('Switch Hostname') or '').strip()
+                        fn = (d.get('File Name') or '').strip()
+                        key = f"{sh}||{fn}" if include_historical else sh
+                        if not key:
+                            # Keep rows without a hostname only once
+                            key = f"__nohost__||{fn}" if include_historical else "__nohost__"
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        deduped_by_switch.append(d)
+                    if deduped_by_switch:
+                        unique_documents = deduped_by_switch
+                        logger.info(f"Switch Port dedupe reduced results to {len(unique_documents)} entries ({'per switch+file' if include_historical else 'per switch'})")
+                except Exception as _e:
+                    logger.debug(f"Switch Port dedupe failed: {_e}")
+
             # Sort the deduplicated documents by file name priority, then by Creation Date
             def get_file_priority(doc):
                 file_name = doc.get('File Name', '')
@@ -1286,15 +1774,14 @@ class OpenSearchConfig:
                     return (1000, 0)
 
             try:
-                # Sort by file name priority: netspeed.csv first, then .0, .1, .2, etc.
-                unique_documents.sort(key=get_file_priority)
-                logger.info(f"Sorted {len(unique_documents)} unique documents by file name priority")
-
-                # Debug: Log first 15 sorted documents to see the order
-                for i, doc in enumerate(unique_documents[:15]):
-                    priority = get_file_priority(doc)
-                    logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - Priority: {priority}")
-
+                # Only enforce file priority order for MAC searches with historical enabled.
+                # For general queries, keep OpenSearch's sort so exact field matches stay on top.
+                if looks_like_mac_seed and include_historical:
+                    unique_documents.sort(key=get_file_priority)
+                    logger.info(f"Sorted {len(unique_documents)} unique documents by file name priority (MAC+historical)")
+                    for i, doc in enumerate(unique_documents[:15]):
+                        priority = get_file_priority(doc)
+                        logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - Priority: {priority}")
             except Exception as e:
                 logger.warning(f"Error sorting documents by file name priority: {e}")
 

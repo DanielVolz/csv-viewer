@@ -61,6 +61,97 @@ async def search_files(
             req_limit = limit if (isinstance(limit, int) and limit > 0) else default_limit
             eff_limit = min(max(1, req_limit), 20000)
 
+            # Shortcut 1: For phone-like queries (+digits), run synchronously and return exactly one result
+            try:
+                qn_phone = (query or "").strip()
+                looks_like_phone = bool(isinstance(qn_phone, str) and __import__('re').fullmatch(r"\+?\d{7,}", qn_phone or ""))
+            except Exception:
+                looks_like_phone = False
+            if looks_like_phone and (field is None or field == "Line Number"):
+                from time import perf_counter
+                t0 = perf_counter()
+                try:
+                    headers, documents = opensearch_config.search(
+                        query=qn_phone,
+                        field="Line Number" if field == "Line Number" else None,
+                        include_historical=include_historical,
+                        size=1,
+                    )
+                    from utils.csv_utils import filter_display_columns
+                    filtered_headers, filtered_documents = filter_display_columns(headers, documents)
+                    took_ms = int((perf_counter() - t0) * 1000)
+                    return {
+                        "success": True,
+                        "message": f"Found {len(filtered_documents)} results for '{query}'",
+                        "headers": filtered_headers,
+                        "data": filtered_documents,
+                        "took_ms": took_ms,
+                    }
+                except Exception as e:
+                    logger.error(f"Synchronous exact phone search failed: {e}")
+                    # Fallback to Celery path
+
+            # Shortcut 2: For exact Serial Number-like queries (long alphanumeric, not pure digits), run synchronously
+            try:
+                qn_sn = (query or "").strip()
+                looks_like_serial = bool(isinstance(qn_sn, str) and __import__('re').fullmatch(r"[A-Za-z0-9]{8,}", qn_sn or "") and not __import__('re').fullmatch(r"\d{8,}", qn_sn or ""))
+            except Exception:
+                looks_like_serial = False
+            if looks_like_serial and (field is None or field == "Serial Number"):
+                from time import perf_counter
+                t0 = perf_counter()
+                try:
+                    headers, documents = opensearch_config.search(
+                        query=qn_sn,
+                        field="Serial Number" if field == "Serial Number" else None,
+                        include_historical=include_historical,
+                        size=limit or 200,
+                    )
+                    from utils.csv_utils import filter_display_columns
+                    filtered_headers, filtered_documents = filter_display_columns(headers, documents)
+                    took_ms = int((perf_counter() - t0) * 1000)
+                    return {
+                        "success": True,
+                        "message": f"Found {len(filtered_documents)} results for '{query}'",
+                        "headers": filtered_headers,
+                        "data": filtered_documents,
+                        "took_ms": took_ms,
+                    }
+                except Exception as e:
+                    logger.error(f"Synchronous exact Serial Number search failed: {e}")
+                    # Fallback to Celery path
+
+            # Shortcut 3: For exact Switch Port-like queries, run synchronously to use latest in-process logic
+            try:
+                qn = (query or "").strip()
+                looks_like_port = (isinstance(qn, str) and "/" in qn and len(qn) >= 5)
+            except Exception:
+                looks_like_port = False
+            if looks_like_port and (field is None or field == "Switch Port"):
+                from time import perf_counter
+                t0 = perf_counter()
+                try:
+                    headers, documents = opensearch_config.search(
+                        query=qn,
+                        field="Switch Port" if field == "Switch Port" else None,
+                        include_historical=include_historical,
+                        size=eff_limit,
+                    )
+                    # Align with task's display filtering for consistency
+                    from utils.csv_utils import filter_display_columns
+                    filtered_headers, filtered_documents = filter_display_columns(headers, documents)
+                    took_ms = int((perf_counter() - t0) * 1000)
+                    return {
+                        "success": True,
+                        "message": f"Found {len(filtered_documents)} results for '{query}'",
+                        "headers": filtered_headers,
+                        "data": filtered_documents,
+                        "took_ms": took_ms,
+                    }
+                except Exception as e:
+                    logger.error(f"Synchronous exact Switch Port search failed: {e}")
+                    # Fallback to Celery path
+
             task = search_opensearch.delay(
                 query=query,
                 field=field,

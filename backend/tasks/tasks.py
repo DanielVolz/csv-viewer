@@ -291,17 +291,10 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             glob_results = sorted(path.glob(pattern), key=lambda x: str(x))
             files.extend(glob_results)
 
-        # Also include archived daily CSV copies under /archive
-        archive_dir = path / "archive"
-        if archive_dir.exists():
-            # Expect file names like netspeed_YYYY-MM-DDTHHMMSSZ.csv
-            archived = sorted(archive_dir.glob("netspeed_*.csv"), key=lambda x: str(x))
-            files.extend(archived)
-
+        # Only consider canonical netspeed files (no archives): netspeed.csv and netspeed.csv.N
         netspeed_files = [
             f for f in files
             if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))
-            or (f.parent.name == "archive" and f.name.startswith("netspeed_"))
         ]
         # Separate backup files explicitly
         backup_files = [f for f in files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
@@ -588,7 +581,19 @@ def search_opensearch(query: str, field: Optional[str] = None, include_historica
     from time import perf_counter
     t0 = perf_counter()
     try:
-        headers, documents = opensearch_config.search(
+        # Dev-friendly: reload OpenSearch module to pick up recent code changes without restarting Celery
+        try:
+            import sys, importlib
+            os_mod = sys.modules.get('utils.opensearch')
+            if os_mod is not None:
+                os_mod = importlib.reload(os_mod)
+            else:
+                import utils.opensearch as os_mod  # type: ignore
+            cfg = getattr(os_mod, 'opensearch_config', opensearch_config)
+        except Exception:
+            cfg = opensearch_config
+
+        headers, documents = cfg.search(
             query=query,
             field=field,
             include_historical=include_historical,
