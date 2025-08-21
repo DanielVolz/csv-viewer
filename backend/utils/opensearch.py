@@ -919,14 +919,31 @@ class OpenSearchConfig:
                         "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
                     }
 
-            # IP exact-only for full IPv4
-            if field == "IP Address" and isinstance(query, str) and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", query or ""):
-                return {
-                    "query": {"bool": {"must": [{"term": {"IP Address.keyword": query}}]}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
-                }
+            # IP search: exact for full IPv4, partial support for prefixes (e.g., 10., 10.20, 10.20.30)
+            if field == "IP Address" and isinstance(query, str):
+                qip = query.strip()
+                full_ipv4 = re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qip or "") is not None
+                if full_ipv4:
+                    return {
+                        "query": {"bool": {"must": [{"term": {"IP Address.keyword": qip}}]}},
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                    }
+                # Partial IP prefix (1-3 octets, optional trailing dot)
+                if re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.??", qip or "") or re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}", qip or ""):
+                    clean = qip.rstrip('.')
+                    # For partial IP, use only prefix to ensure exact prefix matching
+                    should = [
+                        {"prefix": {"IP Address.keyword": clean}},
+                        {"prefix": {"IP Address.keyword": f"{clean}."}},  # Also match with trailing dot
+                    ]
+                    return {
+                        "query": {"bool": {"should": should, "minimum_should_match": 1}},
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                    }
 
             # Serial Number exact-only (fielded)
             if field == "Serial Number" and isinstance(query, str):
@@ -940,18 +957,20 @@ class OpenSearchConfig:
                     }
 
             # Field-specific: exact, prefix, wildcard
+            # Prefer keyword subfield for exact/prefix/wildcard on certain fields
+            eff_field = f"{field}.keyword" if field in ("Line Number", "MAC Address", "MAC Address 2") else field
             should_clauses = [
-                {"term": {field: query}},
-                {"prefix": {field: query}},
-                {"wildcard": {field: f"*{query}*"}}
+                {"term": {eff_field: query}},
+                {"prefix": {eff_field: query}},
+                {"wildcard": {eff_field: f"*{query}*"}}
             ]
             if field == "Line Number" and isinstance(query, str) and query.startswith('+'):
                 cleaned = query.lstrip('+')
                 if cleaned and not re.fullmatch(r"\d{7,}", cleaned or ""):
-                    should_clauses.append({"wildcard": {field: f"*{cleaned}*"}})
+                    should_clauses.append({"wildcard": {eff_field: f"*{cleaned}*"}})
             if field in ("MAC Address", "MAC Address 2", "Model Name") and isinstance(query, str) and query.lower() != query.upper():
-                should_clauses.append({"wildcard": {field: f"*{query.lower()}*"}})
-                should_clauses.append({"wildcard": {field: f"*{query.upper()}*"}})
+                should_clauses.append({"wildcard": {eff_field: f"*{query.lower()}*"}})
+                should_clauses.append({"wildcard": {eff_field: f"*{query.upper()}*"}})
 
             fk = None
             if field in ("Line Number", "MAC Address", "MAC Address 2"):
@@ -1052,6 +1071,26 @@ class OpenSearchConfig:
                     }]
                 }
 
+            # Partial IPv4 prefix-only (e.g., "10.216.73." or "192.168.")
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                clean_query = qn.rstrip('.')
+                return {
+                    "query": {"bool": {"should": [
+                        {"prefix": {"IP Address.keyword": clean_query}},
+                        {"prefix": {"IP Address.keyword": f"{clean_query}."}}
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}
+                    }]
+                }
+
             # Switch Port pattern exact-only
             if '/' in qn and len(qn) >= 5:
                 from utils.csv_utils import DESIRED_ORDER
@@ -1138,9 +1177,9 @@ class OpenSearchConfig:
             "query": {"bool": {"should": [
                 {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
                 {"multi_match": {"query": query, "fields": ["*"]}},
-                {"term": {"Line Number": query}},
+                {"term": {"Line Number.keyword": query}},
                 {"term": {"MAC Address": query}},
-                {"term": {"Line Number": f"+{query}"}},
+                {"term": {"Line Number.keyword": f"+{query}"}},
                 {"term": {"File Name": {"value": "netspeed.csv", "boost": 2.0}}},
 
                 {"wildcard": {"MAC Address.keyword": f"*{str(query).lower()}*"}},
@@ -1149,10 +1188,10 @@ class OpenSearchConfig:
                 {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
 
                 # No Serial Number wildcards to keep serial searches exact-only
-                {"wildcard": {"Line Number": f"*{query}*"}},
-                *([ {"wildcard": {"Line Number": f"*{str(query).lstrip('+')}*"}} ]
+                                {"wildcard": {"Line Number.keyword": f"*{query}*"}},
+                                *([ {"wildcard": {"Line Number.keyword": f"*{str(query).lstrip('+')}*"}} ]
                   if str(query).startswith('+') and str(query).lstrip('+') else
-                  [ {"wildcard": {"Line Number": f"*+{query}*"}} ]),
+                                    [ {"wildcard": {"Line Number.keyword": f"*+{query}*"}} ]),
 
 
                 {"wildcard": {"Switch Port": f"*{query}*"}},
@@ -1166,8 +1205,7 @@ class OpenSearchConfig:
 
                 {"wildcard": {"Model Name": f"*{str(query).lower()}*"}},
                 {"wildcard": {"Model Name": f"*{str(query).upper()}*"}},
-                {"wildcard": {"File Name": f"*{query}*"}},
-                {"wildcard": {"IP Address": f"*{query}*"}}
+                {"wildcard": {"File Name": f"*{query}*"}}
             ], "minimum_should_match": 1}},
             "size": size
         }
@@ -1182,24 +1220,17 @@ class OpenSearchConfig:
         except Exception as e:
             logger.warning(f"Failed to add strengthened MAC keyword terms: {e}")
 
-        # Add IP range for partial prefixes
+        # Add IP prefix support for partial IPv4 fragments
         ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}\.?$')
         if isinstance(query, str) and ip_pattern.match(query):
             try:
                 clean_query = query.rstrip('.')
-                ip_parts = clean_query.split('.')
-                if 1 <= len(ip_parts) <= 3:
-                    lower_bound = clean_query
-                    while lower_bound.count('.') < 3:
-                        lower_bound += ".0"
-                    upper_bound = clean_query
-                    while upper_bound.count('.') < 3:
-                        upper_bound += ".255"
-                    search_query["query"]["bool"]["should"].append({
-                        "range": {"IP Address": {"gte": lower_bound, "lte": upper_bound}}
-                    })
+                if clean_query:
+                    # For general search, use only prefix to avoid false matches
+                    search_query["query"]["bool"]["should"].append({"prefix": {"IP Address.keyword": clean_query}})
+                    search_query["query"]["bool"]["should"].append({"prefix": {"IP Address.keyword": f"{clean_query}."}})
             except Exception as e:
-                logger.warning(f"Failed to add IP range search for '{query}': {e}")
+                logger.warning(f"Failed to add IP prefix search for '{query}': {e}")
 
         # Long numeric substring: add plus-prefixed exact variant
         if isinstance(query, str) and query.isdigit() and len(query) >= 5:
@@ -1246,7 +1277,7 @@ class OpenSearchConfig:
         search_query["sort"] = [
             {"_script": {"type": "number", "order": "asc", "script": {
                 "lang": "painless",
-                "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value == q) return 0; if (doc.containsKey('Line Number.keyword') && doc['Line Number.keyword'].size()>0 && doc['Line Number.keyword'].value == q) return 0; if (doc.containsKey('MAC Address.keyword') && doc['MAC Address.keyword'].size()>0 && doc['MAC Address.keyword'].value == q) return 0; if (doc.containsKey('MAC Address 2.keyword') && doc['MAC Address 2.keyword'].size()>0 && doc['MAC Address 2.keyword'].value == q) return 0; if (doc.containsKey('IP Address') && doc['IP Address'].size()>0 && doc['IP Address'].value == q) return 0; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0 && doc['Serial Number'].value == q) return 0; return 1;",
+                "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value == q) return 0; if (doc.containsKey('Line Number.keyword') && doc['Line Number.keyword'].size()>0 && doc['Line Number.keyword'].value == q) return 0; if (doc.containsKey('MAC Address.keyword') && doc['MAC Address.keyword'].size()>0 && doc['MAC Address.keyword'].value == q) return 0; if (doc.containsKey('MAC Address 2.keyword') && doc['MAC Address 2.keyword'].size()>0 && doc['MAC Address 2.keyword'].value == q) return 0; if (doc.containsKey('IP Address.keyword') && doc['IP Address.keyword'].size()>0 && doc['IP Address.keyword'].value == q) return 0; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0 && doc['Serial Number'].value == q) return 0; return 1;",
                 "params": {"q": query}
             }}},
             {"Creation Date": {"order": "desc"}},
@@ -1289,7 +1320,9 @@ class OpenSearchConfig:
                 # Remove all non-hex characters (handle '-', ':', '.')
                 core = _re.sub(r'[^0-9A-Fa-f]', '', s)
                 if len(core) == 12:
-                    return core.upper()
+                    # Treat as MAC only if it likely is one: contains hex letters or had MAC separators or SEP prefix
+                    if _re.search(r'[A-Fa-f]', q) or _re.search(r'[:\-\.]', q) or _re.match(r'(?i)^\s*sep', q.strip()):
+                        return core.upper()
                 return None
 
             # If the query looks like a MAC, first search the current index only to prefer today's file
@@ -1304,6 +1337,7 @@ class OpenSearchConfig:
                 try:
                     curr_indices_first = self.get_search_indices(False)
                     mac_upper_first = str(canonical_mac)
+                    from utils.csv_utils import DESIRED_ORDER as _DO
                     targeted_first = {
                         "query": {
                             "bool": {
@@ -1320,7 +1354,7 @@ class OpenSearchConfig:
                                 "minimum_should_match": 1
                             }
                         },
-                        "_source": ["File Name", "Creation Date", "MAC Address", "MAC Address 2", "IP Address", "Line Number", "Switch Hostname", "Switch Port", "Serial Number", "Model Name"],
+                        "_source": _DO,
                         "size": 200
                     }
                     logger.info(f"[MAC-first] indices={curr_indices_first} body={targeted_first}")
@@ -1397,18 +1431,36 @@ class OpenSearchConfig:
                                 logger.debug(f"[PHONE] per-file seed failed for {fname}: {_e}")
                         return DESIRED_ORDER, results
                     else:
-                        # Only current file (netspeed.csv), exact-only and size=1
+                        # Only current file (netspeed.csv): try exact (size=1), then fallback to partial wildcard if not found
                         indices_phone = self.get_search_indices(False)
-                        phone_body = {
+                        phone_body_exact = {
                             "query": {"bool": {"should": [{"term": {"Line Number.keyword": c}} for c in cands], "minimum_should_match": 1}},
                             "_source": DESIRED_ORDER,
                             "size": 1
                         }
-                        logger.info(f"[PHONE] indices={indices_phone} body={phone_body}")
-                        resp_phone = self.client.search(index=indices_phone, body=phone_body)
+                        logger.info(f"[PHONE-exact] indices={indices_phone} body={phone_body_exact}")
+                        resp_phone = self.client.search(index=indices_phone, body=phone_body_exact)
                         phone_hit = next((h.get('_source', {}) for h in resp_phone.get('hits', {}).get('hits', [])), None)
                         if phone_hit:
                             return DESIRED_ORDER, [phone_hit]
+                        # Fallback: partial match within current netspeed.csv
+                        digits = qn_phone.lstrip('+')
+                        if digits:
+                            phone_body_partial = {
+                                "query": {"bool": {"should": [
+                                    {"wildcard": {"Line Number.keyword": f"*{digits}*"}},
+                                    {"wildcard": {"Line Number.keyword": f"*+{digits}*"}}
+                                ], "minimum_should_match": 1}},
+                                "_source": DESIRED_ORDER,
+                                "size": 20000,
+                                "sort": [{"Creation Date": {"order": "desc"}}]
+                            }
+                            logger.info(f"[PHONE-partial] indices={indices_phone} body={phone_body_partial}")
+                            resp_part = self.client.search(index=indices_phone, body=phone_body_partial)
+                            docs_part = [h.get('_source', {}) for h in resp_part.get('hits', {}).get('hits', [])]
+                            # Deduplicate by MAC+File to avoid repeated identical rows
+                            docs_part = self._deduplicate_documents_preserve_order(docs_part)
+                            return DESIRED_ORDER, docs_part
                         return DESIRED_ORDER, []
                 except Exception as e:
                     logger.warning(f"Phone exact search failed, falling back to general: {e}")
@@ -1435,7 +1487,7 @@ class OpenSearchConfig:
                             *([{ "term": {"Serial Number": v} } for v in variants])
                         ], "minimum_should_match": 1}},
                         "_source": DESIRED_ORDER,
-                        "size": size,
+                        "size": (size if include_historical else 1),
                         "sort": [{"Creation Date": {"order": "desc"}}, {
                             "_script": {"type": "number", "order": "asc", "script": {
                                 "lang": "painless",
@@ -1458,6 +1510,17 @@ class OpenSearchConfig:
                             return suf.isdigit()
                         return False
                     docs_sn = [d for d in docs_sn if _is_allowed_file((d.get('File Name') or '').strip())]
+                    if include_historical:
+                        # Keep only one document per file name
+                        seen_files = set()
+                        dedup_by_file: List[Dict[str, Any]] = []
+                        for d in docs_sn:
+                            fn = (d.get('File Name') or '').strip()
+                            if not fn or fn in seen_files:
+                                continue
+                            seen_files.add(fn)
+                            dedup_by_file.append(d)
+                        docs_sn = dedup_by_file
                     return DESIRED_ORDER, docs_sn
                 except Exception as e:
                     logger.warning(f"Serial exact search failed, falling back to general: {e}")
@@ -1611,6 +1674,7 @@ class OpenSearchConfig:
                             if fname in present_files:
                                 continue  # already represented
                             try:
+                                from utils.csv_utils import DESIRED_ORDER as _DO2
                                 seed_body = {
                                     'query': {
                                         'bool': {
@@ -1627,10 +1691,7 @@ class OpenSearchConfig:
                                             'minimum_should_match': 1
                                         }
                                     },
-                                    '_source': [
-                                        'File Name', 'Creation Date', 'MAC Address', 'MAC Address 2', 'IP Address',
-                                        'Line Number', 'Switch Hostname', 'Switch Port', 'Serial Number', 'Model Name'
-                                    ],
+                                    '_source': _DO2,
                                     'size': 1
                                 }
                                 # Search across netspeed_* indices; avoid relying on exact index per file
@@ -1702,6 +1763,7 @@ class OpenSearchConfig:
             if looks_like_mac_fb and not any((d.get('File Name') or '') == 'netspeed.csv' for d in unique_documents):
                 try:
                     mac_upper_fb = str(mac_core_fb)
+                    from utils.csv_utils import DESIRED_ORDER as _DO3
                     fb_body = {
                         "query": {
                             "bool": {
@@ -1718,7 +1780,7 @@ class OpenSearchConfig:
                                 "minimum_should_match": 1
                             }
                         },
-                        "_source": ["File Name", "Creation Date", "MAC Address", "MAC Address 2", "IP Address", "Line Number", "Switch Hostname", "Switch Port", "Serial Number", "Model Name"],
+                        "_source": _DO3,
                         "size": 200
                     }
                     logger.info("[MAC-fallback] searching netspeed_* for File Name=netspeed.csv")
