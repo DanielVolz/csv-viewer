@@ -158,7 +158,7 @@ export default function StatisticsPage() {
   const TOP_KPI_DEFS = React.useMemo(() => ([
     { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
     { id: 'phonesWithKEM', label: 'Phones with KEM', color: '#2e7d32' },
-    { id: 'totalSwitches', label: 'Total Switches', color: '#0288d1' },
+    { id: 'totalSwitches', label: 'Total Switches', color: '#d32f2f' },
   ]), []);
   const toggleTopKey = (k) => setTopSelectedKeys((prev) => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
   const selectAllTopKeys = () => setTopSelectedKeys(Array.isArray(topTimeline.keys) ? [...topTimeline.keys] : []);
@@ -167,7 +167,7 @@ export default function StatisticsPage() {
   const KPI_DEFS = React.useMemo(() => ([
     { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
     { id: 'phonesWithKEM', label: 'Phones with KEM', color: '#2e7d32' },
-    { id: 'totalSwitches', label: 'Total Switches', color: '#0288d1' },
+    { id: 'totalSwitches', label: 'Total Switches', color: '#d32f2f' },
     { id: 'totalLocations', label: 'Total Locations', color: '#f57c00' },
     { id: 'totalCities', label: 'Total Cities', color: '#6a1b9a' },
   ]), []);
