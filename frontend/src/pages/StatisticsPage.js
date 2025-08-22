@@ -488,7 +488,23 @@ export default function StatisticsPage() {
 
   // Fetch stats for selected location
   React.useEffect(() => {
-    if (!locSelected) return;
+    if (!locSelected) {
+      // Reset stats when no location is selected
+      setLocStats({
+        query: '',
+        mode: '',
+        totalPhones: 0,
+        totalSwitches: 0,
+        phonesWithKEM: 0,
+        phonesByModel: [],
+        vlanUsage: [],
+        switches: [],
+        kemPhones: [],
+      });
+      setLocStatsLoading(false);
+      setLocError(null);
+      return;
+    }
     let abort = false;
     const controller = new AbortController();
     (async () => {
@@ -545,7 +561,12 @@ export default function StatisticsPage() {
 
   // Fetch per-location timeline whenever the selected location changes
   React.useEffect(() => {
-    if (!locSelected) return;
+    if (!locSelected) {
+      // Reset timeline when no location is selected
+      setLocTimeline({ loading: false, error: null, series: [] });
+      locTimelineLoadedKeyRef.current = '';
+      return;
+    }
     const key = String(locSelected).toUpperCase();
     if (locTimelineLoadedKeyRef.current === key && (locTimeline.series || []).length) return;
     let abort = false;
@@ -664,6 +685,9 @@ export default function StatisticsPage() {
                   const s = val.trim().toUpperCase();
                   if (/^[A-Z]{3}$/.test(s) || /^[A-Z]{3}[0-9]{2}$/.test(s)) {
                     setLocSelected(s);
+                  } else if (s === '') {
+                    // Clear selection when field is empty
+                    setLocSelected(null);
                   }
                 } else {
                   setLocSelected(val);
@@ -672,6 +696,10 @@ export default function StatisticsPage() {
               inputValue={locInput}
               onInputChange={(_, val) => {
                 setLocInput(val);
+                // Clear selection if input is empty
+                if (!val || val.trim() === '') {
+                  setLocSelected(null);
+                }
               }}
               filterOptions={(x) => x} // server-side filtering
               renderInput={(params) => (
