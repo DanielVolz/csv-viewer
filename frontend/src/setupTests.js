@@ -2,6 +2,34 @@
 // allows you to do things like:
 // expect(element).toBeInTheDocument();
 import '@testing-library/jest-dom';
+import { act } from 'react';
+
+// Use fake timers by default to prevent long-running intervals from third-party libs
+jest.useFakeTimers();
+
+// Suppress React 18 deprecation warnings for ReactDOMTestUtils.act in tests
+const originalError = console.error;
+beforeAll(() => {
+  console.error = (...args) => {
+    // Suppress React Testing Library warnings during tests
+    const message = args[0];
+    if (message && typeof message === 'string') {
+      if (message.includes('ReactDOMTestUtils.act is deprecated') ||
+          message.includes('Warning: `ReactDOMTestUtils.act`') ||
+          message.includes('An update to') && message.includes('inside a test was not wrapped in act')) {
+        return; // Suppress these warnings
+      }
+    }
+    // Allow other errors through (but not the testing warnings)
+    if (!message || typeof message !== 'string' || !message.includes('Warning:')) {
+      originalError.call(console, ...args);
+    }
+  };
+});
+
+afterAll(() => {
+  console.error = originalError;
+});
 
 // Use fake timers by default to prevent long-running intervals from third-party libs
 jest.useFakeTimers();
