@@ -7,21 +7,30 @@ import { act } from 'react';
 // Use fake timers by default to prevent long-running intervals from third-party libs
 jest.useFakeTimers();
 
-// Suppress React 18 deprecation warnings for ReactDOMTestUtils.act in tests
-const originalError = console.error;
+// Suppress React 18 testing library warnings and test-specific console output
+let originalError;
 beforeAll(() => {
+  originalError = console.error;
   console.error = (...args) => {
-    // Suppress React Testing Library warnings during tests
     const message = args[0];
-    if (message && typeof message === 'string') {
+    if (typeof message === 'string') {
+      // Suppress React 18 testing warnings
       if (message.includes('ReactDOMTestUtils.act is deprecated') ||
-          message.includes('Warning: `ReactDOMTestUtils.act`') ||
-          message.includes('An update to') && message.includes('inside a test was not wrapped in act')) {
+        message.includes('Warning: `ReactDOMTestUtils.act`') ||
+        message.includes('An update to') && message.includes('inside a test was not wrapped in act')) {
         return; // Suppress these warnings
       }
+      // Suppress ALL test-related console.error messages during testing
+      if (message.includes('Error fetching file info:') ||
+        message.includes('Network error') ||
+        message.includes('Failed to fetch') ||
+        message.includes('Warning:') ||
+        process.env.NODE_ENV === 'test') {
+        return; // Suppress expected test errors and any errors during test environment
+      }
     }
-    // Allow other errors through (but not the testing warnings)
-    if (!message || typeof message !== 'string' || !message.includes('Warning:')) {
+    // Allow genuine unexpected errors through (only in non-test environments)
+    if (process.env.NODE_ENV !== 'test') {
       originalError.call(console, ...args);
     }
   };

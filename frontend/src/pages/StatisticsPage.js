@@ -637,69 +637,143 @@ export default function StatisticsPage() {
       {/* Statistics by Location */}
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.info.main}`, backgroundColor: (t) => alpha(t.palette.info.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
         <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'info.main' }}>Statistics by Location</Typography>
-        <Box sx={{ maxWidth: 520, mb: 2 }}>
-          <Autocomplete
-            options={autoOptions}
-            loading={locLoading}
-            value={locSelected}
-            freeSolo
-            open={locOpen}
-            onOpen={() => setLocOpen(true)}
-            onClose={() => setLocOpen(false)}
-            getOptionLabel={getOptionLabel}
-            // Keep popup size fixed and make options scrollable
-            slotProps={{
-              paper: { sx: { maxHeight: 320, overflowY: 'auto' } },
-              listbox: { sx: { maxHeight: 280, overflowY: 'auto' } },
-            }}
-            ListboxProps={{
-              style: { maxHeight: 280, overflowY: 'auto' },
-            }}
-            onChange={(_, val) => {
-              if (typeof val === 'string') {
-                const s = val.trim().toUpperCase();
-                if (/^[A-Z]{3}$/.test(s) || /^[A-Z]{3}[0-9]{2}$/.test(s)) {
-                  setLocSelected(s);
-                }
-              } else {
-                setLocSelected(val);
-              }
-            }}
-            inputValue={locInput}
-            onInputChange={(_, val) => {
-              setLocInput(val);
-            }}
-            filterOptions={(x) => x} // server-side filtering
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Select Location"
-                placeholder="Type 3 letters (ABC) or code (ABC01)"
-                size="small"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    const val = (e.target.value || '').trim().toUpperCase();
-                    if (/^[A-Z]{3}$/.test(val) || /^[A-Z]{3}[0-9]{2}$/.test(val)) {
-                      setLocSelected(val);
-                    } else if (Array.isArray(locOptions) && locOptions.includes(val)) {
-                      setLocSelected(val);
-                    }
-                    setLocOpen(false);
-                    if (e.target && typeof e.target.blur === 'function') {
-                      e.target.blur();
-                    }
+
+        {/* Two search fields side by side */}
+        <Grid container spacing={2} sx={{ mb: 2 }}>
+          {/* Location Code Search */}
+          <Grid item xs={12} md={6}>
+            <Autocomplete
+              options={autoOptions}
+              loading={locLoading}
+              value={locSelected}
+              freeSolo
+              open={locOpen}
+              onOpen={() => setLocOpen(true)}
+              onClose={() => setLocOpen(false)}
+              getOptionLabel={getOptionLabel}
+              // Keep popup size fixed and make options scrollable
+              slotProps={{
+                paper: { sx: { maxHeight: 320, overflowY: 'auto' } },
+                listbox: { sx: { maxHeight: 280, overflowY: 'auto' } },
+              }}
+              ListboxProps={{
+                style: { maxHeight: 280, overflowY: 'auto' },
+              }}
+              onChange={(_, val) => {
+                if (typeof val === 'string') {
+                  const s = val.trim().toUpperCase();
+                  if (/^[A-Z]{3}$/.test(s) || /^[A-Z]{3}[0-9]{2}$/.test(s)) {
+                    setLocSelected(s);
                   }
-                }}
-              />
-            )}
-          />
-          {locError && (
-            <Box sx={{ mt: 1 }}>
-              <Alert severity="info" variant="outlined">{locError}</Alert>
-            </Box>
-          )}
-        </Box>
+                } else {
+                  setLocSelected(val);
+                }
+              }}
+              inputValue={locInput}
+              onInputChange={(_, val) => {
+                setLocInput(val);
+              }}
+              filterOptions={(x) => x} // server-side filtering
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Search by Location Code"
+                  placeholder="Type 3 letters (ABC) or code (ABC01)"
+                  size="small"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const val = (e.target.value || '').trim().toUpperCase();
+                      if (/^[A-Z]{3}$/.test(val) || /^[A-Z]{3}[0-9]{2}$/.test(val)) {
+                        setLocSelected(val);
+                      } else if (Array.isArray(locOptions) && locOptions.includes(val)) {
+                        setLocSelected(val);
+                      }
+                      setLocOpen(false);
+                      if (e.target && typeof e.target.blur === 'function') {
+                        e.target.blur();
+                      }
+                    }
+                  }}
+                />
+              )}
+            />
+          </Grid>
+
+          {/* City Name Search */}
+          <Grid item xs={12} md={6}>
+            <Autocomplete
+              options={Object.values(cityNameByCode3).sort()}
+              freeSolo
+              // Keep popup size fixed and make options scrollable
+              slotProps={{
+                paper: { sx: { maxHeight: 320, overflowY: 'auto' } },
+                listbox: { sx: { maxHeight: 280, overflowY: 'auto' } },
+              }}
+              ListboxProps={{
+                style: { maxHeight: 280, overflowY: 'auto' },
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Search by City Name"
+                  placeholder="Type city name (e.g., München, Augsburg)"
+                  size="small"
+                />
+              )}
+              onChange={(_, value) => {
+                if (value) {
+                  // Find location code for this city name
+                  const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
+                    name.toLowerCase() === value.toLowerCase()
+                  )?.[0];
+
+                  if (cityCode) {
+                    setLocSelected(cityCode);
+                    setLocInput(cityCode);
+                  }
+                }
+              }}
+              filterOptions={(options, { inputValue }) => {
+                // If no input, show all cities (but limited by maxHeight)
+                if (!inputValue.trim()) {
+                  return options;
+                }
+                // Otherwise filter by input
+                const filtered = options.filter(option =>
+                  option.toLowerCase().includes(inputValue.toLowerCase())
+                );
+                return filtered;
+              }}
+              getOptionLabel={(option) => option}
+              renderOption={(props, option) => {
+                // Find the corresponding location code
+                const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
+                  name === option
+                )?.[0];
+
+                return (
+                  <li {...props}>
+                    <Box>
+                      <Typography variant="body2">{option}</Typography>
+                      {cityCode && (
+                        <Typography variant="caption" color="text.secondary">
+                          Code: {cityCode}
+                        </Typography>
+                      )}
+                    </Box>
+                  </li>
+                );
+              }}
+            />
+          </Grid>
+        </Grid>
+
+        {locError && (
+          <Box sx={{ mb: 2 }}>
+            <Alert severity="info" variant="outlined">{locError}</Alert>
+          </Box>
+        )}
 
         <Grid container spacing={2} sx={{ mb: 1 }}>
           <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={locStats.totalPhones} loading={locStatsLoading} /></Grid>
@@ -1106,79 +1180,129 @@ export default function StatisticsPage() {
                               ) : 'n/a'}
                             </TableCell>
                             <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                              {p['Switch Hostname'] ? (
-                                <Tooltip
-                                  arrow
-                                  placement="top-start"
-                                  title={<Box component="span" sx={{ display: 'block', textAlign: 'left', width: '100%' }}>{`Open SSH ${sshUsername ? `${sshUsername}@` : ''}${p['Switch Hostname']}`}</Box>}
-                                  slotProps={{
-                                    tooltip: { sx: { textAlign: 'left !important' } },
-                                    arrow: { sx: { left: '50% !important', transform: 'translateX(-50%) !important' } },
-                                    popper: { sx: { '&[data-popper-placement^="top"] .MuiTooltip-arrow': { left: '50% !important', transform: 'translateX(-50%) !important' } } }
-                                  }}
-                                >
-                                  <Typography
-                                    variant="body2"
-                                    component="span"
-                                    onClick={async () => {
-                                      const host = p['Switch Hostname'];
-                                      const url = makeSshUrl(host);
-                                      if (sshUsername && url) {
-                                        // Try to copy Cisco port before navigating
-                                        const port = p['Switch Port'] || '';
-                                        const cisco = convertToCiscoFormat(port);
-                                        if (cisco) {
-                                          try {
-                                            const copied = await copyToClipboard(cisco);
-                                            if (copied) showCopyToast('Copied Cisco port', cisco, { autoClose: 1200, pauseOnHover: true });
-                                            else toast.error(`❌ Failed to copy Cisco port: ${cisco}`, { autoClose: 2000, pauseOnHover: true });
-                                          } catch { /* ignore */ }
-                                        }
-                                        toast.success(`🔗 SSH: ${sshUsername}@${host}`, { autoClose: 1000, pauseOnHover: false });
-                                        setTimeout(() => { window.location.href = url; }, 150);
-                                      } else {
-                                        const ToastContent = () => (
-                                          <div>
-                                            📋 Copied hostname! ⚠️ SSH username not configured!{' '}
-                                            <span
-                                              onClick={() => { try { navigateToSettings?.(); } catch { } try { toast.dismiss(); } catch { } }}
-                                              style={{ color: '#4f46e5', textDecoration: 'underline', cursor: 'pointer', fontWeight: 'bold' }}
-                                            >
-                                              Go to Settings
-                                            </span>{' '}to set your SSH username.
-                                          </div>
-                                        );
-                                        toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
-                                        copyToClipboard(host).catch(() => { });
-                                      }
-                                    }}
-                                    sx={{
-                                      textDecoration: sshUsername ? 'underline' : 'none',
-                                      color: theme => sshUsername
-                                        ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32')
-                                        : (theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary'),
-                                      cursor: 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: 0.5,
-                                      '&:hover': {
-                                        color: theme => sshUsername
-                                          ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
-                                          : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00'),
-                                        textDecoration: 'underline',
-                                        '& .ssh-icon': {
-                                          color: theme => sshUsername
-                                            ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
-                                            : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
-                                        }
-                                      }
-                                    }}
-                                  >
-                                    {p['Switch Hostname']}
-                                    <Terminal className="ssh-icon" sx={{ color: theme => sshUsername ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50') : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'), fontSize: '14px', ml: 0.5, verticalAlign: 'middle' }} />
-                                  </Typography>
-                                </Tooltip>
-                              ) : 'n/a'}
+                              {p['Switch Hostname'] ? (() => {
+                                const hostname = p['Switch Hostname'];
+                                // Split hostname in hostname Teil (vor erstem .) und Domain Teil
+                                const parts = hostname.split('.');
+                                const hostnameShort = parts[0] || hostname;
+                                const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+
+                                const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
+                                const sshTitle = sshUsername
+                                  ? `Connect SSH ${sshUsername}@${hostname}`
+                                  : `SSH connection (SSH username not set)`;
+
+                                return (
+                                  <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+                                    {/* Hostname short part - kopiert hostname Teil vor dem . */}
+                                    <Tooltip arrow placement="top" title={copyHostnameTitle}>
+                                      <Typography
+                                        variant="body2"
+                                        component="span"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          // Copy hostname short part (before first .)
+                                          copyToClipboard(hostnameShort).then(success => {
+                                            if (success) {
+                                              showCopyToast('Copied hostname', hostnameShort);
+                                            } else {
+                                              toast.error(`❌ Copy failed`, {
+                                                autoClose: 2000,
+                                                pauseOnHover: true,
+                                                pauseOnFocusLoss: false
+                                              });
+                                            }
+                                          });
+                                        }}
+                                        sx={{
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
+                                          cursor: 'pointer',
+                                          textDecoration: 'underline',
+                                          '&:hover': {
+                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
+                                            textDecoration: 'underline'
+                                          }
+                                        }}
+                                      >
+                                        {hostnameShort}
+                                      </Typography>
+                                    </Tooltip>
+
+                                    {/* Domain part - SSH Verbindung */}
+                                    {domainPart && (
+                                      <Tooltip arrow placement="top" title={sshTitle}>
+                                        <Typography
+                                          variant="body2"
+                                          component="span"
+                                          onClick={async (e) => {
+                                            e.stopPropagation();
+
+                                            // First: Copy Cisco port format
+                                            const ciscoFormat = p["Switch Port"] ? convertToCiscoFormat(p["Switch Port"]) : '';
+                                            if (ciscoFormat && ciscoFormat.trim() !== '') {
+                                              const copied = await copyToClipboard(ciscoFormat);
+                                              if (copied) {
+                                                showCopyToast('Copied Cisco port', ciscoFormat);
+                                              } else {
+                                                toast.error(`❌ Copy failed`, {
+                                                  autoClose: 2000,
+                                                  pauseOnHover: true,
+                                                  pauseOnFocusLoss: false
+                                                });
+                                              }
+                                            } else {
+                                              toast.warning('No switch port available to copy', {
+                                                autoClose: 2000,
+                                                pauseOnHover: true
+                                              });
+                                            }
+
+                                            // Second: SSH link functionality
+                                            if (sshUsername && sshUsername.trim() !== '') {
+                                              const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                              toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                              setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                            } else {
+                                              // If no SSH username, show warning but don't copy hostname again
+                                              const ToastContent = () => (
+                                                <div>
+                                                  📋 Copied Cisco port! ⚠️ SSH username not configured!{' '}
+                                                  <span
+                                                    onClick={() => {
+                                                      navigateToSettings();
+                                                      toast.dismiss();
+                                                    }}
+                                                    style={{
+                                                      color: '#4f46e5',
+                                                      textDecoration: 'underline',
+                                                      cursor: 'pointer',
+                                                      fontWeight: 'bold'
+                                                    }}
+                                                  >
+                                                    Go to Settings
+                                                  </span>{' '}to set your SSH username.
+                                                </div>
+                                              );
+                                              toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
+                                            }
+                                          }}
+                                          sx={{
+                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 0.8)' : '#1976d2',
+                                            cursor: 'pointer',
+                                            textDecoration: 'underline',
+                                            '&:hover': {
+                                              color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 1)' : '#1565c0',
+                                              textDecoration: 'underline'
+                                            }
+                                          }}
+                                        >
+                                          {domainPart}
+                                        </Typography>
+                                      </Tooltip>
+                                    )}
+                                  </Box>
+                                );
+                              })() : 'n/a'}
                             </TableCell>
                             <TableCell align="right">{kemCount}</TableCell>
                           </TableRow>
