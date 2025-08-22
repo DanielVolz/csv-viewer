@@ -632,6 +632,16 @@ class OpenSearchConfig:
         """
         _, rows = read_csv_file(file_path)
 
+        # Only repair data for the current netspeed.csv file, not historical files
+        current_file_name = Path(file_path).name.lower()
+        if current_file_name == "netspeed.csv":
+            logger.info(f"Starting data repair for current file: {file_path}")
+            logger.info(f"Number of rows before repair: {len(rows)}")
+            rows = self.repair_missing_data(rows, file_path)
+            logger.info(f"Number of rows after repair: {len(rows)}")
+        else:
+            logger.debug(f"Skipping data repair for historical file: {file_path}")
+
         # Get file creation date ONCE per file, not per row
         file_creation_date = None
         try:
@@ -719,6 +729,149 @@ class OpenSearchConfig:
                 "_index": index_name,
                 "_source": final_doc
             }
+
+    def repair_missing_data(self, rows: List[Dict[str, Any]], file_path: str) -> List[Dict[str, Any]]:
+        """
+        Repair missing data by looking up values in historical indices using MAC address as identifier.
+        MAC address is used as primary identifier since it remains constant.
+        All missing fields are repaired with data from historical indices.
+
+        Args:
+            rows: List of CSV row dictionaries from current file
+            file_path: Path to current CSV file (to exclude from historical search)
+
+        Returns:
+            List[Dict[str, Any]]: Repaired rows with missing data filled from historical indices
+        """
+        print(f"[DATA REPAIR] Starting data repair for file: {file_path}")
+        logger.warning(f"DATA REPAIR: Starting repair for {file_path} with {len(rows)} rows")
+
+        try:
+            # Get current file name to exclude it from historical search
+            current_file_name = Path(file_path).name
+
+            # Get all netspeed indices except the current one
+            historical_indices = []
+            try:
+                indices = self.client.indices.get(index="netspeed_*")
+                for index_name in indices.keys():
+                    # Skip the current file's index
+                    if current_file_name not in index_name:
+                        historical_indices.append(index_name)
+            except Exception as e:
+                logger.warning(f"Could not get historical indices for data repair: {e}")
+                return rows  # Return original rows if we can't get historical data
+
+            if not historical_indices:
+                print("[DATA REPAIR] No historical indices found for data repair")
+                logger.warning("DATA REPAIR: No historical indices found")
+                return rows
+
+            print(f"[DATA REPAIR] Using {len(historical_indices)} historical indices for data repair")
+            logger.warning(f"DATA REPAIR: Using {len(historical_indices)} historical indices: {historical_indices[:3]}...")
+
+            repaired_rows = []
+            repaired_count = 0
+            total_missing = 0
+
+            for row in rows:
+                # MAC address is the primary identifier - it stays constant
+                mac_address = row.get("MAC Address", "").strip()
+
+                # Find all missing fields in current row
+                missing_fields = []
+                for field, value in row.items():
+                    # Check for empty, None, or null values
+                    if value is None or str(value).strip() == "" or str(value).lower() == "null":
+                        missing_fields.append(field)
+
+                # Only repair if we have a MAC address and something is missing
+                if missing_fields and mac_address:
+                    total_missing += 1
+
+                    # Look up historical data by MAC address (primary identifier)
+                    historical_data = self._lookup_historical_data_by_mac(mac_address, historical_indices)
+
+                    # Repair missing data if found
+                    if historical_data:
+                        repaired_this_row = False
+                        repaired_fields = []
+
+                        for field in missing_fields:
+                            # Skip MAC Address itself as it's the identifier
+                            if field == "MAC Address":
+                                continue
+
+                            historical_value = historical_data.get(field)
+                            # Check if historical value exists and is not null/empty
+                            if historical_value is not None and str(historical_value).strip() and str(historical_value).lower() != "null":
+                                row[field] = historical_value
+                                repaired_fields.append(field)
+                                repaired_this_row = True
+
+                        if repaired_this_row:
+                            repaired_count += 1
+                            print(f"[DATA REPAIR] Repaired MAC {mac_address}: {', '.join(repaired_fields)}")
+                            logger.warning(f"DATA REPAIR: Repaired MAC {mac_address} - fields: {repaired_fields}")
+
+                repaired_rows.append(row)
+
+            if repaired_count > 0:
+                print(f"[DATA REPAIR] COMPLETED: {repaired_count}/{total_missing} entries repaired")
+                logger.warning(f"DATA REPAIR COMPLETED: {repaired_count}/{total_missing} entries repaired from historical data using MAC address lookup")
+            else:
+                print(f"[DATA REPAIR] COMPLETED: No historical data found for {total_missing} missing entries")
+                logger.warning(f"DATA REPAIR COMPLETED: No historical data found for {total_missing} missing entries")
+
+            return repaired_rows
+
+        except Exception as e:
+            print(f"[DATA REPAIR] ERROR: {e}")
+            logger.error(f"Error during data repair: {e}")
+            return rows  # Return original rows on error
+
+    def _lookup_historical_data_by_mac(self, mac_address: str, historical_indices: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Look up historical data by MAC address in historical indices.
+        MAC address is the primary identifier since it remains constant across files.
+        Returns all available fields from historical data for repair purposes.
+
+        Args:
+            mac_address: MAC address to search for (primary identifier)
+            historical_indices: List of historical index names to search
+
+        Returns:
+            Optional[Dict[str, Any]]: Historical document data if found, None otherwise
+        """
+        try:
+            query = {
+                "query": {
+                    "term": {"MAC Address.keyword": mac_address}
+                },
+                "sort": [{"Creation Date": {"order": "desc"}}],  # Get most recent first
+                "size": 1
+                # Return all fields - no _source filtering
+            }
+
+            # Search in historical indices (most recent first)
+            # Sort indices by name to get most recent historical data first
+            for index in sorted(historical_indices, reverse=True):
+                try:
+                    response = self.client.search(index=index, body=query)
+                    if response["hits"]["total"]["value"] > 0:
+                        hit = response["hits"]["hits"][0]["_source"]
+                        # Return historical data if found (all fields)
+                        logger.debug(f"Found historical data for MAC {mac_address} in index {index}")
+                        return hit
+                except Exception as e:
+                    logger.debug(f"Error searching historical index {index} for MAC {mac_address}: {e}")
+                    continue
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error in MAC-based historical lookup for {mac_address}: {e}")
+            return None
 
     def index_csv_file(self, file_path: str) -> Tuple[bool, int]:
         """

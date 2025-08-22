@@ -319,6 +319,62 @@ async def reindex_all_files():
         )
 
 
+@router.get("/reindex/current")
+async def reindex_current_file():
+    """
+    Trigger reindexing of only the current netspeed.csv file for quick testing.
+
+    Returns:
+        Dictionary with the status of the reindexing task
+    """
+    try:
+        from utils.opensearch import OpenSearchConfig
+
+        # Get path to current CSV file
+        csv_file = "/app/data/netspeed.csv"
+
+        # Check if file exists
+        if not Path(csv_file).exists():
+            raise HTTPException(
+                status_code=404,
+                detail="netspeed.csv file not found"
+            )
+
+        # Initialize OpenSearch and index the single file
+        opensearch_config = OpenSearchConfig()
+
+        # Delete the current index first
+        index_name = opensearch_config.get_index_name(csv_file)
+        try:
+            opensearch_config.client.indices.delete(index=index_name)
+            logger.info(f"Deleted existing index: {index_name}")
+        except Exception as e:
+            logger.info(f"Index {index_name} did not exist or could not be deleted: {e}")
+
+        # Index the current file
+        success, count = opensearch_config.index_csv_file(csv_file)
+
+        if success:
+            return {
+                "success": True,
+                "message": f"Successfully reindexed netspeed.csv with {count} documents",
+                "file": csv_file,
+                "documents_indexed": count
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to reindex netspeed.csv"
+            )
+
+    except Exception as e:
+        logger.error(f"Error reindexing current file: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reindex current file: {e}"
+        )
+
+
 @router.get("/download/{filename}")
 async def download_file(filename: str, request: Request):
     """Download a CSV file by name with safety checks & explicit headers.
