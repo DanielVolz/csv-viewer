@@ -31,9 +31,6 @@ afterAll(() => {
   console.error = originalError;
 });
 
-// Use fake timers by default to prevent long-running intervals from third-party libs
-jest.useFakeTimers();
-
 // Mock react-toastify to avoid timers and state updates during tests
 jest.mock('react-toastify', () => {
   const toast = {
