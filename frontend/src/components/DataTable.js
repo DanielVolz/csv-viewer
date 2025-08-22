@@ -326,75 +326,8 @@ function DataTable({
           });
         }
       });
-    } else if (header === "Switch Hostname" && content) {
-      // SSH link functionality
-      if (sshUsername && sshUsername.trim() !== '') {
-        const sshUrl = `ssh://${sshUsername}@${content}`;
-        const doNavigate = () => { window.location.href = sshUrl; };
-
-        // Try to copy Cisco port BEFORE navigation (preserve user gesture)
-        const tryCopyThenNavigate = async () => {
-          let copied = false;
-          const ciscoFormat = rowData && rowData["Switch Port"] ? convertToCiscoFormat(rowData["Switch Port"]) : '';
-          if (ciscoFormat && ciscoFormat.trim() !== '') {
-            try {
-              copied = await copyToClipboard(ciscoFormat);
-            } catch (_) {
-              copied = false;
-            }
-            if (copied) {
-              showCopyToast('Copied Cisco port', ciscoFormat, { autoClose: 1200, pauseOnHover: true });
-            } else {
-              toast.error(`❌ Failed to copy Cisco port: ${ciscoFormat}`, {
-                autoClose: 2000,
-                pauseOnHover: true,
-                pauseOnFocusLoss: false
-              });
-            }
-          }
-          // Show SSH success just before navigating
-          toast.success(`🔗 SSH: ${sshUsername}@${content}`, { autoClose: 1000, pauseOnHover: false });
-          // Small delay to let the toast render, then navigate to ssh:// handler
-          setTimeout(doNavigate, 150);
-        };
-
-        tryCopyThenNavigate();
-      } else {
-        // Show warning immediately, copy in background
-        const ToastContent = () => (
-          <div>
-            📋 Copied hostname! ⚠️ SSH username not configured!{' '}
-            <span
-              onClick={() => {
-                navigateToSettings();
-                toast.dismiss(); // Close this toast
-              }}
-              style={{
-                color: '#4f46e5',
-                textDecoration: 'underline',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              Go to Settings
-            </span> to set your SSH username.
-          </div>
-        );
-
-        toast.error(<ToastContent />, {
-          autoClose: false,
-          closeOnClick: false,
-          hideProgressBar: true,
-          closeButton: true,
-          pauseOnHover: true
-        });
-
-        // Copy hostname in background
-        copyToClipboard(content).catch(() => {
-          // Silent fail - hostname copy is secondary
-        });
-      }
     }
+    // Note: Switch Hostname handling is now done directly in renderCellContent
   };
 
   const renderCellContent = (header, content, isArray = false, rowData = null) => {
@@ -424,59 +357,146 @@ function DataTable({
       );
     }
 
-    // Switch Hostname mit SSH Link
+    // Switch Hostname mit getrennten Klick-Bereichen
     if (header === "Switch Hostname") {
-      const title = sshUsername
-        ? `Open SSH ${sshUsername}@${content}`
-        : 'Copy hostname (SSH username not set)';
+      // Split hostname in hostname Teil (vor erstem .) und Domain Teil
+      const parts = content.split('.');
+      const hostnameShort = parts[0] || content;
+      const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+
+      const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
+
+      const sshTitle = sshUsername
+        ? `Connect SSH ${sshUsername}@${content}`
+        : `SSH connection (SSH username not set)`;
+
       return (
-        <Tooltip arrow placement="top" title={title}>
-          <Typography
-            variant="body2"
-            component="span"
-            sx={{
-              textDecoration: sshUsername ? 'underline' : 'none',
-              color: theme => {
-                if (sshUsername) {
-                  return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32';
-                }
-                return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary';
-              },
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.5,
-              '&:hover': {
-                color: theme => {
-                  if (sshUsername) {
-                    return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
+        <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+          {/* Hostname short part - kopiert hostname Teil vor dem . */}
+          <Tooltip arrow placement="top" title={copyHostnameTitle}>
+            <Typography
+              variant="body2"
+              component="span"
+              onClick={(e) => {
+                e.stopPropagation();
+                // Copy hostname short part (before first .)
+                copyToClipboard(hostnameShort).then(success => {
+                  if (success) {
+                    showCopyToast('Copied hostname', hostnameShort);
                   } else {
-                    return theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00';
+                    toast.error(`❌ Copy failed`, {
+                      autoClose: 2000,
+                      pauseOnHover: true,
+                      pauseOnFocusLoss: false
+                    });
                   }
-                },
-                textDecoration: 'underline',
-                '& .ssh-icon': {
-                  color: theme => sshUsername
-                    ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
-                    : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
-                }
-              }
-            }}
-          >
-            {content}
-            <Terminal
-              className="ssh-icon"
-              sx={{
-                color: theme => sshUsername
-                  ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
-                  : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
-                fontSize: '14px',
-                ml: 0.5,
-                verticalAlign: 'middle'
+                });
               }}
-            />
-          </Typography>
-        </Tooltip>
+              sx={{
+                color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                '&:hover': {
+                  color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
+                  textDecoration: 'underline'
+                }
+              }}
+            >
+              {hostnameShort}
+            </Typography>
+          </Tooltip>
+
+          {/* Domain part - SSH Verbindung */}
+          {domainPart && (
+            <Tooltip arrow placement="top" title={sshTitle}>
+              <Typography
+                variant="body2"
+                component="span"
+                onClick={(e) => {
+                  e.stopPropagation();
+
+                  // First: Copy Cisco port format
+                  const ciscoFormat = rowData && rowData["Switch Port"] ? convertToCiscoFormat(rowData["Switch Port"]) : '';
+                  if (ciscoFormat && ciscoFormat.trim() !== '') {
+                    copyToClipboard(ciscoFormat).then(success => {
+                      if (success) {
+                        showCopyToast('Copied Cisco port', ciscoFormat);
+                      } else {
+                        toast.error(`❌ Copy failed`, {
+                          autoClose: 2000,
+                          pauseOnHover: true,
+                          pauseOnFocusLoss: false
+                        });
+                      }
+                    });
+                  } else {
+                    toast.warning('No switch port available to copy', {
+                      autoClose: 2000,
+                      pauseOnHover: true
+                    });
+                  }
+
+                  // Second: SSH link functionality
+                  if (sshUsername && sshUsername.trim() !== '') {
+                    const sshUrl = `ssh://${sshUsername}@${content}`;
+                    toast.success(`🔗 SSH: ${sshUsername}@${content}`, { autoClose: 1000, pauseOnHover: false });
+                    setTimeout(() => { window.location.href = sshUrl; }, 150);
+                  } else {
+                    // If no SSH username, show warning but don't copy hostname again
+                    const ToastContent = () => (
+                      <div>
+                        📋 Copied Cisco port! ⚠️ SSH username not configured!{' '}
+                        <span
+                          onClick={() => {
+                            navigateToSettings();
+                            toast.dismiss();
+                          }}
+                          style={{
+                            color: '#4f46e5',
+                            textDecoration: 'underline',
+                            cursor: 'pointer',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          Go to Settings
+                        </span> to set your SSH username.
+                      </div>
+                    );
+                    toast.warning(<ToastContent />, {
+                      autoClose: 6000,
+                      pauseOnHover: true,
+                      pauseOnFocusLoss: false
+                    });
+                  }
+                }}
+                sx={{
+                  color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 0.8)' : '#689f38',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  '&:hover': {
+                    color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 1)' : '#558b2f',
+                    textDecoration: 'underline'
+                  }
+                }}
+              >
+                {domainPart}
+              </Typography>
+            </Tooltip>
+          )}
+
+          {/* SSH Icon */}
+          <Terminal
+            className="ssh-icon"
+            sx={{
+              color: theme => sshUsername
+                ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+              fontSize: '14px',
+              ml: 0.5,
+              verticalAlign: 'middle'
+            }}
+          />
+        </Box>
       );
     }
 
@@ -790,7 +810,7 @@ function DataTable({
                       >
                         {header === "Switch Port" ? (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
-                            {renderCellContent(header, cellContent, true)}
+                            {renderCellContent(header, cellContent, true, row)}
                             <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
                               <Chip
                                 label="Cisco"
@@ -818,7 +838,7 @@ function DataTable({
                           </Box>
                         ) : header === "MAC Address" ? (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
-                            {renderCellContent(header, cellContent, true)}
+                            {renderCellContent(header, cellContent, true, row)}
                             <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
                               <Chip
                                 label="Cisco"
@@ -845,7 +865,7 @@ function DataTable({
                             </Tooltip>
                           </Box>
                         ) : (
-                          renderCellContent(header, cellContent, true)
+                          renderCellContent(header, cellContent, true, row)
                         )}
                       </TableCell>
                     );
@@ -954,7 +974,7 @@ function DataTable({
                         </Tooltip>
                       </Box>
                     ) : (
-                      renderCellContent(header, cellContent, false)
+                      renderCellContent(header, cellContent, false, data)
                     )}
                   </TableCell>
                 );

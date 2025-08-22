@@ -206,6 +206,10 @@ export default function StatisticsPage() {
   });
   const [locStatsLoading, setLocStatsLoading] = React.useState(false);
   const [locOpen, setLocOpen] = React.useState(false);
+
+  // Switch Port Cache für Statistics Switches
+  const [switchPortCache, setSwitchPortCache] = React.useState({});
+
   // Location-specific timeline state
   const [locTimeline, setLocTimeline] = React.useState({ loading: false, error: null, series: [] });
   const locTimelineLoadedKeyRef = React.useRef('');
@@ -293,6 +297,47 @@ export default function StatisticsPage() {
     if (!statsHydratedRef.current) return;
     saveStatisticsPrefs?.({ topCount, topExtras, topDays, topKpi });
   }, [topCount, topExtras, topDays, topKpi, saveStatisticsPrefs]);
+
+  // Funktion um Switch Port für einen Hostname zu holen
+  const getSwitchPortForHostname = React.useCallback(async (hostname) => {
+    if (!hostname) return null;
+
+    // Prüfe Cache zuerst
+    if (switchPortCache[hostname]) {
+      return switchPortCache[hostname];
+    }
+
+    try {
+      // Suche nach dem Hostname um Switch Port Daten zu bekommen
+      const response = await fetch(`/api/search/?query=${encodeURIComponent(hostname)}&field=Switch Hostname&include_historical=false`);
+      if (!response.ok) return null;
+
+      const result = await response.json();
+      if (result.success && result.data && result.data.length > 0) {
+        // Finde den ersten Eintrag mit Switch Port Daten
+        const entry = result.data.find(row => row && row["Switch Port"]);
+        if (entry && entry["Switch Port"]) {
+          const switchPort = entry["Switch Port"];
+          // Cache das Ergebnis
+          setSwitchPortCache(prev => ({
+            ...prev,
+            [hostname]: switchPort
+          }));
+          return switchPort;
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to fetch switch port for hostname:', hostname, error);
+    }
+
+    // Cache auch negative Ergebnisse um wiederholte Anfragen zu vermeiden
+    setSwitchPortCache(prev => ({
+      ...prev,
+      [hostname]: null
+    }));
+
+    return null;
+  }, [switchPortCache]);
 
   React.useEffect(() => {
     if (!statsHydratedRef.current) return;
@@ -817,85 +862,132 @@ export default function StatisticsPage() {
                       {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || []).map((s) => ({ hostname: s, vlanCount: 0, vlans: [] }))).map((sw) => (
                         <TableRow key={sw.hostname} hover>
                           <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            <Tooltip
-                              arrow
-                              placement="top-start"
-                              title={<Box component="span" sx={{ display: 'block', textAlign: 'left', width: '100%' }}>{sshUsername ? `Open SSH ${sshUsername}@${sw.hostname}` : 'Copy hostname (SSH username not set)'}</Box>}
-                              slotProps={{
-                                tooltip: { sx: { textAlign: 'left !important' } },
-                                arrow: { sx: { left: '50% !important', transform: 'translateX(-50%) !important' } },
-                                popper: { sx: { '&[data-popper-placement^="top"] .MuiTooltip-arrow': { left: '50% !important', transform: 'translateX(-50%) !important' } } }
-                              }}
-                            >
-                              <Typography
-                                variant="body2"
-                                component="span"
-                                onClick={() => {
-                                  const url = makeSshUrl(sw.hostname);
-                                  if (url && sshUsername) {
-                                    // Success toast like search page
-                                    toast.success(`🔗 SSH: ${sshUsername}@${sw.hostname}`, { autoClose: 1000, pauseOnHover: false });
-                                    setTimeout(() => { window.location.href = url; }, 150);
-                                  } else {
-                                    // Show settings toast and copy hostname
-                                    const ToastContent = () => (
-                                      <div>
-                                        📋 Copied hostname! ⚠️ SSH username not configured!{' '}
-                                        <span
-                                          onClick={() => { try { navigateToSettings?.(); } catch { } try { toast.dismiss(); } catch { } }}
-                                          style={{ color: '#4f46e5', textDecoration: 'underline', cursor: 'pointer', fontWeight: 'bold' }}
-                                        >
-                                          Go to Settings
-                                        </span>{' '}to set your SSH username.
-                                      </div>
-                                    );
-                                    toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
-                                    copyToClipboard(sw.hostname).catch(() => { });
-                                  }
-                                }}
-                                sx={{
-                                  textDecoration: sshUsername ? 'underline' : 'none',
-                                  color: theme => {
-                                    if (sshUsername) {
-                                      return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#2e7d32';
-                                    }
-                                    return theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary';
-                                  },
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 0.5,
-                                  '&:hover': {
-                                    color: theme => {
-                                      if (sshUsername) {
-                                        return theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20';
-                                      } else {
-                                        return theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00';
-                                      }
-                                    },
-                                    textDecoration: 'underline',
-                                    '& .ssh-icon': {
-                                      color: theme => sshUsername
-                                        ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#1b5e20')
-                                        : (theme.palette.mode === 'dark' ? 'rgba(255, 193, 7, 0.8)' : '#f57c00')
-                                    }
-                                  }
-                                }}
-                              >
-                                {sw.hostname}
-                                <Terminal
-                                  className="ssh-icon"
-                                  sx={{
-                                    color: theme => sshUsername
-                                      ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
-                                      : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
-                                    fontSize: '14px',
-                                    ml: 0.5,
-                                    verticalAlign: 'middle'
-                                  }}
-                                />
-                              </Typography>
-                            </Tooltip>
+                            {/* Switch Hostname mit getrennten Klick-Bereichen wie in DataTable */}
+                            {(() => {
+                              const hostname = sw.hostname;
+                              // Split hostname in hostname Teil (vor erstem .) und Domain Teil
+                              const parts = hostname.split('.');
+                              const hostnameShort = parts[0] || hostname;
+                              const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+
+                              const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
+
+                              const sshTitle = sshUsername
+                                ? `Connect SSH ${sshUsername}@${hostname}`
+                                : `SSH connection (SSH username not set)`;
+
+                              return (
+                                <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+                                  {/* Hostname short part - kopiert hostname Teil vor dem . */}
+                                  <Tooltip arrow placement="top" title={copyHostnameTitle}>
+                                    <Typography
+                                      variant="body2"
+                                      component="span"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        // Copy hostname short part (before first .)
+                                        copyToClipboard(hostnameShort).then(success => {
+                                          if (success) {
+                                            showCopyToast('Copied hostname', hostnameShort);
+                                          } else {
+                                            toast.error(`❌ Copy failed`, {
+                                              autoClose: 2000,
+                                              pauseOnHover: true,
+                                              pauseOnFocusLoss: false
+                                            });
+                                          }
+                                        });
+                                      }}
+                                      sx={{
+                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
+                                        cursor: 'pointer',
+                                        textDecoration: 'underline',
+                                        '&:hover': {
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
+                                          textDecoration: 'underline'
+                                        }
+                                      }}
+                                    >
+                                      {hostnameShort}
+                                    </Typography>
+                                  </Tooltip>
+
+                                  {/* Domain part - SSH Verbindung + kopiert Switch Port Cisco Format */}
+                                  {domainPart && (
+                                    <Tooltip arrow placement="top" title={sshTitle}>
+                                      <Typography
+                                        variant="body2"
+                                        component="span"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+
+                                          // First: Try to get switch port data and copy Cisco format
+                                          try {
+                                            const switchPort = await getSwitchPortForHostname(hostname);
+                                            if (switchPort) {
+                                              const ciscoFormat = convertToCiscoFormat(switchPort);
+                                              if (ciscoFormat && ciscoFormat.trim() !== '') {
+                                                await copyToClipboard(ciscoFormat);
+                                                showCopyToast('Copied Cisco port', ciscoFormat);
+                                              } else {
+                                                showCopyToast('Copied switch port', switchPort);
+                                                await copyToClipboard(switchPort);
+                                              }
+                                            }
+                                          } catch (error) {
+                                            console.warn('Failed to copy switch port:', error);
+                                          }
+
+                                          // Second: SSH link functionality
+                                          if (sshUsername && sshUsername.trim() !== '') {
+                                            const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                            toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                            setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                          } else {
+                                            // If no SSH username, show warning
+                                            const ToastContent = () => (
+                                              <div>
+                                                ⚠️ SSH username not configured!{' '}
+                                                <span
+                                                  onClick={() => {
+                                                    try { navigateToSettings?.(); } catch { }
+                                                    try { toast.dismiss(); } catch { }
+                                                  }}
+                                                  style={{
+                                                    color: '#4f46e5',
+                                                    textDecoration: 'underline',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 'bold'
+                                                  }}
+                                                >
+                                                  Go to Settings
+                                                </span> to set your SSH username.
+                                              </div>
+                                            );
+                                            toast.warning(<ToastContent />, {
+                                              autoClose: 6000,
+                                              pauseOnHover: true,
+                                              pauseOnFocusLoss: false
+                                            });
+                                          }
+                                        }}
+                                        sx={{
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 0.8)' : '#689f38',
+                                          cursor: 'pointer',
+                                          textDecoration: 'underline',
+                                          '&:hover': {
+                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 1)' : '#558b2f',
+                                            textDecoration: 'underline'
+                                          }
+                                        }}
+                                      >
+                                        {domainPart}
+                                      </Typography>
+                                    </Tooltip>
+                                  )}
+                                </Box>
+                              );
+                            })()}
                           </TableCell>
                           <TableCell>
                             {sw.vlans && sw.vlans.length > 0 ? (
