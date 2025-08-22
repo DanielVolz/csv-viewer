@@ -33,10 +33,10 @@ def _has_wildcard(shoulds, field, pattern):
 
 def test_build_query_field_line_number_exact():
     cfg = OpenSearchConfig()
-    body = cfg._build_query_body("+4960213981023", field="Line Number", size=10)
+    body = cfg._build_query_body("+1234567890123", field="Line Number", size=10)
     shoulds = _find_should_terms(body)
-    assert _has_term(shoulds, "Line Number.keyword", "+4960213981023")
-    assert _has_term(shoulds, "Line Number.keyword", "4960213981023")
+    assert _has_term(shoulds, "Line Number.keyword", "+1234567890123")
+    assert _has_term(shoulds, "Line Number.keyword", "1234567890123")
     assert body["size"] == 1
 
 
@@ -73,9 +73,30 @@ def test_build_query_general_ip_partial_prefix():
 
 def test_build_query_field_serial_exact():
     cfg = OpenSearchConfig()
-    body = cfg._build_query_body("FCH2325E9S5", field="Serial Number", size=10)
-    musts = body["query"]["bool"]["must"]
-    assert any("term" in m and m["term"].get("Serial Number") == "FCH2325E9S5" for m in musts)
+    body = cfg._build_query_body("ABC123XYZ99", field="Serial Number", size=10)
+    shoulds = body["query"]["bool"]["should"]
+    assert any("term" in s and s["term"].get("Serial Number") == "ABC123XYZ99" for s in shoulds)
+
+
+def test_build_query_general_serial_exact():
+    cfg = OpenSearchConfig()
+    body = cfg._build_query_body("ABC123XYZ99", field=None, size=10)
+    shoulds = _find_should_terms(body)
+    assert any("term" in c and c["term"].get("Serial Number") == "ABC123XYZ99" for c in shoulds)
+
+
+def test_build_query_general_serial_prefix():
+    cfg = OpenSearchConfig()
+    body = cfg._build_query_body("ABC1234", field=None, size=10)
+    shoulds = _find_should_terms(body)
+    assert any("wildcard" in c and c["wildcard"].get("Serial Number") == "ABC1234*" for c in shoulds)
+
+
+def test_build_query_general_serial_prefix_8chars():
+    cfg = OpenSearchConfig()
+    body = cfg._build_query_body("ABC1234X", field=None, size=10)
+    shoulds = _find_should_terms(body)
+    assert any("wildcard" in c and c["wildcard"].get("Serial Number") == "ABC1234X*" for c in shoulds)
 
 
 def test_build_query_field_switch_port_exact():
@@ -90,32 +111,32 @@ def test_build_query_field_switch_port_exact():
 
 def test_build_query_field_switch_hostname_exact():
     cfg = OpenSearchConfig()
-    body = cfg._build_query_body("abx01zsl4120p.juwin.bayern.de", field="Switch Hostname", size=10)
+    body = cfg._build_query_body("test-switch01.example.com", field="Switch Hostname", size=10)
     # Script filter present for case-insensitive equality
     flt = body["query"]["bool"]["filter"][0]["script"]["script"]["source"]
     assert "Switch Hostname" in flt and "equalsIgnoreCase" in flt
     shoulds = _find_should_terms(body)
-    assert _has_term(shoulds, "Switch Hostname", "abx01zsl4120p.juwin.bayern.de")
-    assert _has_term(shoulds, "Switch Hostname.lower", "abx01zsl4120p.juwin.bayern.de")
+    assert _has_term(shoulds, "Switch Hostname", "test-switch01.example.com")
+    assert _has_term(shoulds, "Switch Hostname.lower", "test-switch01.example.com")
 
 
 def test_build_query_general_fqdn_exact_only():
     cfg = OpenSearchConfig()
-    body = cfg._build_query_body("abx01zsl4120p.juwin.bayern.de", field=None, size=10)
+    body = cfg._build_query_body("test-switch01.example.com", field=None, size=10)
     # Expect the exact-only FQDN branch with script filter and no hostname wildcards
     q = body["query"]["bool"]
     assert any("script" in f for f in q["filter"])  # script filter used
     shoulds = q["should"]
-    assert _has_term(shoulds, "Switch Hostname", "abx01zsl4120p.juwin.bayern.de")
-    assert _has_term(shoulds, "Switch Hostname.lower", "abx01zsl4120p.juwin.bayern.de")
+    assert _has_term(shoulds, "Switch Hostname", "test-switch01.example.com")
+    assert _has_term(shoulds, "Switch Hostname.lower", "test-switch01.example.com")
 
 
 def test_build_query_general_phone_exact_only():
     cfg = OpenSearchConfig()
-    body = cfg._build_query_body("+4960213981023", field=None, size=10)
+    body = cfg._build_query_body("+1234567890123", field=None, size=10)
     shoulds = _find_should_terms(body)
-    assert _has_term(shoulds, "Line Number.keyword", "+4960213981023")
-    assert _has_term(shoulds, "Line Number.keyword", "4960213981023")
+    assert _has_term(shoulds, "Line Number.keyword", "+1234567890123")
+    assert _has_term(shoulds, "Line Number.keyword", "1234567890123")
     assert body["size"] == 1
 
 
@@ -137,9 +158,9 @@ def test_search_phone_exact_then_partial_fallback_dedup(monkeypatch):
     partial_response = {
         "hits": {
             "hits": [
-                {"_source": {"Line Number": "+4960213981023", "MAC Address": "AA:BB:CC:DD:EE:FF", "File Name": "netspeed.csv", "Creation Date": "2025-08-21"}},
-                {"_source": {"Line Number": "4960213981023", "MAC Address": "AA:BB:CC:DD:EE:FF", "File Name": "netspeed.csv", "Creation Date": "2025-08-21"}},
-                {"_source": {"Line Number": "+4960213981023", "MAC Address": "11:22:33:44:55:66", "File Name": "netspeed.csv", "Creation Date": "2025-08-21"}},
+                {"_source": {"Line Number": "+1234567890123", "MAC Address": "AA:BB:CC:DD:EE:FF", "File Name": "netspeed.csv", "Creation Date": "2025-08-21"}},
+                {"_source": {"Line Number": "1234567890123", "MAC Address": "AA:BB:CC:DD:EE:FF", "File Name": "netspeed.csv", "Creation Date": "2025-08-21"}},
+                {"_source": {"Line Number": "+1234567890123", "MAC Address": "11:22:33:44:55:66", "File Name": "netspeed.csv", "Creation Date": "2025-08-21"}},
             ]
         }
     }
@@ -147,7 +168,7 @@ def test_search_phone_exact_then_partial_fallback_dedup(monkeypatch):
     # Configure side effects in order: exact then partial
     mock_client.search.side_effect = [exact_response, partial_response]
 
-    headers, docs = cfg.search("+4960213981023")
+    headers, docs = cfg.search("+1234567890123")
 
     # Should have deduped the first two into one (same MAC+File), leaving 2 docs
     assert len(docs) == 2

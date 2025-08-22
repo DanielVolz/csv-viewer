@@ -945,12 +945,17 @@ class OpenSearchConfig:
                         "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
                     }
 
-            # Serial Number exact-only (fielded)
+            # Serial Number field-specific: support both exact and prefix
             if field == "Serial Number" and isinstance(query, str):
                 qsn = query.strip()
                 if qsn:
                     return {
-                        "query": {"bool": {"must": [{"term": {"Serial Number": qsn}}]}},
+                        "query": {"bool": {"should": [
+                            {"term": {"Serial Number": qsn}},
+                            {"term": {"Serial Number": qsn.upper()}},
+                            {"wildcard": {"Serial Number": f"{qsn}*"}},
+                            {"wildcard": {"Serial Number": f"{qsn.upper()}*"}}
+                        ], "minimum_should_match": 1}},
                         "_source": DESIRED_ORDER,
                         "size": size,
                         "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
@@ -1126,8 +1131,8 @@ class OpenSearchConfig:
                     }]
                 }
 
-            # Serial Number exact-only (general): long alphanumeric token (not pure digits)
-            if re.fullmatch(r"[A-Za-z0-9]{8,}", qn or "") and not re.fullmatch(r"\d{8,}", qn or ""):
+            # Serial Number exact-only (general): full-length alphanumeric token (11+ chars, not pure digits)
+            if re.fullmatch(r"[A-Za-z0-9]{11,}", qn or "") and not re.fullmatch(r"\d{11,}", qn or ""):
                 from utils.csv_utils import DESIRED_ORDER
                 variants = [qn]
                 up = qn.upper()
@@ -1136,6 +1141,28 @@ class OpenSearchConfig:
                 return {
                     "query": {"bool": {"should": [
                         *([{ "term": {"Serial Number": v} } for v in variants])
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [{"Creation Date": {"order": "desc"}}, {
+                        "_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}
+                    }, {"_score": {"order": "desc"}}]
+                }
+
+            # Serial Number prefix (general): partial alphanumeric token for prefix search (3-10 chars)
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9]{2,9}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                variants = [qn]
+                up = qn.upper()
+                if up != qn:
+                    variants.append(up)
+                return {
+                    "query": {"bool": {"should": [
+                        *([{ "wildcard": {"Serial Number": f"{v}*"} } for v in variants])
                     ], "minimum_should_match": 1}},
                     "_source": DESIRED_ORDER,
                     "size": size,
@@ -1186,6 +1213,10 @@ class OpenSearchConfig:
                 {"wildcard": {"MAC Address.keyword": f"*{str(query).upper()}*"}},
                 {"wildcard": {"MAC Address 2.keyword": f"*{str(query).lower()}*"}},
                 {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
+
+                # Serial Number wildcards for partial matches
+                {"wildcard": {"Serial Number": f"*{str(query).lower()}*"}},
+                {"wildcard": {"Serial Number": f"*{str(query).upper()}*"}},
 
                 # No Serial Number wildcards to keep serial searches exact-only
                                 {"wildcard": {"Line Number.keyword": f"*{query}*"}},
@@ -1482,12 +1513,23 @@ class OpenSearchConfig:
                         variants.append(up)
                     from utils.csv_utils import DESIRED_ORDER
                     indices_sn = self.get_search_indices(include_historical)
+
+                    # Support both exact and prefix search for serial numbers
+                    # For 8-10 characters: add both exact and wildcard queries
+                    # For 11+ characters: prefer exact match but also include wildcard as fallback
+                    should_clauses = []
+
+                    # Add exact match queries
+                    should_clauses.extend([{ "term": {"Serial Number": v} } for v in variants])
+
+                    # Add wildcard prefix queries for progressive search (especially for 8-10 char lengths)
+                    if len(qn_sn) >= 3:
+                        should_clauses.extend([{ "wildcard": {"Serial Number": f"{v}*"} } for v in variants])
+
                     body_sn = {
-                        "query": {"bool": {"should": [
-                            *([{ "term": {"Serial Number": v} } for v in variants])
-                        ], "minimum_should_match": 1}},
+                        "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
                         "_source": DESIRED_ORDER,
-                        "size": (size if include_historical else 1),
+                        "size": (size if include_historical else 20000),  # Increase size for prefix searches
                         "sort": [{"Creation Date": {"order": "desc"}}, {
                             "_script": {"type": "number", "order": "asc", "script": {
                                 "lang": "painless",
