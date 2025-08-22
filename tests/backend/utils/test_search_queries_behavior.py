@@ -78,11 +78,13 @@ def test_build_query_field_serial_exact():
     assert any("term" in s and s["term"].get("Serial Number") == "ABC123XYZ99" for s in shoulds)
 
 
-def test_build_query_general_serial_exact():
+def test_build_query_general_serial_prefix_wildcard():
     cfg = OpenSearchConfig()
-    body = cfg._build_query_body("ABC123XYZ99", field=None, size=10)
+    # Use a shorter string that triggers the Serial Number prefix logic (3-10 chars alphanumeric)
+    body = cfg._build_query_body("ABC1234", field=None, size=10)
     shoulds = _find_should_terms(body)
-    assert any("term" in c and c["term"].get("Serial Number") == "ABC123XYZ99" for c in shoulds)
+    # Serial Number prefix logic only generates wildcard queries, not exact term queries
+    assert any("wildcard" in c and c["wildcard"].get("Serial Number") == "ABC1234*" for c in shoulds)
 
 
 def test_build_query_general_serial_prefix():

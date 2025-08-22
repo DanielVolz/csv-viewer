@@ -1060,6 +1060,40 @@ class OpenSearchConfig:
                     ]
                 }
 
+            # Switch Hostname pattern without domain: 3 letters + 2 digits + other chars (like ABx01ZSL5210P)
+            hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if qn else None
+            if hostname_pattern_match and '.' not in qn and len(qn) >= 13:
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {
+                        "bool": {
+                            "should": [
+                                # Exact match for hostname without domain
+                                {"term": {"Switch Hostname.keyword": qn}},
+                                {"term": {"Switch Hostname.keyword": qn.lower()}},
+                                {"term": {"Switch Hostname.keyword": qn.upper()}},
+
+                                # Prefix match for full hostname with domain
+                                {"prefix": {"Switch Hostname": f"{qn}."}},
+                                {"prefix": {"Switch Hostname": f"{qn.lower()}."}},
+                                {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
+                            ],
+                            "minimum_should_match": 1
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                            "params": {"f": "netspeed.csv"}
+                        }}},
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
             # Full IPv4 exact-only
             if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
                 from utils.csv_utils import DESIRED_ORDER
@@ -1131,8 +1165,10 @@ class OpenSearchConfig:
                     }]
                 }
 
-            # Serial Number exact-only (general): full-length alphanumeric token (11+ chars, not pure digits)
-            if re.fullmatch(r"[A-Za-z0-9]{11,}", qn or "") and not re.fullmatch(r"\d{11,}", qn or ""):
+            # Serial Number exact-only (general): full-length alphanumeric token (11+ chars, not pure digits, not hostname)
+            alphanumeric_11_plus = re.fullmatch(r"[A-Za-z0-9]{11,}", qn or "") and not re.fullmatch(r"\d{11,}", qn or "")
+            hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if qn else None
+            if alphanumeric_11_plus and not hostname_pattern_match:
                 from utils.csv_utils import DESIRED_ORDER
                 variants = [qn]
                 up = qn.upper()
@@ -1200,10 +1236,13 @@ class OpenSearchConfig:
                 }
 
         # Broad query: allow partials but with exact-first sort
+        # Exclude multi_match for hostname patterns to prevent false matches
+        is_hostname_pattern = isinstance(query, str) and len(query) >= 5 and re.match(r'^[A-Za-z]{3}[0-9]{2}', query)
+
         search_query = {
             "query": {"bool": {"should": [
                 {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
-                {"multi_match": {"query": query, "fields": ["*"]}},
+                *([] if is_hostname_pattern else [{"multi_match": {"query": query, "fields": ["*"]}}]),
                 {"term": {"Line Number.keyword": query}},
                 {"term": {"MAC Address": query}},
                 {"term": {"Line Number.keyword": f"+{query}"}},
@@ -1214,9 +1253,11 @@ class OpenSearchConfig:
                 {"wildcard": {"MAC Address 2.keyword": f"*{str(query).lower()}*"}},
                 {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
 
-                # Serial Number wildcards for partial matches
-                {"wildcard": {"Serial Number": f"*{str(query).lower()}*"}},
-                {"wildcard": {"Serial Number": f"*{str(query).upper()}*"}},
+                # Serial Number wildcards for partial matches (only if not hostname-like)
+                *([] if isinstance(query, str) and len(query) >= 5 and re.match(r'^[A-Za-z]{3}[0-9]{2}', query) else [
+                    {"wildcard": {"Serial Number": f"*{str(query).lower()}*"}},
+                    {"wildcard": {"Serial Number": f"*{str(query).upper()}*"}},
+                ]),
 
                 # No Serial Number wildcards to keep serial searches exact-only
                                 {"wildcard": {"Line Number.keyword": f"*{query}*"}},
@@ -1283,14 +1324,18 @@ class OpenSearchConfig:
                 except Exception as e:
                     logger.warning(f"Failed to add MAC core variants for '{query}': {e}")
 
-        # Hostname dotted-segment fallback
+        # Note: Switch Hostname patterns are handled by early return logic above
+
+        # Hostname dotted-segment fallback (excluded if already handled by hostname pattern logic)
         if isinstance(query, str) and '.' in query and any(c.isalpha() for c in query):
             try:
                 parts = [p for p in query.split('.') if p]
                 if len(parts) >= 2:
                     short = parts[0]
-                    search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.lower()}*"}})
-                    search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.upper()}*"}})
+                    # Skip if this looks like a hostname pattern (3 letters + 2 digits)
+                    if not (len(short) >= 5 and re.match(r'^[A-Za-z]{3}[0-9]{2}', short)):
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.lower()}*"}})
+                        search_query["query"]["bool"]["should"].append({"wildcard": {"Switch Hostname": f"*{short.upper()}*"}})
             except Exception as e:
                 logger.warning(f"Failed to add hostname short variants for '{query}': {e}")
 
@@ -1501,7 +1546,17 @@ class OpenSearchConfig:
                 looks_like_serial = False
                 if isinstance(query, str):
                     qn_sn = query.strip()
-                    looks_like_serial = bool(re.fullmatch(r"[A-Za-z0-9]{8,}", qn_sn or "")) and not bool(re.fullmatch(r"\d{8,}", qn_sn or ""))
+                    # Check if it's alphanumeric 8+ chars and not pure digits
+                    basic_serial_pattern = bool(re.fullmatch(r"[A-Za-z0-9]{8,}", qn_sn or "")) and not bool(re.fullmatch(r"\d{8,}", qn_sn or ""))
+
+                    # Exclude hostname-like patterns (3 letters + 2 digits + more chars pattern)
+                    looks_like_hostname = False
+                    if basic_serial_pattern and len(qn_sn) >= 13:
+                        # Switch hostnames follow pattern: 3 letters + 2 digits + other chars and are typically 13+ chars
+                        hostname_pattern = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn_sn)
+                        looks_like_hostname = hostname_pattern is not None
+
+                    looks_like_serial = basic_serial_pattern and not looks_like_hostname
             except Exception:
                 looks_like_serial = False
             if looks_like_serial and not looks_like_mac_first:
