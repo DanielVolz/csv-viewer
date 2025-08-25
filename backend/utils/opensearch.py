@@ -632,15 +632,10 @@ class OpenSearchConfig:
         """
         _, rows = read_csv_file(file_path)
 
-        # Only repair data for the current netspeed.csv file, not historical files
+        # Note: Data repair is now handled separately after all files are indexed
+        # This ensures historical data is available when repairing the current file
         current_file_name = Path(file_path).name.lower()
-        if current_file_name == "netspeed.csv":
-            logger.info(f"Starting data repair for current file: {file_path}")
-            logger.info(f"Number of rows before repair: {len(rows)}")
-            rows = self.repair_missing_data(rows, file_path)
-            logger.info(f"Number of rows after repair: {len(rows)}")
-        else:
-            logger.debug(f"Skipping data repair for historical file: {file_path}")
+        logger.debug(f"Skipping data repair during indexing for: {file_path}")
 
         # Get file creation date ONCE per file, not per row
         file_creation_date = None
@@ -730,6 +725,36 @@ class OpenSearchConfig:
                 "_source": final_doc
             }
 
+    def _is_valid_mac_address(self, mac: str) -> bool:
+        """
+        Validate if a string is a valid MAC address.
+        MAC addresses should be 12 hex characters (with or without separators).
+        """
+        if not mac:
+            return False
+
+        # Skip obvious non-MAC patterns
+        if "." in mac and mac.count(".") >= 3:  # IP addresses
+            return False
+        if mac.isdigit() and len(mac) <= 4:  # VLANs like 801, 802
+            return False
+        if mac.startswith("255."):  # Subnet masks
+            return False
+
+        # Remove common separators
+        clean_mac = mac.replace(":", "").replace("-", "").replace(".", "").upper()
+
+        # Must be exactly 12 characters
+        if len(clean_mac) != 12:
+            return False
+
+        # Must be all hexadecimal characters
+        try:
+            int(clean_mac, 16)
+            return True
+        except ValueError:
+            return False
+
     def repair_missing_data(self, rows: List[Dict[str, Any]], file_path: str) -> List[Dict[str, Any]]:
         """
         Repair missing data by looking up values in historical indices using MAC address as identifier.
@@ -775,8 +800,19 @@ class OpenSearchConfig:
             total_missing = 0
 
             for row in rows:
-                # MAC address is the primary identifier - it stays constant
+                # MAC address is the primary identifier - check both MAC Address fields
                 mac_address = row.get("MAC Address", "").strip()
+                mac_address_2 = row.get("MAC Address 2", "").strip()
+
+                # Use whichever MAC address field has a value and is a valid MAC address
+                primary_mac = None
+                if mac_address and self._is_valid_mac_address(mac_address):
+                    primary_mac = mac_address
+                elif mac_address_2:
+                    # Remove SEP prefix if present
+                    clean_mac_2 = mac_address_2[3:] if mac_address_2.startswith("SEP") else mac_address_2
+                    if self._is_valid_mac_address(clean_mac_2):
+                        primary_mac = clean_mac_2
 
                 # Find all missing fields in current row
                 missing_fields = []
@@ -785,15 +821,17 @@ class OpenSearchConfig:
                     if value is None or str(value).strip() == "" or str(value).lower() == "null":
                         missing_fields.append(field)
 
-                # Only repair if we have a MAC address and something is missing
-                if missing_fields and mac_address:
+                # Only repair if we have a valid MAC address and something is missing
+                if missing_fields and primary_mac:
                     total_missing += 1
+                    print(f"[DATA REPAIR] Processing MAC {primary_mac} (from {mac_address or mac_address_2}) with missing fields: {missing_fields}")
 
                     # Look up historical data by MAC address (primary identifier)
-                    historical_data = self._lookup_historical_data_by_mac(mac_address, historical_indices)
+                    historical_data = self._lookup_historical_data_by_mac(primary_mac, historical_indices)
 
                     # Repair missing data if found
                     if historical_data:
+                        print(f"[DATA REPAIR] Found historical data for MAC {primary_mac}")
                         repaired_this_row = False
                         repaired_fields = []
 
@@ -803,16 +841,23 @@ class OpenSearchConfig:
                                 continue
 
                             historical_value = historical_data.get(field)
-                            # Check if historical value exists and is not null/empty
-                            if historical_value is not None and str(historical_value).strip() and str(historical_value).lower() != "null":
+                            print(f"[DATA REPAIR] Field '{field}': historical_value = '{historical_value}' (type: {type(historical_value)})")
+                            if historical_value and str(historical_value).strip() and str(historical_value).lower() != "null":
                                 row[field] = historical_value
                                 repaired_fields.append(field)
                                 repaired_this_row = True
+                                print(f"[DATA REPAIR] Successfully repaired field '{field}' with value '{historical_value}'")
+                            else:
+                                print(f"[DATA REPAIR] Field '{field}' could not be repaired: value is empty, null, or invalid")
 
                         if repaired_this_row:
                             repaired_count += 1
-                            print(f"[DATA REPAIR] Repaired MAC {mac_address}: {', '.join(repaired_fields)}")
-                            logger.warning(f"DATA REPAIR: Repaired MAC {mac_address} - fields: {repaired_fields}")
+                            print(f"[DATA REPAIR] Repaired MAC {primary_mac}: {', '.join(repaired_fields)}")
+                            logger.warning(f"DATA REPAIR: Repaired MAC {primary_mac} - fields: {repaired_fields}")
+                        else:
+                            print(f"[DATA REPAIR] No valid data found for MAC {primary_mac}")
+                    else:
+                        print(f"[DATA REPAIR] No historical data found for MAC {primary_mac}")
 
                 repaired_rows.append(row)
 
@@ -846,26 +891,59 @@ class OpenSearchConfig:
         try:
             query = {
                 "query": {
-                    "term": {"MAC Address.keyword": mac_address}
+                    "bool": {
+                        "should": [
+                            {"term": {"MAC Address.keyword": mac_address}},
+                            {"term": {"MAC Address 2.keyword": mac_address}},
+                            {"term": {"MAC Address 2.keyword": f"SEP{mac_address}"}}
+                        ],
+                        "minimum_should_match": 1
+                    }
                 },
                 "sort": [{"Creation Date": {"order": "desc"}}],  # Get most recent first
-                "size": 1
+                "size": 10  # Get multiple documents to find one with complete data
                 # Return all fields - no _source filtering
             }
 
-            # Search in historical indices (most recent first)
-            # Sort indices by name to get most recent historical data first
+            # Search across ALL historical indices and collect all documents
+            all_documents = []
             for index in sorted(historical_indices, reverse=True):
                 try:
                     response = self.client.search(index=index, body=query)
                     if response["hits"]["total"]["value"] > 0:
-                        hit = response["hits"]["hits"][0]["_source"]
-                        # Return historical data if found (all fields)
-                        logger.debug(f"Found historical data for MAC {mac_address} in index {index}")
-                        return hit
+                        for hit in response["hits"]["hits"]:
+                            all_documents.append(hit["_source"])
                 except Exception as e:
                     logger.debug(f"Error searching historical index {index} for MAC {mac_address}: {e}")
                     continue
+
+            if not all_documents:
+                return None
+
+            # Find the best document with most complete data
+            best_doc = None
+            best_score = 0
+
+            for doc in all_documents:
+                # Score documents based on completeness of important fields
+                score = 0
+                important_fields = ["Line Number", "Serial Number", "Model Name"]
+                for field in important_fields:
+                    value = doc.get(field, "").strip()
+                    if value and value.lower() != "null" and value != "":
+                        score += 1
+
+                if score > best_score:
+                    best_score = score
+                    best_doc = doc
+
+            if best_doc:
+                logger.debug(f"Found best historical data for MAC {mac_address} with score {best_score}/{len(important_fields)}")
+                return best_doc
+            else:
+                # Fallback to first document if no complete data found
+                logger.debug(f"No complete data found for MAC {mac_address}, using first available")
+                return all_documents[0]
 
             return None
 
@@ -2130,6 +2208,140 @@ class OpenSearchConfig:
         except Exception as e:
             logger.error(f"Error searching for '{query}': {e}")
             return [], []
+
+    def repair_current_file_after_indexing(self, current_file_path: str = "/app/data/netspeed.csv") -> Dict[str, Any]:
+        """
+        Repair missing data in the current netspeed.csv file AFTER all files have been indexed.
+        This ensures historical indices are available for data lookup during repair.
+
+        Args:
+            current_file_path: Path to the current netspeed.csv file
+
+        Returns:
+            Dict[str, Any]: Repair results summary
+        """
+        try:
+            print(f"[POST-INDEX REPAIR] Starting data repair for current file: {current_file_path}")
+            logger.warning(f"POST-INDEX REPAIR: Starting repair for {current_file_path}")
+
+            # Check if current file exists
+            if not Path(current_file_path).exists():
+                logger.warning(f"Current file does not exist: {current_file_path}")
+                return {"success": False, "message": "Current file not found"}
+
+            # Read current file data
+            _, rows = read_csv_file(current_file_path)
+            original_count = len(rows)
+
+            # Apply data repair
+            repaired_rows = self.repair_missing_data(rows, current_file_path)
+
+            if len(repaired_rows) != original_count:
+                logger.warning(f"Row count mismatch after repair: {original_count} -> {len(repaired_rows)}")
+                return {"success": False, "message": "Row count mismatch during repair"}
+
+            # Re-index the current file with repaired data
+            success, count = self._reindex_file_with_repaired_data(current_file_path, repaired_rows)
+
+            if success:
+                print(f"[POST-INDEX REPAIR] Successfully re-indexed {count} documents with repaired data")
+                logger.warning(f"POST-INDEX REPAIR: Successfully re-indexed {count} documents")
+                return {
+                    "success": True,
+                    "message": f"Successfully repaired and re-indexed {count} documents",
+                    "documents_repaired": count
+                }
+            else:
+                logger.error("Failed to re-index repaired data")
+                return {"success": False, "message": "Failed to re-index repaired data"}
+
+        except Exception as e:
+            print(f"[POST-INDEX REPAIR] ERROR: {e}")
+            logger.error(f"Post-index data repair failed: {e}")
+            return {"success": False, "message": str(e)}
+
+    def _reindex_file_with_repaired_data(self, file_path: str, repaired_rows: List[Dict[str, Any]]) -> Tuple[bool, int]:
+        """
+        Re-index a file with repaired data by deleting the current index and recreating it.
+
+        Args:
+            file_path: Path to the file being re-indexed
+            repaired_rows: Repaired data rows
+
+        Returns:
+            Tuple[bool, int]: Success status and document count
+        """
+        try:
+            # Determine index name
+            index_name = self.get_index_name(file_path)
+
+            # Delete existing index for current file
+            if self.client.indices.exists(index=index_name):
+                self.client.indices.delete(index=index_name)
+                logger.info(f"Deleted existing index for re-indexing: {index_name}")
+
+            # Create new index with mapping
+            self.client.indices.create(index=index_name, body=self.index_mappings)
+            logger.info(f"Created new index for repaired data: {index_name}")
+
+            # Generate actions for bulk indexing with repaired data
+            actions = list(self._generate_actions_for_repaired_data(index_name, file_path, repaired_rows))
+
+            if not actions:
+                logger.warning("No actions generated for re-indexing")
+                return False, 0
+
+            # Bulk index repaired data
+            success, failed = helpers.bulk(self.client, actions, refresh=True)
+
+            if failed:
+                logger.error(f"Some documents failed during re-indexing: {failed}")
+                return False, 0
+
+            logger.info(f"Successfully re-indexed {len(actions)} documents with repaired data")
+            return True, len(actions)
+
+        except Exception as e:
+            logger.error(f"Error re-indexing with repaired data: {e}")
+            return False, 0
+
+    def _generate_actions_for_repaired_data(self, index_name: str, file_path: str, repaired_rows: List[Dict[str, Any]]) -> Generator[Dict[str, Any], None, None]:
+        """
+        Generate bulk index actions for repaired data.
+
+        Args:
+            index_name: Target index name
+            file_path: Source file path
+            repaired_rows: Repaired data rows
+
+        Yields:
+            Dict[str, Any]: Bulk index actions
+        """
+        # Get file creation date
+        file_creation_date = None
+        try:
+            from models.file import FileModel
+            file_model = FileModel.from_path(file_path)
+            if file_model.date:
+                file_creation_date = file_model.date.strftime('%Y-%m-%d')
+        except Exception as e:
+            logger.warning(f"Could not get file date for repaired data: {e}")
+
+        # Generate actions
+        for row_num, row in enumerate(repaired_rows, start=1):
+            try:
+                # Add metadata fields
+                row["#"] = str(row_num)
+                row["File Name"] = Path(file_path).name
+                if file_creation_date:
+                    row["Creation Date"] = file_creation_date
+
+                yield {
+                    "_index": index_name,
+                    "_source": row
+                }
+            except Exception as e:
+                logger.warning(f"Error generating action for row {row_num}: {e}")
 
 
 # Create a global instance

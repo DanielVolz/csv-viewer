@@ -316,7 +316,10 @@ def index_all_csv_files(self, directory_path: str) -> dict:
 
         current_files = [f for f in files if f.name == "netspeed.csv"]
         other_files = [f for f in files if f.name != "netspeed.csv"]
-        ordered_files = current_files + sorted(other_files, key=lambda x: x.name)
+        # Important: Index historical files FIRST, then current file for data repair to work
+        ordered_files = sorted(other_files, key=lambda x: x.name) + current_files
+
+        logger.info(f"Indexing order (historical files first for data repair): {[f.name for f in ordered_files]}")
 
         results: List[Dict] = []
         total_documents = 0
@@ -537,6 +540,22 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             save_state(index_state)
         except Exception as e:
             logger.warning(f"Failed saving index state: {e}")
+
+        # IMPORTANT: Apply data repair AFTER all files are indexed
+        # This ensures historical indices are available for data lookup
+        current_file_path = Path(directory_path) / "netspeed.csv"
+        if current_file_path.exists():
+            try:
+                logger.info("Starting post-indexing data repair for current file")
+                repair_result = opensearch_config.repair_current_file_after_indexing(str(current_file_path))
+                if repair_result.get("success"):
+                    logger.info(f"Data repair completed successfully: {repair_result}")
+                else:
+                    logger.warning(f"Data repair failed: {repair_result}")
+            except Exception as e:
+                logger.error(f"Post-indexing data repair failed: {e}")
+        else:
+            logger.info(f"Current file not found for data repair: {current_file_path}")
 
         return {
             "status": "success",

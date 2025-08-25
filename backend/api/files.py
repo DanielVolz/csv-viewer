@@ -355,9 +355,23 @@ async def reindex_current_file():
         success, count = opensearch_config.index_csv_file(csv_file)
 
         if success:
+            # Apply data repair after indexing (only for current file)
+            try:
+                logger.info("Starting post-indexing data repair for current file")
+                repair_result = opensearch_config.repair_current_file_after_indexing(csv_file)
+                if repair_result.get("success"):
+                    logger.info(f"Data repair completed: {repair_result}")
+                    repair_message = f" (with data repair: {repair_result.get('documents_repaired', 0)} docs)"
+                else:
+                    logger.warning(f"Data repair failed: {repair_result}")
+                    repair_message = " (data repair failed)"
+            except Exception as e:
+                logger.error(f"Post-indexing data repair failed: {e}")
+                repair_message = f" (data repair error: {e})"
+
             return {
                 "success": True,
-                "message": f"Successfully reindexed netspeed.csv with {count} documents",
+                "message": f"Successfully reindexed netspeed.csv with {count} documents{repair_message}",
                 "file": csv_file,
                 "documents_indexed": count
             }
