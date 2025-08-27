@@ -118,41 +118,56 @@ async def list_files():
 async def get_netspeed_info():
     """
     Get information about the current netspeed.csv file.
+    If netspeed.csv doesn't exist, fall back to netspeed.csv.0 until the new file is generated.
 
     Returns:
-        Dictionary with creation date and line count
+        Dictionary with creation date, line count, and fallback information
     """
     try:
         # Get path to current CSV file
         csv_dir = Path("/app/data")
         current_file = csv_dir / "netspeed.csv"
+        fallback_file = csv_dir / "netspeed.csv.0"
 
+        using_fallback = False
+        file_to_use = current_file
+
+        # Check if current file exists, if not use fallback
         if not current_file.exists():
-            return {
-                "success": False,
-                "message": "Current netspeed.csv file not found",
-                "date": None,
-                "line_count": 0
-            }
+            if fallback_file.exists():
+                using_fallback = True
+                file_to_use = fallback_file
+            else:
+                return {
+                    "success": False,
+                    "message": "No netspeed.csv found — place a file in /app/data and refresh. The netspeed.csv should be created at 06:55 AM.",
+                    "date": None,
+                    "line_count": 0,
+                    "using_fallback": False,
+                    "fallback_file": None
+                }
+
         # Use the file model which handles creation date properly with fallbacks
-        file_model = FileModel.from_path(str(current_file))
+        file_model = FileModel.from_path(str(file_to_use))
 
         # Format date consistently
         creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
         # Get file modification time for change detection
-        modification_time = current_file.stat().st_mtime
+        modification_time = file_to_use.stat().st_mtime
 
         # Count lines (subtract 1 for header)
-        with open(current_file, 'r') as f:
+        with open(file_to_use, 'r') as f:
             line_count = sum(1 for _ in f) - 1
 
         result = {
             "success": True,
-            "message": "Netspeed.csv file information retrieved successfully",
+            "message": "Using yesterday's data from netspeed.csv.0 until new netspeed.csv is generated at 06:55 AM." if using_fallback else "Current netspeed.csv file information retrieved successfully",
             "date": creation_date,
             "line_count": line_count,
-            "last_modified": modification_time
+            "last_modified": modification_time,
+            "using_fallback": using_fallback,
+            "fallback_file": "netspeed.csv.0" if using_fallback else None
         }
         return JSONResponse(content=result)
 
@@ -195,6 +210,7 @@ def _extract_location_from_hostname(hostname: str) -> str | None:
 async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", loc: Optional[str] = None):
     """
     Get a preview of a CSV file (first N entries) along with its creation date.
+    If netspeed.csv doesn't exist, fall back to netspeed.csv.0 until the new file is generated.
 
     Args:
         limit: Maximum number of entries to return (default 25)
@@ -208,14 +224,37 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         csv_dir = Path("/app/data")
         file_path = csv_dir / filename
 
-        if not file_path.exists():
+        using_fallback = False
+        actual_filename = filename
+
+        # If requesting netspeed.csv but it doesn't exist, try fallback
+        if filename == "netspeed.csv" and not file_path.exists():
+            fallback_path = csv_dir / "netspeed.csv.0"
+            if fallback_path.exists():
+                file_path = fallback_path
+                actual_filename = "netspeed.csv.0"
+                using_fallback = True
+            else:
+                return {
+                    "success": False,
+                    "message": "No netspeed.csv found — place a file in /app/data and refresh. The netspeed.csv should be created at 06:55 AM.",
+                    "headers": [],
+                    "data": [],
+                    "creation_date": None,
+                    "file_name": filename,
+                    "using_fallback": False,
+                    "fallback_file": None
+                }
+        elif not file_path.exists():
             return {
                 "success": False,
                 "message": f"File {filename} not found",
                 "headers": [],
                 "data": [],
                 "creation_date": None,
-                "file_name": filename
+                "file_name": filename,
+                "using_fallback": False,
+                "fallback_file": None
             }
 
         # Get file creation date
@@ -239,7 +278,9 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                     "headers": headers,
                     "data": [],
                     "creation_date": None,
-                    "file_name": filename
+                    "file_name": filename,
+                    "using_fallback": using_fallback,
+                    "fallback_file": actual_filename if using_fallback else None
                 }
             filtered = []
             for r in rows:
@@ -257,15 +298,20 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         # Limit number of rows
         preview_rows = rows[:limit]
 
+        fallback_message = " (using yesterday's data from netspeed.csv.0 until new file is generated at 06:55 AM)" if using_fallback else ""
+
         return {
             "success": True,
             "message": (f"Showing first {len(preview_rows)} entries of "
-                        f"{len(rows)} total" + (f" (filtered by {loc_filter})" if loc_filter else "")),
+                        f"{len(rows)} total" + (f" (filtered by {loc_filter})" if loc_filter else "") + fallback_message),
             "headers": headers,
             "data": preview_rows,
             "creation_date": creation_date,
             "file_format": file_model.format,
-            "file_name": filename
+            "file_name": filename,
+            "actual_file_name": actual_filename,
+            "using_fallback": using_fallback,
+            "fallback_file": actual_filename if using_fallback else None
         }
 
     except Exception as e:

@@ -36,9 +36,13 @@ import { Popover, List, ListItemButton, ListItemText, Tooltip } from '@mui/mater
 // Preview block extracted to reduce re-renders while typing
 const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick }) {
   if (!previewData || !previewData.data) return null;
+
+  // Show warning for fallback files, info for normal files
+  const alertSeverity = previewData?.using_fallback ? "warning" : "info";
+
   return (
     <Box>
-      <Alert severity="info" sx={{ mb: 3 }}>
+      <Alert severity={alertSeverity} sx={{ mb: 3 }}>
         {(previewData?.message || "Showing latest entries from the CSV file")}
         {previewData?.file_name ? ` • ${previewData.file_name}` : ''}
       </Alert>
