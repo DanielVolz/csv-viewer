@@ -120,7 +120,7 @@ class TestFilesAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] == False
-        assert "not found" in data["message"].lower()
+        assert "no netspeed.csv found" in data["message"].lower()
 
     @patch('api.files.read_csv_file')
     @patch('api.files.Path')
@@ -184,7 +184,7 @@ class TestFilesAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] == False
-        assert "not found" in data["message"].lower()
+        assert "no netspeed.csv found" in data["message"].lower()
 
     @patch('api.files.Path')
     def test_netspeed_info_exception(self, mock_path):
