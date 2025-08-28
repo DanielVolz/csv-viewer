@@ -24,6 +24,10 @@ _CURRENT_STATS_CACHE: Dict[str, Any] = {"key": None, "data": None}
 _TIMELINE_CACHE: Dict[int, Tuple[float, Dict]] = {}  # key: limit, value: (expires_at, result)
 _TIMELINE_BY_LOC_CACHE: Dict[Tuple[str, int], Tuple[float, Dict]] = {}  # key: (q, limit)
 _TIMELINE_TOP_CACHE: Dict[Tuple[int, Tuple[str, ...], int], Tuple[float, Dict]] = {}
+
+# Force cache invalidation for testing
+import time
+_CACHE_INVALIDATION_TIME = time.time() + 10
 try:
     from utils.city_codes_loader import get_city_code_map
 except Exception as _e:
@@ -67,35 +71,104 @@ def is_mac_like(value: str) -> bool:
 
 
 def extract_location(hostname: str) -> str | None:
-    """Extract a 5-char location code as 3 letters + 2 digits (e.g., ABC01) from the switch hostname.
+    """Extract a location code from the switch hostname.
+
+    For hostname formats like:
+    - 'ABx01ZSL4120P.juwin.bayern.de' -> 'ABX01' (2 letters + x + 2 digits)
+    - 'WORx51ZSL9999P.juwin.bayern.de' -> 'WOR51' (3 letters + 2 digits, skip the 'x')
+    - 'ABC01ZSL1234P.juwin.bayern.de' -> 'ABC01' (3 letters + 2 digits)
 
     Algorithm:
-    - Uppercase the hostname.
-    - Scan left to right, first collect 3 ASCII letters [A-Z].
-    - Then continue scanning to collect 2 digits [0-9].
-    - Return the concatenation if and only if we found 3 letters and 2 digits in that order.
-    - Otherwise return None.
+    - Try pattern 1: [A-Z]{2}x[0-9]{2} (2 letters + x + 2 digits) at start
+    - Try pattern 2: [A-Z]{3}x[0-9]{2} (3 letters + x + 2 digits, skip the 'x') at start
+    - Try pattern 3: [A-Z]{3}[0-9]{2} (3 letters + 2 digits) at start
+
+    Note: There are no 2-character location codes. If city code is 2 chars,
+    third position is filled with 'X'.
     """
     if not hostname:
         return None
     h = hostname.strip().upper()
-    letters = []
-    digits = []
-    i = 0
-    # collect letters first
-    while i < len(h) and len(letters) < 3:
-        ch = h[i]
-        if 'A' <= ch <= 'Z':
-            letters.append(ch)
-        i += 1
-    # collect digits after letters
-    while i < len(h) and len(digits) < 2:
-        ch = h[i]
-        if '0' <= ch <= '9':
-            digits.append(ch)
-        i += 1
-    if len(letters) == 3 and len(digits) == 2:
-        return ''.join(letters) + ''.join(digits)
+    if len(h) < 4:
+        return None
+
+    # Pattern 1: 2 letters + 'x' + 2 digits (e.g., ABX01)
+    if (len(h) >= 5 and
+        h[0].isalpha() and h[1].isalpha() and
+        h[2] == 'X' and
+        h[3].isdigit() and h[4].isdigit()):
+        return h[:5]
+
+    # Pattern 2: 3 letters + x + 2 digits (e.g., WORx51 -> WOR51)
+    if (len(h) >= 6 and
+        h[0].isalpha() and h[1].isalpha() and h[2].isalpha() and
+        h[3] == 'X' and
+        h[4].isdigit() and h[5].isdigit()):
+        return h[0:3] + h[4:6]  # Take letters + digits, skip the 'x'
+
+    # Pattern 3: 3 letters + 2 digits (e.g., ABC01)
+    if (len(h) >= 5 and
+        h[0].isalpha() and h[1].isalpha() and h[2].isalpha() and
+        h[3].isdigit() and h[4].isdigit()):
+        return h[:5]
+
+    return None
+
+
+def is_jva_switch(hostname: str) -> bool:
+    """Determine if a switch hostname belongs to JVA (Prison) based on location pattern.
+
+    JVA switches have 50 or 51 in the last 2 digits of the location code.
+    For example: ABx50 (ABX50), WORx51 (WOR51) are JVA switches.
+    All others are Justiz (Justice) switches.
+
+    Args:
+        hostname: Switch hostname to analyze
+
+    Returns:
+        True if JVA switch, False if Justiz switch
+    """
+    if not hostname:
+        return False
+
+    location = extract_location(hostname)
+    if not location:
+        return False
+
+    # Check if the last 2 digits are 50 or 51
+    if len(location) >= 2:
+        last_two_digits = location[-2:]  # Last 2 characters
+        return last_two_digits == '50' or last_two_digits == '51'
+
+    return False
+
+
+def extract_city_code(hostname: str) -> str | None:
+    """Extract city code (KFZ-Kennzeichen) from switch hostname.
+
+    For hostname formats like:
+    - 'BOC04-DIST3.lan' -> 'BOC'
+    - 'MXX17-SW4.example' -> 'MXX'
+    - 'QZD18-EDGE3.local' -> 'QZD'
+
+    Returns the first 3 characters before the first digit.
+    """
+    if not hostname:
+        return None
+
+    h = hostname.strip().upper()
+    if len(h) < 3:
+        return None
+
+    # Find the first digit position
+    for i, char in enumerate(h):
+        if char.isdigit():
+            # Return the letters before the first digit (up to 3 characters)
+            city_code = h[:i]
+            if len(city_code) >= 2 and city_code.isalpha():
+                return city_code[:3]  # Take max 3 characters
+            break
+
     return None
 
 
@@ -132,14 +205,15 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
 
         # Attempt fast path: serve from cache if file unchanged
         st = file_path.stat()
-        cache_key = f"{file_path}:{st.st_mtime_ns}:{st.st_size}"
+        cache_key = f"{file_path}:{st.st_mtime_ns}:{st.st_size}:v3:{_CACHE_INVALIDATION_TIME}"  # v3 + time to force invalidation
         if _CURRENT_STATS_CACHE.get("key") == cache_key and _CURRENT_STATS_CACHE.get("data"):
             return _CURRENT_STATS_CACHE["data"]  # type: ignore
 
         # Try OpenSearch snapshot first: if exists for file+date, use it
         file_model = FileModel.from_path(str(file_path))
         date_str = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
-        if date_str:
+        # TEMPORARILY DISABLED TO FORCE CSV COMPUTATION WITH NEW JVA/JUSTIZ FIELDS
+        if False and date_str:
             try:
                 from utils.opensearch import opensearch_config
                 from opensearchpy.exceptions import NotFoundError
@@ -180,7 +254,8 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
         total_phones = len(rows)
         switches = set()
         phones_with_kem = 0
-        model_counts: Dict[str, int] = {}
+        justiz_model_counts: Dict[str, int] = {}
+        jva_model_counts: Dict[str, int] = {}
         locations = set()
         city_codes = set()
 
@@ -191,7 +266,14 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                 loc = extract_location(sh)
                 if loc:
                     locations.add(loc)
-                    city_codes.add(loc[:3])
+                    # Extract city code from location: take first 2-3 characters based on location length
+                    if len(loc) == 4:  # e.g., "AB01" -> "AB"
+                        city_codes.add(loc[:2])
+                    elif len(loc) == 5:  # e.g., "ABX01" -> "ABX" or "AIC01" -> "AIC"
+                        if loc[2] == 'X':  # e.g., "ABX01" -> "ABX"
+                            city_codes.add(loc[:3])
+                        else:  # e.g., "AIC01" -> "AIC"
+                            city_codes.add(loc[:3])
 
             if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
                 phones_with_kem += 1
@@ -199,10 +281,96 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
             model = (r.get("Model Name") or "").strip() or "Unknown"
             if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
                 continue
-            model_counts[model] = model_counts.get(model, 0) + 1
 
-        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+            # Categorize by Justiz/JVA based on switch hostname (only for valid models)
+            if sh:  # Only if we have a switch hostname
+                if is_jva_switch(sh):
+                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                else:
+                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
+        # Format individual categories
+        justiz_phones_by_model = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
+        justiz_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+        jva_phones_by_model = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
+        jva_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+        # Combined for backward compatibility
+        combined_model_counts: Dict[str, int] = {}
+        for model, count in justiz_model_counts.items():
+            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
+        for model, count in jva_model_counts.items():
+            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
+        phones_by_model = [{"model": m, "count": c} for m, c in combined_model_counts.items()]
         phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+        # Detailed breakdown by location for Justiz and JVA
+        justiz_by_location: Dict[str, Dict[str, int]] = {}
+        jva_by_location: Dict[str, Dict[str, int]] = {}
+
+        for r in rows:
+            sh = (r.get("Switch Hostname") or "").strip()
+            if not sh:
+                continue
+
+            loc = extract_location(sh)
+            if not loc:
+                continue
+
+            model = (r.get("Model Name") or "").strip() or "Unknown"
+            if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
+                continue
+
+            if is_jva_switch(sh):
+                if loc not in jva_by_location:
+                    jva_by_location[loc] = {}
+                jva_by_location[loc][model] = jva_by_location[loc].get(model, 0) + 1
+            else:
+                if loc not in justiz_by_location:
+                    justiz_by_location[loc] = {}
+                justiz_by_location[loc][model] = justiz_by_location[loc].get(model, 0) + 1
+
+        # Format detailed data with city names
+        justiz_details = []
+        for loc, models in justiz_by_location.items():
+            city_code = loc[:3]  # First 3 characters
+            city_name = resolve_city_name(city_code)
+            location_phones = sum(models.values())
+            models_list = [{"model": m, "count": c} for m, c in models.items()]
+            models_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+            justiz_details.append({
+                "location": loc,
+                "city": city_name,
+                "cityCode": city_code,
+                "totalPhones": location_phones,
+                "models": models_list
+            })
+
+        jva_details = []
+        for loc, models in jva_by_location.items():
+            city_code = loc[:3]  # First 3 characters
+            city_name = resolve_city_name(city_code)
+            location_phones = sum(models.values())
+            models_list = [{"model": m, "count": c} for m, c in models.items()]
+            models_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+            jva_details.append({
+                "location": loc,
+                "city": city_name,
+                "cityCode": city_code,
+                "totalPhones": location_phones,
+                "models": models_list
+            })
+
+        # Sort by total phones descending
+        justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+        jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
+        # Calculate total phones for each category
+        total_justiz_phones = sum(model["count"] for model in justiz_phones_by_model)
+        total_jva_phones = sum(model["count"] for model in jva_phones_by_model)
 
         result = {
             "success": True,
@@ -213,7 +381,13 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                 "totalLocations": len(locations),
                 "totalCities": len(city_codes),
                 "phonesWithKEM": phones_with_kem,
+                "totalJustizPhones": total_justiz_phones,
+                "totalJVAPhones": total_jva_phones,
                 "phonesByModel": phones_by_model,
+                "phonesByModelJustiz": justiz_phones_by_model,
+                "phonesByModelJVA": jva_phones_by_model,
+                "phonesByModelJustizDetails": justiz_details,
+                "phonesByModelJVADetails": jva_details,
                 "cities": sorted(
                     [{"code": c, "name": resolve_city_name(c)} for c in city_codes],
                     key=lambda x: x["name"]
@@ -248,7 +422,11 @@ def _compute_basic_stats(rows: List[Dict]) -> Tuple[int, int, int, int, List[Dic
             loc = extract_location(sh)
             if loc:
                 locations.add(loc)
-                city_codes.add(loc[:3])
+                # Extract city code from location: take first 2-3 characters based on location length
+                if len(loc) == 4:  # e.g., "AB01" -> "AB"
+                    city_codes.add(loc[:2])
+                else:  # e.g., "ABX01" -> "ABX"
+                    city_codes.add(loc[:3])
 
         if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
             phones_with_kem += 1
@@ -1111,14 +1289,36 @@ async def stats_by_location(q: str, filename: str = "netspeed.csv") -> Dict:
             switch_details.append(detail)
         phones_with_kem = sum(1 for r in subset if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip())
 
-        # Phones by Model
-        model_counts: Dict[str, int] = {}
+        # Phones by Model - split into Justiz (Justice) and JVA (Prison) categories
+        justiz_model_counts: Dict[str, int] = {}
+        jva_model_counts: Dict[str, int] = {}
+
         for r in subset:
             model = (r.get("Model Name") or "").strip() or "Unknown"
             if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
                 continue
-            model_counts[model] = model_counts.get(model, 0) + 1
-        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+
+            # Determine category based on switch hostname
+            hostname = (r.get("Switch Hostname") or "").strip()
+            if is_jva_switch(hostname):
+                jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+            else:
+                justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
+        # Format for response
+        justiz_phones_by_model = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
+        justiz_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+        jva_phones_by_model = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
+        jva_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+        # Legacy format for backward compatibility (combined)
+        combined_model_counts: Dict[str, int] = {}
+        for model, count in justiz_model_counts.items():
+            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
+        for model, count in jva_model_counts.items():
+            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
+        phones_by_model = [{"model": m, "count": c} for m, c in combined_model_counts.items()]
         phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
 
         # VLAN usage
@@ -1158,6 +1358,8 @@ async def stats_by_location(q: str, filename: str = "netspeed.csv") -> Dict:
                 "totalSwitches": len(switches),
                 "phonesWithKEM": phones_with_kem,
                 "phonesByModel": phones_by_model,
+                "phonesByModelJustiz": justiz_phones_by_model,
+                "phonesByModelJVA": jva_phones_by_model,
                 "vlanUsage": vlan_usage,
                 "switches": switches,
                 "switchDetails": switch_details,

@@ -14,12 +14,14 @@ def test_is_mac_like_various():
 
 
 def test_extract_location_happy_and_none():
-    # Happy path: letters then digits (left-to-right scan)
+    # Happy path: letters then digits at start
     assert extract_location("abc01-sw01") == "ABC01"
-    # Left-to-right will pick the very first 3 letters and then first 2 digits
-    assert extract_location("xxABC01yy") == "XXA01"
-    # Not enough letters
+    # Valid 2-letter city code with X padding
+    assert extract_location("ABX01-host") == "ABX01"
+    # Invalid: 2 letters + digits without X (should be None)
     assert extract_location("AB01-host") is None
+    # Invalid: scattered letters and digits (should be None)
+    assert extract_location("xxABC01yy") is None
     # Not enough digits
     assert extract_location("ABC-host") is None
     # Wrong order

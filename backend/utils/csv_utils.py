@@ -1,6 +1,7 @@
 import csv
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
@@ -39,6 +40,135 @@ DESIRED_ORDER = [
     "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
     "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port", "Serial Number", "Model Name"
 ]
+
+# Regex patterns for intelligent column detection
+COLUMN_PATTERNS = {
+    "IP Address": re.compile(r'^(?:10\.|172\.|192\.|169\.254\.|127\.)[0-9.]+$'),  # More specific IP ranges
+    "Line Number": re.compile(r'^\+?\d{7,15}$'),  # Phone numbers with 7-15 digits
+    "Serial Number": re.compile(r'^[A-Z][A-Z0-9]{8,14}$'),  # Cisco serial numbers starting with letter
+    "Model Name": re.compile(r'^(CP-\d+|DP-\d+)$'),  # Cisco phone models
+    "KEM": re.compile(r'^KEM[12]?$', re.IGNORECASE),
+    "MAC Address": re.compile(r'^[0-9A-F]{12}$', re.IGNORECASE),  # Pure MAC without SEP prefix
+    "MAC Address 2": re.compile(r'^SEP[0-9A-F]{12}$', re.IGNORECASE),  # SEP prefixed MAC
+    "Subnet Mask": re.compile(r'^255\.[\d.]+$'),  # Subnet masks starting with 255
+    "Voice VLAN": re.compile(r'^\d{1,4}$'),  # VLAN IDs (1-4 digits)
+    "Speed 1": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
+    "Speed 2": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
+    "Switch Hostname": re.compile(r'^[A-Za-z0-9\-_.]+\.juwin\.bayern\.de$', re.IGNORECASE),
+    "Switch Port": re.compile(r'^(GigabitEthernet|FastEthernet|Ethernet)\d+/\d+/\d+$', re.IGNORECASE),
+    "Speed Switch-Port": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?)', re.IGNORECASE),
+    "Speed PC-Port": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE)
+}
+
+
+def detect_column_type(value: str) -> Optional[str]:
+    """
+    Detect the type of a column value using regex patterns.
+
+    Args:
+        value: The cell value to analyze
+
+    Returns:
+        The detected column type or None if no pattern matches
+    """
+    if not value or not value.strip():
+        return None
+
+    value = value.strip()
+
+    # Check each pattern
+    for column_type, pattern in COLUMN_PATTERNS.items():
+        if pattern.match(value):
+            return column_type
+
+    return None
+
+
+def intelligent_column_mapping(row: List[str]) -> Dict[str, str]:
+    """
+    Use intelligent pattern matching to map CSV columns to the correct headers.
+    This handles cases where phones without KEM modules have shifted columns.
+
+    Args:
+        row: List of cell values from a CSV row
+
+    Returns:
+        Dictionary mapping column names to values
+    """
+    result = {}
+    used_indices = set()
+
+    # Define matching order priority (higher priority items are matched first)
+    priority_order = [
+        "Switch Hostname",     # Very specific pattern
+        "Switch Port",         # Very specific pattern
+        "Model Name",          # Very specific pattern
+        "MAC Address 2",       # SEP prefix is very specific
+        "IP Address",          # Specific IP ranges
+        "Line Number",         # Phone number pattern
+        "Subnet Mask",         # 255.x.x.x pattern
+        "Voice VLAN",          # Numeric VLAN
+        "MAC Address",         # Pure MAC pattern
+        "Serial Number",       # More general alphanumeric
+        "Speed 1",             # Speed patterns
+        "Speed 2",
+        "Speed Switch-Port",
+        "Speed PC-Port",
+        "KEM",                 # KEM patterns
+        "KEM 2"
+    ]
+
+    # First pass: identify columns with high-confidence patterns in priority order
+    for column_type in priority_order:
+        if column_type in result:
+            continue  # Already assigned
+
+        pattern = COLUMN_PATTERNS.get(column_type)
+        if not pattern:
+            continue
+
+        for i, cell in enumerate(row):
+            if i in used_indices or not cell or not cell.strip():
+                continue
+
+            cell_value = cell.strip()
+            if pattern.match(cell_value):
+                result[column_type] = cell_value
+                used_indices.add(i)
+                logger.debug(f"Priority match: '{column_type}' at index {i}: {cell_value}")
+                break
+
+    # Second pass: assign remaining cells to missing fields using positional logic
+    remaining_cells = [(i, cell) for i, cell in enumerate(row) if i not in used_indices and cell.strip()]
+
+    # List of all expected fields in order
+    expected_fields = KNOWN_HEADERS[16]  # Use 16-column format as reference
+    missing_fields = [field for field in expected_fields if field not in result]
+
+    # For remaining cells, try to assign based on typical order
+    for i, (cell_idx, cell_value) in enumerate(remaining_cells):
+        if i < len(missing_fields):
+            field_name = missing_fields[i]
+            cell_val = cell_value.strip()
+
+            # Skip obviously wrong assignments
+            if field_name == "IP Address" and cell_val.startswith("255."):
+                continue
+            elif field_name == "Subnet Mask" and not cell_val.startswith("255."):
+                continue
+            elif field_name == "Voice VLAN" and not cell_val.isdigit():
+                continue
+
+            result[field_name] = cell_val
+            used_indices.add(cell_idx)
+            logger.debug(f"Assigned remaining field '{field_name}': {cell_val}")
+
+    # Ensure all required fields exist with empty values if not found
+    for header in expected_fields:
+        if header not in result:
+            result[header] = ""
+
+    return result
 
 
 def generate_headers(column_count: int) -> List[str]:
@@ -200,7 +330,7 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             # All files will be normalized to 16-column format for consistent processing
             logger.info(f"Processing {file_path} with mixed format support (per-row normalization)")
 
-            # Process rows with per-row format detection
+            # Process rows with intelligent column detection
             for idx, row in enumerate(all_rows, 1):  # Start counting from 1
                 # Skip empty rows
                 if len(row) == 0:
@@ -209,64 +339,10 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
 
                 # Clean row data
                 cleaned_row = [cell.strip() for cell in row]
-                original_length = len(cleaned_row)
 
-                # Per-row format detection and normalization to 16 columns
-                if original_length == 14:
-                    # 14-column format: insert empty KEM columns at positions 4 and 5
-                    normalized_row = (
-                        cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
-                        ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
-                        cleaned_row[4:]          # MAC Address onwards (original positions 4-13 → new positions 6-15)
-                    )
-                    cleaned_row = normalized_row
-                    logger.debug(f"Row {idx}: Normalized 14-col to 16-col format")
-
-                elif original_length == 15:
-                    # 15-column format: need to determine if position 4 is KEM or MAC Address
-                    col4_value = cleaned_row[4].strip() if len(cleaned_row) > 4 else ""
-
-                    if col4_value in ["KEM", "KEM1", "KEM2"]:
-                        # Position 4 is KEM, insert empty KEM 2 at position 5
-                        normalized_row = (
-                            cleaned_row[:5] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3), KEM (4)
-                            [""] +                   # Empty KEM 2 (5)
-                            cleaned_row[5:]          # MAC Address onwards (original positions 5-14 → new positions 6-15)
-                        )
-                        logger.debug(f"Row {idx}: Normalized 15-col with KEM at pos4 to 16-col format")
-                    else:
-                        # Position 4 is MAC Address, insert empty KEM columns before it
-                        normalized_row = (
-                            cleaned_row[:4] +        # IP Address (0), Line Number (1), Serial Number (2), Model Name (3)
-                            ["", ""] +               # Empty KEM (4) and KEM 2 (5) columns
-                            cleaned_row[4:]          # MAC Address onwards (original positions 4-14 → new positions 6-15)
-                        )
-                        logger.debug(f"Row {idx}: Normalized 15-col with MAC at pos4 to 16-col format")
-
-                    cleaned_row = normalized_row
-
-                elif original_length == 16:
-                    # Already 16 columns, no normalization needed
-                    logger.debug(f"Row {idx}: Already 16-col format, no normalization needed")
-
-                else:
-                    # Unexpected column count, pad or truncate to 16 columns
-                    if original_length < 16:
-                        cleaned_row.extend([''] * (16 - original_length))
-                        logger.debug(f"Row {idx}: Padded {original_length}-col to 16-col format")
-                    else:
-                        cleaned_row = cleaned_row[:16]
-                        logger.debug(f"Row {idx}: Truncated {original_length}-col to 16-col format")
-
-                # Ensure we have exactly 16 columns after normalization
-                if len(cleaned_row) != 16:
-                    if len(cleaned_row) < 16:
-                        cleaned_row.extend([''] * (16 - len(cleaned_row)))
-                    else:
-                        cleaned_row = cleaned_row[:16]
-
-                # Create a dictionary with the 16-column headers
-                row_dict = dict(zip(file_headers, cleaned_row))
+                # Use intelligent column mapping instead of positional mapping
+                logger.debug(f"Row {idx}: Processing {len(cleaned_row)} columns with intelligent mapping")
+                row_dict = intelligent_column_mapping(cleaned_row)
 
                 # Merge KEM information into Line Number for display (but keep KEM columns in data)
                 line_number = row_dict.get("Line Number", "")
@@ -295,6 +371,11 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                         filtered_row[header] = row_dict[header]
 
                 rows.append(filtered_row)
+
+                # Log debugging info for CP-8832 phones
+                if row_dict.get("Model Name", "").strip() == "CP-8832":
+                    logger.info(f"CP-8832 detected at row {idx}: Switch Hostname='{row_dict.get('Switch Hostname', '')}', Voice VLAN='{row_dict.get('Voice VLAN', '')}'")
+                    logger.debug(f"Full row mapping: {row_dict}")
 
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
 
@@ -370,30 +451,9 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
             if not row:
                 continue
             cleaned_row = [cell.strip() for cell in row]
-            original_length = len(cleaned_row)
 
-            if original_length == 14:
-                cleaned_row = (
-                    cleaned_row[:4] + ["", ""] + cleaned_row[4:]
-                )
-            elif original_length == 15:
-                col4_value = cleaned_row[4].strip() if len(cleaned_row) > 4 else ""
-                if col4_value in ["KEM", "KEM1", "KEM2"]:
-                    cleaned_row = cleaned_row[:5] + [""] + cleaned_row[5:]
-                else:
-                    cleaned_row = cleaned_row[:4] + ["", ""] + cleaned_row[4:]
-            elif original_length < 16:
-                cleaned_row.extend([''] * (16 - original_length))
-            elif original_length > 16:
-                cleaned_row = cleaned_row[:16]
-
-            # Ensure exactly 16 columns
-            if len(cleaned_row) < 16:
-                cleaned_row.extend([''] * (16 - len(cleaned_row)))
-            elif len(cleaned_row) > 16:
-                cleaned_row = cleaned_row[:16]
-
-            row_dict = dict(zip(headers16, cleaned_row))
+            # Use intelligent column mapping instead of positional mapping
+            row_dict = intelligent_column_mapping(cleaned_row)
             normalized_rows.append(row_dict)
 
         return headers16, normalized_rows

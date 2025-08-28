@@ -614,6 +614,8 @@ export default function StatisticsPage() {
           <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Locations" value={data.totalLocations} loading={loading} /></Grid>
           <Grid item xs={12} sm={6} md={3}><StatCard tone="secondary" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
           <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.phonesWithKEM} loading={loading} /></Grid>
+          <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Justice institutions (Total Phones)" value={data.totalJustizPhones} loading={loading} /></Grid>
+          <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Correctional Facility (Total Phones)" value={data.totalJVAPhones} loading={loading} /></Grid>
         </Grid>
         {/* Cities enumeration disabled (debug-only); keeping Total Cities stat above */}
       </Paper>
@@ -627,31 +629,177 @@ export default function StatisticsPage() {
             ))}
           </Box>
         ) : (
-          <List dense>
-            {(data.phonesByModel || [])
-              .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-              .map(({ model, count }) => {
-                const label = String(model);
-                const lower = label.toLowerCase();
-                let color = 'default';
-                if (lower.includes('kem')) color = 'success';
-                else if (lower.includes('conference')) color = 'info';
-                else if (lower.includes('wireless')) color = 'warning';
-                else color = 'secondary';
-                return (
-                  <ListItem key={model} sx={{ py: 0.5 }}>
-                    <ListItemText
-                      primary={
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                          <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                          <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                        </Box>
-                      }
-                    />
-                  </ListItem>
-                );
-              })}
-          </List>
+          <Grid container spacing={3} sx={{ alignItems: 'stretch' }}>
+            {/* Justice institutions Category */}
+            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column' }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: 'primary.main' }}>
+                Justice institutions (Justiz)
+              </Typography>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <List dense sx={{ flex: 1 }}>
+                  {(data.phonesByModelJustiz || [])
+                    .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                    .map(({ model, count }) => {
+                      const label = String(model);
+                      const lower = label.toLowerCase();
+                      let color = 'default';
+                      if (lower.includes('kem')) color = 'success';
+                      else if (lower.includes('conference')) color = 'info';
+                      else if (lower.includes('wireless')) color = 'warning';
+                      else color = 'primary';
+                      return (
+                        <ListItem key={`justiz-${model}`} sx={{ py: 0.3, px: 0 }}>
+                          <ListItemText
+                            primary={
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                              </Box>
+                            }
+                          />
+                        </ListItem>
+                      );
+                    })}
+                  {(data.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                  )}
+                </List>
+
+                {/* Expandable detailed breakdown by location */}
+                {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="caption" color="text.secondary">
+                        View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails sx={{ pt: 0, minHeight: '400px' }}>
+                      <List dense>
+                        {(data.phonesByModelJustizDetails || []).map((location) => (
+                          <ListItem key={`justiz-loc-${location.location}`} sx={{ py: 0.5, px: 0, flexDirection: 'column', alignItems: 'flex-start' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', mb: 0.5, alignItems: 'center' }}>
+                              <Typography variant="body2" fontWeight={600} sx={{ color: 'primary.main' }}>
+                                {location.location} - {location.city}
+                              </Typography>
+                              <Chip
+                                label={`${location.totalPhones.toLocaleString()} phones`}
+                                size="small"
+                                variant="outlined"
+                                color="primary"
+                                sx={{ fontSize: '0.7rem', height: '20px' }}
+                              />
+                            </Box>
+                            <Box sx={{ ml: 1, width: '100%' }}>
+                              {location.models.slice(0, 3).map((modelData) => (
+                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.1 }}>
+                                  <Typography variant="caption" color="text.secondary">
+                                    • {modelData.model}
+                                  </Typography>
+                                  <Typography variant="caption" fontWeight={500} sx={{ color: 'text.primary' }}>
+                                    {modelData.count.toLocaleString()} {modelData.count === 1 ? 'phone' : 'phones'}
+                                  </Typography>
+                                </Box>
+                              ))}
+                              {location.models.length > 3 && (
+                                <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic', pl: 1 }}>
+                                  +{location.models.length - 3} more models
+                                </Typography>
+                              )}
+                            </Box>
+                          </ListItem>
+                        ))}
+                      </List>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+              </Box>
+            </Grid>
+
+            {/* Correctional Facility Category */}
+            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column' }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: 'warning.main' }}>
+                Correctional Facility (JVA)
+              </Typography>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <List dense sx={{ flex: 1 }}>
+                  {(data.phonesByModelJVA || [])
+                    .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                    .map(({ model, count }) => {
+                      const label = String(model);
+                      const lower = label.toLowerCase();
+                      let color = 'default';
+                      if (lower.includes('kem')) color = 'success';
+                      else if (lower.includes('conference')) color = 'info';
+                      else if (lower.includes('wireless')) color = 'error';
+                      else color = 'warning';
+                      return (
+                        <ListItem key={`jva-${model}`} sx={{ py: 0.3, px: 0 }}>
+                          <ListItemText
+                            primary={
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                              </Box>
+                            }
+                          />
+                        </ListItem>
+                      );
+                    })}
+                  {(data.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                  )}
+                </List>
+
+                {/* Expandable detailed breakdown by location */}
+                {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="caption" color="text.secondary">
+                        View by Location ({(data.phonesByModelJVADetails || []).length} locations)
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails sx={{ pt: 0, minHeight: '400px' }}>
+                      <List dense>
+                        {(data.phonesByModelJVADetails || []).map((location) => (
+                          <ListItem key={`jva-loc-${location.location}`} sx={{ py: 0.5, px: 0, flexDirection: 'column', alignItems: 'flex-start' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', mb: 0.5, alignItems: 'center' }}>
+                              <Typography variant="body2" fontWeight={600} sx={{ color: 'warning.main' }}>
+                                {location.location} - {location.city}
+                              </Typography>
+                              <Chip
+                                label={`${location.totalPhones.toLocaleString()} phones`}
+                                size="small"
+                                variant="outlined"
+                                color="warning"
+                                sx={{ fontSize: '0.7rem', height: '20px' }}
+                              />
+                            </Box>
+                            <Box sx={{ ml: 1, width: '100%' }}>
+                              {location.models.slice(0, 3).map((modelData) => (
+                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.1 }}>
+                                  <Typography variant="caption" color="text.secondary">
+                                    • {modelData.model}
+                                  </Typography>
+                                  <Typography variant="caption" fontWeight={500} sx={{ color: 'text.primary' }}>
+                                    {modelData.count.toLocaleString()} {modelData.count === 1 ? 'phone' : 'phones'}
+                                  </Typography>
+                                </Box>
+                              ))}
+                              {location.models.length > 3 && (
+                                <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic', pl: 1 }}>
+                                  +{location.models.length - 3} more models
+                                </Typography>
+                              )}
+                            </Box>
+                          </ListItem>
+                        ))}
+                      </List>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+              </Box>
+            </Grid>
+          </Grid>
         )}
       </Paper>
 
@@ -883,22 +1031,57 @@ export default function StatisticsPage() {
                   ))}
                 </Box>
               ) : (
-                <List dense>
-                  {(locStats.phonesByModel || [])
-                    .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                    .map(({ model, count }) => (
-                      <ListItem key={model} sx={{ py: 0.5 }}>
-                        <ListItemText
-                          primary={
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                              <Typography variant="body2" color="text.secondary">{model}</Typography>
-                              <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
-                            </Box>
-                          }
-                        />
-                      </ListItem>
-                    ))}
-                </List>
+                <Box>
+                  {/* Justice institutions (Justiz) */}
+                  <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
+                    Justice institutions (Justiz)
+                  </Typography>
+                  <List dense sx={{ mb: 1 }}>
+                    {(locStats.phonesByModelJustiz || [])
+                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                      .slice(0, 5)
+                      .map(({ model, count }) => (
+                        <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
+                          <ListItemText
+                            primary={
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                <Typography variant="body2" color="text.secondary">{model}</Typography>
+                                <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                              </Box>
+                            }
+                          />
+                        </ListItem>
+                      ))}
+                    {(locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
+                      <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
+                    )}
+                  </List>
+
+                  {/* Correctional Facility (JVA) */}
+                  <Typography variant="body2" sx={{ fontWeight: 600, color: 'warning.main', mb: 0.5 }}>
+                    Correctional Facility (JVA)
+                  </Typography>
+                  <List dense>
+                    {(locStats.phonesByModelJVA || [])
+                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                      .slice(0, 5)
+                      .map(({ model, count }) => (
+                        <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
+                          <ListItemText
+                            primary={
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                <Typography variant="body2" color="text.secondary">{model}</Typography>
+                                <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                              </Box>
+                            }
+                          />
+                        </ListItem>
+                      ))}
+                    {(locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
+                      <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
+                    )}
+                  </List>
+                </Box>
               )}
             </Grid>
             <Grid item xs={12} md={6}>
