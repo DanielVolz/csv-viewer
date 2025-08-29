@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     # API behavior
     SEARCH_TIMEOUT_SECONDS: int = 20
-    SEARCH_MAX_RESULTS: int = 5000
+    SEARCH_MAX_RESULTS: int = 20000
 
     # SSH username (used for simple gating of rebuild UI). Leave empty to disable rebuild UI.
     # Explicitly set environment variable SSH_USERNAME=volzd to enable.

@@ -68,7 +68,7 @@ class OpenSearchConfig:
                         }
                     },
                     "Serial Number": self.keyword_type,
-                    "Model Name": {"type": "text"},
+                    "Model Name": self.text_with_keyword,  # Changed to support both text and keyword searches
                     "Subnet Mask": self.keyword_type,
                     "Voice VLAN": self.keyword_type,
                     # Make Switch Hostname case-insensitive & partially searchable via multi-field (keyword + lowered keyword)
@@ -798,8 +798,15 @@ class OpenSearchConfig:
             repaired_rows = []
             repaired_count = 0
             total_missing = 0
+            max_repairs = 50  # LIMIT: Maximum number of MAC repairs to prevent infinite loops
 
             for row in rows:
+                # SAFETY LIMIT: Stop processing if we've already processed too many repairs
+                if total_missing >= max_repairs:
+                    print(f"[DATA REPAIR] LIMIT REACHED: Stopping after {max_repairs} repair attempts to prevent infinite loops")
+                    logger.warning(f"DATA REPAIR LIMIT: Stopped after {max_repairs} repair attempts")
+                    break
+
                 # MAC address is the primary identifier - check both MAC Address fields
                 mac_address = row.get("MAC Address", "").strip()
                 mac_address_2 = row.get("MAC Address 2", "").strip()
@@ -901,50 +908,28 @@ class OpenSearchConfig:
                     }
                 },
                 "sort": [{"Creation Date": {"order": "desc"}}],  # Get most recent first
-                "size": 10  # Get multiple documents to find one with complete data
+                "size": 1  # Only get the most recent one to avoid too many requests
                 # Return all fields - no _source filtering
             }
 
-            # Search across ALL historical indices and collect all documents
-            all_documents = []
-            for index in sorted(historical_indices, reverse=True):
+            # LIMIT: Search only the first 5 historical indices to prevent infinite loops
+            # Most recent data is usually in the first few indices anyway
+            limited_indices = sorted(historical_indices, reverse=True)[:5]
+
+            # Search across LIMITED historical indices
+            for index in limited_indices:
                 try:
                     response = self.client.search(index=index, body=query)
                     if response["hits"]["total"]["value"] > 0:
-                        for hit in response["hits"]["hits"]:
-                            all_documents.append(hit["_source"])
+                        # Return the first match immediately - don't search all indices
+                        hit = response["hits"]["hits"][0]
+                        logger.debug(f"Found historical data for MAC {mac_address} in index {index}")
+                        return hit["_source"]
                 except Exception as e:
                     logger.debug(f"Error searching historical index {index} for MAC {mac_address}: {e}")
                     continue
 
-            if not all_documents:
-                return None
-
-            # Find the best document with most complete data
-            best_doc = None
-            best_score = 0
-
-            for doc in all_documents:
-                # Score documents based on completeness of important fields
-                score = 0
-                important_fields = ["Line Number", "Serial Number", "Model Name"]
-                for field in important_fields:
-                    value = doc.get(field, "").strip()
-                    if value and value.lower() != "null" and value != "":
-                        score += 1
-
-                if score > best_score:
-                    best_score = score
-                    best_doc = doc
-
-            if best_doc:
-                logger.debug(f"Found best historical data for MAC {mac_address} with score {best_score}/{len(important_fields)}")
-                return best_doc
-            else:
-                # Fallback to first document if no complete data found
-                logger.debug(f"No complete data found for MAC {mac_address}, using first available")
-                return all_documents[0]
-
+            # No data found in any historical index
             return None
 
         except Exception as e:
@@ -1192,6 +1177,42 @@ class OpenSearchConfig:
                         "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
                     }
 
+            # Model Name field-specific: exact match for phone model patterns like CP-8851, DP-9861
+            if field == "Model Name" and isinstance(query, str):
+                qm = query.strip()
+                if qm:
+                    # Support both exact model names and partial model searches
+                    should_clauses = [
+                        {"term": {"Model Name.keyword": qm}},  # Exact match using keyword field
+                        {"term": {"Model Name.keyword": qm.upper()}},  # Uppercase variant
+                        {"term": {"Model Name.keyword": qm.lower()}},  # Lowercase variant
+                        {"match": {"Model Name": qm}},  # Text match for analyzed field
+                    ]
+
+                    # If it looks like a model number (contains digits), add wildcard searches
+                    if re.search(r'\d', qm):
+                        should_clauses.extend([
+                            {"wildcard": {"Model Name.keyword": f"CP-{qm}"}},  # CP-prefix
+                            {"wildcard": {"Model Name.keyword": f"DP-{qm}"}},  # DP-prefix
+                            {"wildcard": {"Model Name.keyword": f"*{qm}*"}},   # Contains
+                        ])
+
+                    return {
+                        "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
+                        "_source": DESIRED_ORDER,
+                        "size": size,
+                        "sort": [
+                            # Exact matches first
+                            {"_script": {"type": "number", "order": "asc", "script": {
+                                "lang": "painless",
+                                "source": "def model = doc.containsKey('Model Name') && doc['Model Name'].size()>0 ? doc['Model Name'].value : ''; return model.equals(params.q) ? 0 : 1;",
+                                "params": {"q": qm}
+                            }}},
+                            {"Creation Date": {"order": "desc"}},
+                            {"_score": {"order": "desc"}}
+                        ]
+                    }
+
             # Field-specific: exact, prefix, wildcard
             # Prefer keyword subfield for exact/prefix/wildcard on certain fields
             eff_field = f"{field}.keyword" if field in ("Line Number", "MAC Address", "MAC Address 2") else field
@@ -1252,6 +1273,29 @@ class OpenSearchConfig:
                             "params": {"f": "netspeed.csv"}
                         }}
                     }]
+                }
+
+            # 4-digit Model pattern (e.g., "8832", "8851") - search ONLY for exact model matches
+            if re.fullmatch(r"\d{4}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {"bool": {"should": [
+                        # ONLY exact model name matches - no text matches to avoid partial matches
+                        {"term": {"Model Name.keyword": f"CP-{qn}"}},
+                        {"term": {"Model Name.keyword": f"DP-{qn}"}}
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        # Exact model matches first
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def model = doc.containsKey('Model Name.keyword') && doc['Model Name.keyword'].size()>0 ? doc['Model Name.keyword'].value : ''; return (model.equals('CP-' + params.q) || model.equals('DP-' + params.q)) ? 0 : 1;",
+                            "params": {"q": qn}
+                        }}},
+                        {"Creation Date": {"order": "desc"}},
+                        {"_score": {"order": "desc"}}
+                    ]
                 }
 
             # Switch Hostname-like (FQDN) exact-only: contains dot and letters (not IP)
@@ -1464,6 +1508,32 @@ class OpenSearchConfig:
                             "params": {"f": "netspeed.csv"}
                         }}
                     }, {"_score": {"order": "desc"}}]
+                }
+
+            # Model-like pattern (e.g., "8851", "7841") - focus search ONLY on exact Model Name matches
+            if re.fullmatch(r"\d{4}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {"bool": {"should": [
+                        # ONLY exact model name matches - no wildcards or other fields
+                        {"term": {"Model Name.keyword": f"CP-{qn}"}},
+                        {"term": {"Model Name.keyword": f"DP-{qn}"}},
+                        # Also add text matches for the exact patterns
+                        {"match": {"Model Name": f"CP-{qn}"}},
+                        {"match": {"Model Name": f"DP-{qn}"}}
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        # Exact model matches first
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def model = doc.containsKey('Model Name.keyword') && doc['Model Name.keyword'].size()>0 ? doc['Model Name.keyword'].value : ''; return (model.equals('CP-' + params.q) || model.equals('DP-' + params.q)) ? 0 : 1;",
+                            "params": {"q": qn}
+                        }}},
+                        {"Creation Date": {"order": "desc"}},
+                        {"_score": {"order": "desc"}}
+                    ]
                 }
 
         # Broad query: allow partials but with exact-first sort
