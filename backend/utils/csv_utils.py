@@ -57,7 +57,7 @@ COLUMN_PATTERNS = {
     "Switch Hostname": re.compile(r'^[A-Za-z0-9\-_.]+\.juwin\.bayern\.de$', re.IGNORECASE),
     "Switch Port": re.compile(r'^(GigabitEthernet|FastEthernet|Ethernet)\d+/\d+/\d+$', re.IGNORECASE),
     "Speed Switch-Port": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?)', re.IGNORECASE),
-    "Speed PC-Port": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE)
+    "Speed PC-Port": re.compile(r'^(Voll|Half|Auto|Abwärts|Aufwärts|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE)
 }
 
 

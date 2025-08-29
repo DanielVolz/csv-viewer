@@ -758,18 +758,19 @@ class OpenSearchConfig:
     def repair_missing_data(self, rows: List[Dict[str, Any]], file_path: str) -> List[Dict[str, Any]]:
         """
         Repair missing data by looking up values in historical indices using MAC address as identifier.
-        MAC address is used as primary identifier since it remains constant.
-        All missing fields are repaired with data from historical indices.
+
+        DISABLED: This system causes CSV corruption by modifying data structures without updating
+        the source CSV file, leading to field misalignment and corrupted output.
 
         Args:
             rows: List of CSV row dictionaries from current file
             file_path: Path to current CSV file (to exclude from historical search)
 
         Returns:
-            List[Dict[str, Any]]: Repaired rows with missing data filled from historical indices
+            List[Dict[str, Any]]: Original rows unchanged (repair disabled)
         """
-        print(f"[DATA REPAIR] Starting data repair for file: {file_path}")
-        logger.warning(f"DATA REPAIR: Starting repair for {file_path} with {len(rows)} rows")
+        logger.info(f"DATA REPAIR: DISABLED - Skipping repair for {file_path} to prevent CSV corruption")
+        return rows  # Return original rows unchanged
 
         try:
             # Get current file name to exclude it from historical search
@@ -2284,51 +2285,21 @@ class OpenSearchConfig:
         Repair missing data in the current netspeed.csv file AFTER all files have been indexed.
         This ensures historical indices are available for data lookup during repair.
 
+        DISABLED: This system causes CSV corruption by creating inconsistencies between
+        the CSV file and OpenSearch index. It repairs the index but not the CSV file.
+
         Args:
             current_file_path: Path to the current netspeed.csv file
 
         Returns:
             Dict[str, Any]: Repair results summary
         """
-        try:
-            print(f"[POST-INDEX REPAIR] Starting data repair for current file: {current_file_path}")
-            logger.warning(f"POST-INDEX REPAIR: Starting repair for {current_file_path}")
-
-            # Check if current file exists
-            if not Path(current_file_path).exists():
-                logger.warning(f"Current file does not exist: {current_file_path}")
-                return {"success": False, "message": "Current file not found"}
-
-            # Read current file data
-            _, rows = read_csv_file(current_file_path)
-            original_count = len(rows)
-
-            # Apply data repair
-            repaired_rows = self.repair_missing_data(rows, current_file_path)
-
-            if len(repaired_rows) != original_count:
-                logger.warning(f"Row count mismatch after repair: {original_count} -> {len(repaired_rows)}")
-                return {"success": False, "message": "Row count mismatch during repair"}
-
-            # Re-index the current file with repaired data
-            success, count = self._reindex_file_with_repaired_data(current_file_path, repaired_rows)
-
-            if success:
-                print(f"[POST-INDEX REPAIR] Successfully re-indexed {count} documents with repaired data")
-                logger.warning(f"POST-INDEX REPAIR: Successfully re-indexed {count} documents")
-                return {
-                    "success": True,
-                    "message": f"Successfully repaired and re-indexed {count} documents",
-                    "documents_repaired": count
-                }
-            else:
-                logger.error("Failed to re-index repaired data")
-                return {"success": False, "message": "Failed to re-index repaired data"}
-
-        except Exception as e:
-            print(f"[POST-INDEX REPAIR] ERROR: {e}")
-            logger.error(f"Post-index data repair failed: {e}")
-            return {"success": False, "message": str(e)}
+        logger.info(f"POST-INDEX REPAIR: DISABLED - Skipping data repair for {current_file_path}")
+        return {
+            "success": True,
+            "message": "Data repair disabled to prevent CSV corruption",
+            "documents_repaired": 0
+        }
 
     def _reindex_file_with_repaired_data(self, file_path: str, repaired_rows: List[Dict[str, Any]]) -> Tuple[bool, int]:
         """
