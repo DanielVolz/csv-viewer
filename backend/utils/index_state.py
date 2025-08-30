@@ -117,8 +117,7 @@ def start_active(state: Dict[str, Any], task_id: str, total_files: int) -> None:
         "current_file": None,
         "index": 0,
         "total_files": total_files,
-        "documents_indexed": 0,
-        "last_file_docs": 0
+        "documents_indexed": 0
     }
 
 def update_active(state: Dict[str, Any], **kwargs: Any) -> None:

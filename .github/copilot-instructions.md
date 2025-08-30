@@ -1,43 +1,289 @@
-# CSV Viewer – AI contributor quick guide
+# CSV Viewer AI Coding Instructions
 
-Concise, repo-specific rules to be productive in this project. Prefer exact paths and existing patterns below when adding code.
+## Architecture Overview
 
-## Architecture and flows
-- Full-stack app: React 18 + MUI (frontend), FastAPI (backend), Celery+Redis, OpenSearch. Data dir inside containers: `/app/data`.
-- API base prefix is `/api` (not `/api/v1`), see `backend/main.py` and routers in `backend/api/`.
-- File pipeline: `backend/utils/file_watcher.py` watches `/app/data` and on netspeed changes deletes all `netspeed_*` indices then triggers `tasks.index_all_csv_files`. Cooldown 30s, 2s write settle.
-- Index naming: `netspeed_{sanitized_filename}` (e.g., `netspeed_netspeed_csv`, `netspeed_netspeed_csv_1`). Historical search uses `netspeed_*`.
-- OpenSearch mappings live in `backend/utils/opensearch.py`. If mappings change, you must delete indices and rebuild via `GET /api/search/index/rebuild`.
+This is a dockerized full-stack CSV search application designed for viewing, searching, and managing network data stored in CSV files. It provides real-time search capabilities, file monitoring, and automatic indexing using modern web technologies.
 
-## Run, build, debug
-- Use `./app.sh start dev` for hot reload (frontend mounts `frontend/src,public`; backend mounts `backend/`). Wait ~30s after compose up before further commands.
-- Dev ports via `.env.dev`: `FRONTEND_DEV_PORT`→3000 container, `BACKEND_DEV_PORT`→`BACKEND_PORT` (FastAPI). OpenSearch dev runs with security disabled; `OPENSEARCH_PASSWORD` is optional.
-- Key logs/health: `./app.sh status`, `docker compose -f docker-compose.dev.yml logs -f backend|frontend|opensearch`, `curl :9200/_cluster/health`.
+### Primary Use Case
+- View and search CSV files containing network device information (IP addresses, MAC addresses, switch configurations, etc.)
+- Monitor file changes and automatically reindex data
+- Provide historical file search capabilities
+- Download and preview CSV data through a web interface
 
-## Data and CSV specifics
-- Files: `netspeed.csv` (current), `netspeed.csv.N` (history), `netspeed.csv_bak` (backup). Indexing order is current first, then all others; see `tasks/index_all_csv_files`.
-- CSV formats: old(11 cols) and new(14 cols) auto-detected in `backend/utils/csv_utils.py`. Keep headers and desired column order from `DESIRED_ORDER`.
+### Key Components
+- **Frontend**: React 18 + Material-UI (MUI) 6, served on port 3000
+- **Backend**: FastAPI + Pydantic + Uvicorn, served on port 8000
+- **Search**: OpenSearch cluster on port 9200
+- **Queue**: Redis for Celery task management on port 6379
+- **File Monitoring**: Watchdog monitors `/app/data` for CSV changes
 
-## APIs to know (FastAPI)
-- Files: `/api/files/`, `/api/files/netspeed_info`, `/api/files/preview?limit=&filename=`, `/api/files/reindex`, `/api/files/reload_celery`.
-- Search: `/api/search/?query=&field=&include_historical=`, `/api/search/index/all`, `/api/search/index/status/{task_id}`, `/api/search/index/rebuild`.
-- Stats: `/api/stats/current`, `/api/stats/cities/debug`.
-- Search work runs via Celery (`tasks.search_opensearch`) and is awaited with a short timeout; return shape includes `headers`, `data`, `took_ms`.
+## Development Workflow
 
-## Frontend conventions
-- Axios uses relative paths (e.g., `/api/search/`), see `frontend/src/utils/apiConfig.js`.
-- Hooks in `frontend/src/hooks/` expose `{ data, loading, error }` patterns (see `useSearchCSV.js`, `useFilePreview.js`, `useFiles.js`). Debounce search 1s.
-- Components to mirror: `CSVSearch.js`, `FileTable.js`, `FilePreview.js`, `IndexingProgress.js`.
+### Starting the Application
+```bash
+# Development mode with hot reload
+./app.sh start dev
 
-## Testing and commits
-- Backend tests live in `tests/backend`; run with `python -m pytest tests/backend`. Tests are designed to run without live OpenSearch.
-- Local Git hook `.git/hooks/pre-commit` auto-fixes whitespace/newlines, then runs backend tests and (optionally) frontend tests. Set `SKIP_FRONTEND_TESTS=1` to skip Jest in commits.
-- The VS Code task “Commit with tests” calls `scripts/commit-with-tests.sh` which is deprecated and exits 1. Don’t use it; commit normally (hook runs tests).
+# Production mode (AMD64/ARM)
+./app.sh start amd64
+./app.sh stop
+```
 
-## Pitfalls and tips
-- Don’t introduce `/api/v1` paths; `API_V1_STR` is unused. Keep routes under `/api`.
-- When changing mappings or index naming, call `/api/search/index/rebuild` to drop `netspeed_*` and re-index.
-- Always use absolute `/app/data` inside backend; in dev, host path is mounted from `CSV_FILES_DIR`.
-- Pagination/limits are primarily client-side; keep backend responses stable: `{success, message, headers, data, ...}`.
+**Critical**: After `docker-compose up`, wait 30 seconds before running additional terminal commands to avoid canceling the startup process.
 
-Key files: `backend/api/*.py`, `backend/tasks/tasks.py`, `backend/utils/{opensearch.py,file_watcher.py,csv_utils.py,index_state.py}`, `backend/models/file.py`, `frontend/src/hooks/*`, `frontend/src/components/*`, `docker-compose*.yml`, `app.sh`.
+### Development Environment
+- Uses dockerized dev environment - no need to restart on code changes
+- Frontend: Volume mounts `/src` and `/public` for hot reload
+- Backend: Volume mounts entire `/backend` directory with uvicorn reload
+- Both services auto-restart on file changes
+
+### Critical Port Information
+- **Frontend Dev**: Port 5000 (FRONTEND_DEV_PORT in .env.dev) - NOT 3000!
+- **Backend Dev**: Port 8000 (BACKEND_DEV_PORT in .env.dev)
+- **OpenSearch**: Port 9200
+- **Redis**: Port 6379
+- Frontend container internally runs on port 3000, but is exposed on port 5000 in development
+
+### Testing Endpoints
+Use `curl` instead of browser for endpoint validation:
+```bash
+# Health check
+curl http://localhost:8000/api/files/
+
+# Search test
+curl "http://localhost:8000/api/search/?query=test&include_historical=true"
+
+# Location statistics (requires query parameter)
+curl "http://localhost:8000/api/stats/fast/by_location?q=ABX01"
+
+# OpenSearch debugging
+curl -X GET "localhost:9200/_cluster/health"
+curl -X GET "localhost:9200/_cat/indices"
+
+# Direct OpenSearch document inspection
+curl -X GET "localhost:9200/stats_netspeed_loc/_search" -H 'Content-Type: application/json' -d '{"query": {"term": {"key": "ABX01"}}, "size": 1}'
+```
+
+## Project-Specific Patterns
+
+### File Naming Convention
+- `netspeed.csv` - Current/active file (always indexed first)
+- `netspeed.csv.0`, `netspeed.csv.1` - Historical files
+- `netspeed.csv_bak` - Backup files
+
+### CSV Format Detection
+The system auto-detects two CSV formats:
+- **Old format**: 11 columns
+- **New format**: 14 columns
+
+Handle both in `utils/csv_utils.py` with format detection logic.
+
+### OpenSearch Index Management
+- Index naming: `netspeed_{sanitized_filename}`
+- Current file index: `netspeed_netspeed_csv`
+- Historical search queries across all `netspeed_*` indices
+- Auto-cleanup of old indices when files update
+
+### Celery Task Patterns
+Tasks are defined in `backend/tasks/tasks.py`:
+```python
+@app.task(name='tasks.index_csv')
+def index_csv(file_path: str) -> dict:
+    # Always return structured dict with status/message/count
+```
+
+### React Hook Patterns
+Custom hooks in `frontend/src/hooks/` follow this structure:
+```javascript
+function useSearchCSV() {
+  // State management with loading/error/data pattern
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Return object with functions and state
+  return { searchAll, results, loading, error };
+}
+```
+
+### File Watcher Integration
+The `utils/file_watcher.py` automatically triggers reindexing:
+- Monitors `/app/data` directory
+- Triggers cleanup of existing indices before reindexing
+- Handles both file creation and modification events
+- Waits 2 seconds after modification to ensure file is completely written
+
+### Key API Endpoints
+**Files API** (`api/files.py`):
+- `GET /api/files/` - List all CSV files with metadata
+- `GET /api/files/netspeed_info` - Get current file information
+- `GET /api/files/preview` - Preview CSV data with pagination
+- `GET /api/files/download/{filename}` - Download specific files
+- `POST /api/files/reindex` - Trigger manual reindexing
+
+**Search API** (`api/search.py`):
+- `GET /api/search/` - Search across CSV files using OpenSearch
+- `GET /api/search/index/all` - Trigger background indexing
+- `GET /api/search/index/status/{task_id}` - Check indexing status
+
+**Statistics API** (`api/stats.py`):
+- `GET /api/stats/current` - Get current file statistics from OpenSearch snapshots
+- `GET /api/stats/fast/by_location?q={location}` - Get location-specific statistics with VLAN usage, switches, and KEM phones
+- `GET /api/stats/locations` - List all available locations
+- **CRITICAL**: Location stats endpoints require `q` parameter, will return 422 error if missing
+
+## Configuration Management
+
+### Environment Variables
+Core settings in `.env`:
+```bash
+CSV_FILES_DIR=/app/data  # Always use absolute path
+FRONTEND_DEV_PORT=3001   # Dev port differs from prod
+BACKEND_PORT=8000
+OPENSEARCH_PORT=9200
+OPENSEARCH_TRANSPORT_PORT=9300
+OPENSEARCH_DASHBOARDS_PORT=5601
+OPENSEARCH_INITIAL_ADMIN_PASSWORD=your-secure-password
+```
+
+### Multi-Architecture Support
+- `docker-compose.yml` - AMD64 production
+- `docker-compose.arm.yml` - ARM64 production
+- `docker-compose.dev.yml` - Development (architecture-agnostic)
+
+### Settings Pattern
+Backend uses Pydantic BaseSettings in `config.py`:
+```python
+class Settings(BaseSettings):
+    CSV_FILES_DIR: str = "/app/data"
+    OPENSEARCH_URL: str = "http://opensearch:{OPENSEARCH_PORT}"
+```
+
+## Testing Strategy
+
+### Backend Tests
+Located in `tests/backend/`:
+- Use pytest with fixtures in `conftest.py`
+- Mock external dependencies (OpenSearch, Redis)
+- Run with: `python -m pytest tests/backend`
+
+### Frontend Tests
+Located in component `__tests__/` directories:
+- Use Jest + React Testing Library
+- Mock all API calls
+- Run with: `npm test` in frontend directory
+
+## Key Integration Points
+
+### API Communication
+- Frontend uses axios with relative URLs (`/api/search/`)
+- Backend serves API on `/api/` prefix
+- CORS configured for development origins
+
+### Search Query Flow
+1. Frontend debounces search input (1 second delay)
+2. API calls `GET /api/search/` with query params
+3. Backend queues Celery task for OpenSearch query
+4. Results returned with pagination metadata
+
+### File Processing Pipeline
+1. File watcher detects CSV changes
+2. Triggers `index_csv` Celery task
+3. CSV parsed with delimiter/format detection
+4. Bulk indexed to OpenSearch (1000-doc chunks)
+5. Frontend search reflects new data immediately
+
+## Common Gotchas
+
+- Never restart the app during development - use volume mounts for hot reload
+- Always use absolute paths for file operations (`/app/data/`)
+- OpenSearch field mappings are critical - defined in `utils/opensearch.py`
+- Celery tasks must return structured dicts for proper error handling
+- Frontend pagination expects backend to return `totalItems` and `totalPages`
+
+## Critical Debugging Patterns
+
+### Location Statistics Enhancement Issues
+When adding new fields to location statistics (like VLAN usage, switches, KEM phones):
+
+1. **Data Collection**: Enhance `location_details` collection in `tasks/tasks.py` `index_csv()` function
+2. **Document Creation**: Add new fields to `loc_docs.append()` dictionary in same function
+3. **OpenSearch Persistence**: **CRITICAL** - Update `index_stats_location_snapshots()` in `utils/opensearch.py` to include new fields in the `body` dictionary
+4. **API Response**: Fields will automatically appear in `/api/stats/fast/by_location` responses
+
+**Common Error**: New fields collected in `location_details` but not persisting to OpenSearch because `index_stats_location_snapshots()` function doesn't include them in the `body` dictionary.
+
+### Data Source Confusion
+- **Container Path**: Data files are mounted as `/app/data` inside container
+- **Host Path**: Controlled by `CSV_FILES_DIR` environment variable in `.env.dev`
+- **Volume Mount**: `${CSV_FILES_DIR}:/app/data` in `docker-compose.dev.yml`
+- **Never assume data location** - always check volume mounts and environment variables
+
+### OpenSearch Index Management
+- Location statistics stored in `stats_netspeed_loc` index
+- Document ID format: `{file}:{date}:{location_key}`
+- Test documents can interfere with real data queries
+- Use `delete_by_query` to clean test data before production queries
+
+## Critical Lessons Learned
+
+### Port Configuration Errors
+- **NEVER assume frontend runs on port 3000 in development**
+- Frontend development port is configured as `FRONTEND_DEV_PORT=5000` in `.env.dev`
+- Container internally runs on port 3000, but host mapping is to port 5000
+- Always check `.env.dev` for actual port configurations
+
+### Volume Mount Issues
+- Real data location is controlled by `CSV_FILES_DIR` in environment files
+- Do not assume `/app/data` contains test data - it might be production data
+- Always verify data source with: `docker exec -it csv-viewer-backend-dev ls -la /app/data/`
+- Volume mount: `${CSV_FILES_DIR}:/app/data` means host `CSV_FILES_DIR` maps to container `/app/data`
+
+### OpenSearch Field Addition Workflow
+**Critical 3-Step Process** for adding new fields to location statistics:
+1. **Data Collection**: Add field collection logic in `tasks/tasks.py` `location_details` dictionary
+2. **Document Structure**: Include new fields in `loc_docs.append()` call
+3. **Persistence Fix**: **MUST** update `index_stats_location_snapshots()` in `utils/opensearch.py` to include new fields in `body` dictionary
+
+**Most Common Error**: Steps 1-2 completed but step 3 forgotten, causing data to be collected but never saved to OpenSearch.
+
+### API Endpoint Patterns
+- Location statistics endpoints **require** `q` parameter (will return 422 if missing)
+- Use `/api/stats/fast/by_location` instead of deprecated `/api/stats/by_location`
+- Always test with `curl` not browser to avoid caching issues
+- OpenSearch document queries should target specific indices like `stats_netspeed_loc`
+
+### Development Debugging Strategy
+1. **Verify data collection** with direct Python execution in container
+2. **Check OpenSearch document structure** with direct curl queries
+3. **Test API endpoint** with curl using query parameters
+4. **Validate volume mounts** and environment variables when data seems wrong
+
+## Useful Debugging Commands
+
+```bash
+# Check service health
+./app.sh status
+
+# View logs
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f opensearch
+
+# OpenSearch debugging
+curl -X GET "localhost:9200/_cluster/health"
+curl -X GET "localhost:9200/_cat/indices"
+
+# Celery monitoring
+docker exec -it csv-viewer-backend celery -A tasks.tasks inspect active
+
+# Location statistics debugging
+curl -X GET "localhost:9200/stats_netspeed_loc/_search" -H 'Content-Type: application/json' -d '{"query": {"term": {"key": "ABX01"}}, "size": 1}'
+
+# Test single file indexing (development)
+docker exec -it csv-viewer-backend-dev python -c "from tasks.tasks import index_csv; print(index_csv('/app/data/netspeed.csv'))"
+
+# Check environment variables and volume mounts
+docker exec -it csv-viewer-backend-dev env | grep CSV_FILES_DIR
+docker exec -it csv-viewer-backend-dev ls -la /app/data/
+```

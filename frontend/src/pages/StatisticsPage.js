@@ -1,9 +1,9 @@
 import React from 'react';
-import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button } from '@mui/material';
+import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar } from '@mui/material';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import Terminal from '@mui/icons-material/Terminal';
+import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -20,7 +20,23 @@ function isMacLike(value) {
   return sep6.test(s) || dotted.test(s) || plain12.test(s);
 }
 
-function StatCard({ title, value, loading, tone = 'primary' }) {
+// Helper: determine if location is JVA (correctional facility) based on location code pattern
+function isJVALocation(locationCode) {
+  if (!locationCode) return false;
+  const code = String(locationCode).trim();
+  // JVA locations end with 50 or 51 (e.g., SRX50, SRX51)
+  return /50$|51$/.test(code);
+}
+
+// Helper: determine if location is Justice institution
+function isJusticeLocation(locationCode) {
+  if (!locationCode) return false;
+  // Justice locations are those that are not JVA
+  return !isJVALocation(locationCode);
+}
+
+// Optimized StatCard with React.memo
+const StatCard = React.memo(function StatCard({ title, value, loading, tone = 'primary' }) {
   return (
     <Card
       elevation={0}
@@ -43,7 +59,7 @@ function StatCard({ title, value, loading, tone = 'primary' }) {
       </CardContent>
     </Card>
   );
-}
+});
 
 // Helper: copy to clipboard
 const copyToClipboard = async (text) => {
@@ -97,13 +113,8 @@ const showCopyToast = (label, value, opts = {}) => {
   );
 };
 
-export default function StatisticsPage() {
-  const { sshUsername, navigateToSettings, getStatisticsPrefs, saveStatisticsPrefs } = useSettings?.() || { sshUsername: '' };
-  const makeSshUrl = (host) => {
-    if (!host) return null;
-    const userPart = sshUsername ? `${encodeURIComponent(sshUsername)}@` : '';
-    return `ssh://${userPart}${encodeURIComponent(host)}`;
-  };
+const StatisticsPage = React.memo(function StatisticsPage() {
+  const { sshUsername, navigateToSettings, getStatisticsPrefs, saveStatisticsPrefs } = useSettings?.() || {};
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
   const [data, setData] = React.useState({
@@ -115,17 +126,34 @@ export default function StatisticsPage() {
     phonesByModel: [],
     cities: [],
   });
-  // Map 3-letter city code to human name from stats payload
-  const cityNameByCode3 = React.useMemo(() => {
-    const map = {};
-    try {
-      (data?.cities || []).forEach(({ code, name }) => {
-        const k = String(code || '').slice(0, 3).toUpperCase();
-        if (k) map[k] = name || k;
-      });
-    } catch { }
-    return map;
-  }, [data?.cities]);
+
+  // Separate state for city information (loaded independently)
+  const [cityNameByCode3, setCityNameByCode3] = React.useState({});
+
+  // Load city information independently
+  React.useEffect(() => {
+    let abort = false;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const r = await fetch('/api/stats/fast/cities', { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = await r.json();
+        if (abort) return;
+
+        if (json.success && json.cityMap) {
+          setCityNameByCode3(json.cityMap);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        console.warn('Failed to load city data:', e);
+      }
+    })();
+
+    return () => { abort = true; controller.abort(); };
+  }, []);
+
   const [fileMeta, setFileMeta] = React.useState(null);
   const statsHydratedRef = React.useRef(false);
   // Timeline state (configurable days)
@@ -190,9 +218,11 @@ export default function StatisticsPage() {
   // Location-specific state
   const [locInput, setLocInput] = React.useState('');
   const [locOptions, setLocOptions] = React.useState([]);
-  const [locLoading, setLocLoading] = React.useState(false);
+  const [allLocOptions, setAllLocOptions] = React.useState([]); // Cache all locations
   const [locError, setLocError] = React.useState(null);
   const [locSelected, setLocSelected] = React.useState(null);
+  const [debouncedLocSelected, setDebouncedLocSelected] = React.useState(null); // Debounced version for API calls
+  const [snackbar, setSnackbar] = React.useState({ open: false, message: '' });
   const [locStats, setLocStats] = React.useState({
     query: '',
     mode: '',
@@ -205,7 +235,6 @@ export default function StatisticsPage() {
     kemPhones: [],
   });
   const [locStatsLoading, setLocStatsLoading] = React.useState(false);
-  const [locOpen, setLocOpen] = React.useState(false);
 
   // Switch Port Cache für Statistics Switches
   const [switchPortCache, setSwitchPortCache] = React.useState({});
@@ -213,25 +242,196 @@ export default function StatisticsPage() {
   // Location-specific timeline state
   const [locTimeline, setLocTimeline] = React.useState({ loading: false, error: null, series: [] });
   const locTimelineLoadedKeyRef = React.useRef('');
-  const locInputUpper = (locInput || '').trim().toUpperCase();
-  const isThreeLetterPrefix = /^[A-Z]{3}$/.test(locInputUpper);
-  // Inject synthetic option for prefix mode at the top
-  const autoOptions = React.useMemo(() => {
-    if (isThreeLetterPrefix) return [locInputUpper, ...(locOptions || [])];
-    return locOptions || [];
-  }, [isThreeLetterPrefix, locInputUpper, locOptions]);
-  const getOptionLabel = (opt) => {
-    const s = String(opt || '').toUpperCase();
-    if (/^[A-Z]{3}$/.test(s)) {
-      const nm = cityNameByCode3[s];
-      return nm ? `All locations for ${s} (${nm})` : `All locations for ${s}`;
+
+  // Local input state for immediate UI response, debounced for filtering
+  const [localInput, setLocalInput] = React.useState('');
+  const [fieldFocused, setFieldFocused] = React.useState(false);
+  const [isSearching, setIsSearching] = React.useState(false);
+  const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(-1); // For keyboard navigation
+
+  // Simple handlers for the new TextField approach
+  const handleLocationInputChange = React.useCallback((e) => {
+    const val = e.target.value;
+    setLocalInput(val); // Update local state immediately (no lag)
+    setSelectedOptionIndex(-1); // Reset keyboard selection
+
+    // Clear selection if input is empty
+    if (!val || val.trim() === '') {
+      setLocSelected(null);
+      setIsSearching(false);
+    } else if (val.length >= 2) {
+      setIsSearching(true); // Start search indicator
     }
-    if (/^[A-Z]{3}[0-9]{2}$/.test(s)) {
-      const nm = cityNameByCode3[s.slice(0, 3)];
-      return nm ? `${s} (${nm})` : s;
+  }, []);
+
+  // Debounce the actual locInput update for filtering (prevents lag)
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setLocInput(localInput);
+      setIsSearching(false); // Search completed
+    }, 300); // Increased to 300ms to reduce search frequency
+
+    return () => clearTimeout(timer);
+  }, [localInput]);
+
+  // Reset selection when user starts typing (if input doesn't match selected location)
+  React.useEffect(() => {
+    if (locSelected && localInput) {
+      const cityCode = locSelected.slice(0, 3);
+      const cityName = cityNameByCode3[cityCode];
+      const expectedDisplay = cityName ? `${locSelected} (${cityName})` : locSelected;
+
+      // If user is typing something different than the expected display, clear selection
+      if (localInput !== expectedDisplay && localInput !== locSelected) {
+        setLocSelected(null);
+      }
     }
-    return s;
-  };
+  }, [localInput, locSelected, cityNameByCode3]);
+
+  const handleLocationFocus = React.useCallback(() => {
+    setFieldFocused(true);
+    setSelectedOptionIndex(-1); // Reset keyboard selection when focusing
+  }, []);
+
+  const handleLocationBlur = React.useCallback((e) => {
+    // Delay hiding dropdown to allow clicking on options
+    setTimeout(() => setFieldFocused(false), 150);
+
+    const val = (e.target.value || '').trim().toUpperCase();
+    if (val && /^[A-Z]{3}[0-9]{2}$/.test(val) && (!Array.isArray(locOptions) || !locOptions.includes(val))) {
+      // Valid format but location doesn't exist
+      setSnackbar({
+        open: true,
+        message: `Location "${val}" does not exist. Please select from available locations.`
+      });
+      // Clear the input field
+      setLocInput('');
+    }
+  }, [locOptions]);
+
+  const handleLocationKeyDown = React.useCallback((e) => {
+    const visibleOptions = locOptions.slice(0, 50);
+    const hasCityHint = localInput.length === 3 && locOptions.length > 0 && cityNameByCode3[localInput.toUpperCase()];
+    const totalOptions = hasCityHint ? visibleOptions.length + 1 : visibleOptions.length; // +1 for city hint
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedOptionIndex(prev => {
+        const next = prev < totalOptions - 1 ? prev + 1 : 0;
+        return next;
+      });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedOptionIndex(prev => {
+        const next = prev > 0 ? prev - 1 : totalOptions - 1;
+        return next;
+      });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+
+      if (selectedOptionIndex >= 0 && selectedOptionIndex < totalOptions) {
+        if (hasCityHint && selectedOptionIndex === 0) {
+          // Select city search (first option)
+          const cityCode = localInput.toUpperCase();
+          const cityName = cityNameByCode3[cityCode];
+          setLocSelected(cityCode);
+          setLocalInput(`${cityCode} (${cityName})`);
+          setLocInput(cityCode);
+          setFieldFocused(false);
+          setSelectedOptionIndex(-1);
+        } else {
+          // Select specific location option
+          const optionIndex = hasCityHint ? selectedOptionIndex - 1 : selectedOptionIndex;
+          if (optionIndex >= 0 && optionIndex < visibleOptions.length) {
+            const selectedOption = visibleOptions[optionIndex];
+            const cityCode = selectedOption.slice(0, 3);
+            const cityName = cityNameByCode3[cityCode];
+            const displayValue = cityName ? `${selectedOption} (${cityName})` : selectedOption;
+
+            setLocSelected(selectedOption);
+            setLocalInput(displayValue);
+            setLocInput(selectedOption);
+            setFieldFocused(false);
+            setSelectedOptionIndex(-1);
+          }
+        }
+      } else {
+        // Fallback to original logic
+        const val = (e.target.value || '').trim();
+        const upperVal = val.toUpperCase();
+        if (Array.isArray(locOptions) && locOptions.includes(upperVal)) {
+          const cityCode = upperVal.slice(0, 3);
+          const cityName = cityNameByCode3[cityCode];
+          const displayValue = cityName ? `${upperVal} (${cityName})` : upperVal;
+
+          setLocSelected(upperVal);
+          setLocalInput(displayValue);
+          setLocInput(upperVal);
+        } else if (upperVal && /^[A-Z]{3}[0-9]{2}$/.test(upperVal)) {
+          setSnackbar({
+            open: true,
+            message: `Location "${upperVal}" does not exist. Please select from available locations.`
+          });
+          setLocalInput('');
+          setLocInput('');
+        }
+      }
+
+      if (e.target && typeof e.target.blur === 'function') {
+        e.target.blur();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setFieldFocused(false);
+      setSelectedOptionIndex(-1);
+      if (e.target && typeof e.target.blur === 'function') {
+        e.target.blur();
+      }
+    }
+  }, [locOptions, selectedOptionIndex, cityNameByCode3, localInput]);
+
+  // Helper function to select a location and show formatted value in input
+  const selectLocation = React.useCallback((option) => {
+    const cityCode = option.slice(0, 3);
+    const cityName = cityNameByCode3[cityCode];
+    const displayValue = cityName ? `${option} (${cityName})` : option;
+
+    setLocSelected(option);
+    setLocalInput(displayValue); // Show formatted value in input
+    setLocInput(option); // But use raw location code for API
+    setFieldFocused(false);
+    setSelectedOptionIndex(-1);
+  }, [cityNameByCode3]);
+
+  const handleCityNameChange = React.useCallback((_, value) => {
+    if (value) {
+      // Find location code for this city name
+      const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
+        name.toLowerCase() === value.toLowerCase()
+      )?.[0];
+
+      if (cityCode) {
+        setLocSelected(cityCode);
+        setLocInput(cityCode);
+      }
+    }
+  }, [cityNameByCode3]);
+
+  const filterCityOptions = React.useCallback((options, { inputValue }) => {
+    // If no input, show fewer cities
+    if (!inputValue.trim()) {
+      return options.slice(0, 30);
+    }
+    // Otherwise filter by input
+    const filtered = options.filter(option =>
+      option.toLowerCase().includes(inputValue.toLowerCase())
+    );
+    return filtered.slice(0, 50); // Limit for performance
+  }, []);
+
+  const handleSnackbarClose = React.useCallback(() => {
+    setSnackbar(prev => ({ ...prev, open: false }));
+  }, []);
 
   React.useEffect(() => {
     // Rehydrate saved statistics preferences on first render
@@ -253,7 +453,7 @@ export default function StatisticsPage() {
     (async () => {
       try {
         setLoading(true);
-        const r = await fetch('/api/stats/current', { signal: controller.signal });
+        const r = await fetch('/api/stats/fast/current', { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (abort) return;
@@ -460,35 +660,86 @@ export default function StatisticsPage() {
     }
   }, []);
 
-  // Debounced fetch for location options
+  // Load ALL locations once at startup
   React.useEffect(() => {
     let abort = false;
     const controller = new AbortController();
-    const h = setTimeout(async () => {
+
+    (async () => {
       try {
-        setLocLoading(true);
         setLocError(null);
-        const q = encodeURIComponent(locInput.trim());
-        // Request all locations (no server-side limit) so the dropdown can show everything with scroll
-        const r = await fetch(`/api/stats/locations?q=${q}&limit=0`, { signal: controller.signal });
+        // Use FAST OpenSearch-based API - now working!
+        const r = await fetch(`/api/stats/fast/locations?limit=1000`, { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (abort) return;
         const options = (json?.options || []).filter((o) => /^[A-Z]{3}[0-9]{2}$/.test(String(o)));
-        setLocOptions(options);
+        setAllLocOptions(options);
+        setLocOptions(options.slice(0, 50)); // Show first 50 initially (more results)
       } catch (e) {
         if (e.name === 'AbortError') return;
         setLocError('Failed to load locations');
-      } finally {
-        if (!abort) setLocLoading(false);
       }
-    }, 350);
-    return () => { abort = true; controller.abort(); clearTimeout(h); };
-  }, [locInput]);
+    })();
 
-  // Fetch stats for selected location
+    return () => { abort = true; controller.abort(); };
+  }, []); // Only run once on mount
+
+  // Fast local filtering of cached locations (NO DEBOUNCING since localInput is already debounced)
   React.useEffect(() => {
-    if (!locSelected) {
+    if (!allLocOptions.length) return;
+
+    // No additional debouncing needed since localInput -> locInput is already debounced
+    const input = locInput.trim().toUpperCase();
+    if (!input) {
+      setLocOptions(allLocOptions.slice(0, 50)); // Show more results when empty
+      return;
+    }
+
+    // Start filtering at 2 characters (e.g., "MX" to show "MXX09", "MXX17")
+    if (input.length < 2) {
+      setLocOptions([]);
+      return;
+    }
+
+    // Optimized filtering with prioritized results (exact matches first)
+    const exactMatches = [];
+    const startsWithMatches = [];
+    const containsMatches = [];
+
+    for (let i = 0; i < allLocOptions.length; i++) {
+      const option = allLocOptions[i].toUpperCase();
+      if (option === input) {
+        exactMatches.push(allLocOptions[i]);
+      } else if (option.startsWith(input)) {
+        startsWithMatches.push(allLocOptions[i]);
+      } else if (option.includes(input)) {
+        containsMatches.push(allLocOptions[i]);
+      }
+
+      // Limit total results for performance
+      if (exactMatches.length + startsWithMatches.length + containsMatches.length >= 100) {
+        break;
+      }
+    }
+
+    // Combine results with priority: exact > starts with > contains
+    const filtered = [...exactMatches, ...startsWithMatches, ...containsMatches].slice(0, 100);
+    setLocOptions(filtered);
+  }, [locInput, allLocOptions]);
+
+  // Debounce locSelected changes to prevent API spam while typing
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedLocSelected(locSelected);
+    }, 500); // 500ms delay after selection stops changing
+
+    return () => clearTimeout(timer);
+  }, [locSelected]);
+
+  // Fetch stats for selected location (use debounced version)
+  React.useEffect(() => {
+    if (!debouncedLocSelected) {
       // Reset stats when no location is selected
       setLocStats({
         query: '',
@@ -511,15 +762,15 @@ export default function StatisticsPage() {
       try {
         setLocStatsLoading(true);
         setLocError(null);
-        const q = encodeURIComponent(locSelected);
-        const r = await fetch(`/api/stats/by_location?q=${q}`, { signal: controller.signal });
+        const q = encodeURIComponent(debouncedLocSelected);
+        const r = await fetch(`/api/stats/fast/by_location?q=${q}`, { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (abort) return;
         if (json.success) {
           setLocStats(json.data || {});
         } else {
-          setLocStats({ query: locSelected, mode: '', totalPhones: 0, totalSwitches: 0, phonesWithKEM: 0, phonesByModel: [], vlanUsage: [], switches: [], kemPhones: [] });
+          setLocStats({ query: debouncedLocSelected, mode: '', totalPhones: 0, totalSwitches: 0, phonesWithKEM: 0, phonesByModel: [], vlanUsage: [], switches: [], kemPhones: [] });
           setLocError(json.message || 'No statistics for this location');
         }
       } catch (e) {
@@ -530,7 +781,7 @@ export default function StatisticsPage() {
       }
     })();
     return () => { abort = true; controller.abort(); };
-  }, [locSelected]);
+  }, [debouncedLocSelected]);
 
   // If timeline already loaded, refetch when days change
   React.useEffect(() => {
@@ -561,20 +812,20 @@ export default function StatisticsPage() {
 
   // Fetch per-location timeline whenever the selected location changes
   React.useEffect(() => {
-    if (!locSelected) {
+    if (!debouncedLocSelected) {
       // Reset timeline when no location is selected
       setLocTimeline({ loading: false, error: null, series: [] });
       locTimelineLoadedKeyRef.current = '';
       return;
     }
-    const key = String(locSelected).toUpperCase();
+    const key = String(debouncedLocSelected).toUpperCase();
     if (locTimelineLoadedKeyRef.current === key && (locTimeline.series || []).length) return;
     let abort = false;
     const controller = new AbortController();
     (async () => {
       try {
         setLocTimeline((t) => ({ ...t, loading: true, error: null }));
-        const r = await fetch(`/api/stats/timeline/by_location?q=${encodeURIComponent(locSelected)}&limit=0`, { signal: controller.signal });
+        const r = await fetch(`/api/stats/timeline/by_location?q=${encodeURIComponent(debouncedLocSelected)}&limit=0`, { signal: controller.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (abort) return;
@@ -591,7 +842,7 @@ export default function StatisticsPage() {
     })();
     return () => { abort = true; controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locSelected]);
+  }, [debouncedLocSelected]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -629,9 +880,9 @@ export default function StatisticsPage() {
             ))}
           </Box>
         ) : (
-          <Grid container spacing={3} sx={{ alignItems: 'stretch' }}>
-            {/* Justice institutions Category */}
-            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column' }}>
+          <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
+            {/* Justice institutions Category - ALWAYS show for global stats */}
+            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
               <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: 'primary.main' }}>
                 Justice institutions (Justiz)
               </Typography>
@@ -673,13 +924,13 @@ export default function StatisticsPage() {
                         View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
                       </Typography>
                     </AccordionSummary>
-                    <AccordionDetails sx={{ pt: 0, minHeight: '400px' }}>
+                    <AccordionDetails sx={{ pt: 0 }}>
                       <List dense>
                         {(data.phonesByModelJustizDetails || []).map((location) => (
                           <ListItem key={`justiz-loc-${location.location}`} sx={{ py: 0.5, px: 0, flexDirection: 'column', alignItems: 'flex-start' }}>
                             <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', mb: 0.5, alignItems: 'center' }}>
                               <Typography variant="body2" fontWeight={600} sx={{ color: 'primary.main' }}>
-                                {location.location} - {location.city}
+                                {location.locationDisplay || location.location}
                               </Typography>
                               <Chip
                                 label={`${location.totalPhones.toLocaleString()} phones`}
@@ -715,8 +966,8 @@ export default function StatisticsPage() {
               </Box>
             </Grid>
 
-            {/* Correctional Facility Category */}
-            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column' }}>
+            {/* Correctional Facility Category - ALWAYS show for global stats */}
+            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
               <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: 'warning.main' }}>
                 Correctional Facility (JVA)
               </Typography>
@@ -758,13 +1009,13 @@ export default function StatisticsPage() {
                         View by Location ({(data.phonesByModelJVADetails || []).length} locations)
                       </Typography>
                     </AccordionSummary>
-                    <AccordionDetails sx={{ pt: 0, minHeight: '400px' }}>
+                    <AccordionDetails sx={{ pt: 0 }}>
                       <List dense>
                         {(data.phonesByModelJVADetails || []).map((location) => (
                           <ListItem key={`jva-loc-${location.location}`} sx={{ py: 0.5, px: 0, flexDirection: 'column', alignItems: 'flex-start' }}>
                             <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', mb: 0.5, alignItems: 'center' }}>
                               <Typography variant="body2" fontWeight={600} sx={{ color: 'warning.main' }}>
-                                {location.location} - {location.city}
+                                {location.locationDisplay || location.location}
                               </Typography>
                               <Chip
                                 label={`${location.totalPhones.toLocaleString()} phones`}
@@ -809,86 +1060,184 @@ export default function StatisticsPage() {
 
         {/* Two search fields side by side */}
         <Grid container spacing={2} sx={{ mb: 2 }}>
-          {/* Location Code Search */}
+          {/* Location Code Search - Simplified for Performance */}
           <Grid item xs={12} md={6}>
-            <Autocomplete
-              options={autoOptions}
-              loading={locLoading}
-              value={locSelected}
-              freeSolo
-              open={locOpen}
-              onOpen={() => setLocOpen(true)}
-              onClose={() => setLocOpen(false)}
-              getOptionLabel={getOptionLabel}
-              // Keep popup size fixed and make options scrollable
-              slotProps={{
-                paper: { sx: { maxHeight: 320, overflowY: 'auto' } },
-                listbox: { sx: { maxHeight: 280, overflowY: 'auto' } },
-              }}
-              ListboxProps={{
-                style: { maxHeight: 280, overflowY: 'auto' },
-              }}
-              onChange={(_, val) => {
-                if (typeof val === 'string') {
-                  const s = val.trim().toUpperCase();
-                  if (/^[A-Z]{3}$/.test(s) || /^[A-Z]{3}[0-9]{2}$/.test(s)) {
-                    setLocSelected(s);
-                  } else if (s === '') {
-                    // Clear selection when field is empty
-                    setLocSelected(null);
-                  }
-                } else {
-                  setLocSelected(val);
+            <Box sx={{ position: 'relative' }}>
+              <TextField
+                label="Search by Location Code"
+                placeholder="Type 2+ letters (MX) or full code (MXX09)"
+                size="small"
+                fullWidth
+                value={localInput}
+                onChange={handleLocationInputChange}
+                onFocus={handleLocationFocus}
+                onBlur={handleLocationBlur}
+                onKeyDown={handleLocationKeyDown}
+                helperText={
+                  isSearching && localInput.length >= 2
+                    ? "Searching..."
+                    : localInput.length > 0 && localInput.length < 2
+                      ? "Type at least 2 characters to search"
+                      : localInput.length >= 2 && allLocOptions.length > 0 && locOptions.length === 0 && !locSelected
+                        ? "No matching locations found"
+                        : ""
                 }
-              }}
-              inputValue={locInput}
-              onInputChange={(_, val) => {
-                setLocInput(val);
-                // Clear selection if input is empty
-                if (!val || val.trim() === '') {
-                  setLocSelected(null);
-                }
-              }}
-              filterOptions={(x) => x} // server-side filtering
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Search by Location Code"
-                  placeholder="Type 3 letters (ABC) or code (ABC01)"
-                  size="small"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      const val = (e.target.value || '').trim().toUpperCase();
-                      if (/^[A-Z]{3}$/.test(val) || /^[A-Z]{3}[0-9]{2}$/.test(val)) {
-                        setLocSelected(val);
-                      } else if (Array.isArray(locOptions) && locOptions.includes(val)) {
-                        setLocSelected(val);
-                      }
-                      setLocOpen(false);
-                      if (e.target && typeof e.target.blur === 'function') {
-                        e.target.blur();
-                      }
-                    }
+                InputProps={{
+                  endAdornment: locSelected && (
+                    <CloseIcon
+                      fontSize="small"
+                      onClick={() => {
+                        setLocSelected(null);
+                        setLocalInput('');
+                        setLocInput('');
+                        setSelectedOptionIndex(-1);
+                      }}
+                      sx={{
+                        cursor: 'pointer',
+                        '&:hover': { color: 'primary.main' }
+                      }}
+                    />
+                  ),
+                }}
+              />
+
+              {/* Modern dropdown list with improved design */}
+              {fieldFocused && locOptions.length > 0 && (
+                <Paper
+                  sx={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    zIndex: 1300,
+                    maxHeight: 320,
+                    overflow: 'hidden',
+                    mt: 0.5,
+                    borderRadius: 2,
+                    border: 1,
+                    borderColor: 'primary.main',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
                   }}
-                />
+                  elevation={0}
+                >
+                  <Box sx={{ maxHeight: 320, overflowY: 'auto' }}>
+                    {/* Show hint for 3-letter city codes as first item */}
+                    {localInput.length === 3 && locOptions.length > 0 && (() => {
+                      const cityCode = localInput.toUpperCase();
+                      const cityName = cityNameByCode3[cityCode];
+                      const isSelected = selectedOptionIndex === 0;
+
+                      if (cityName) {
+                        return (
+                          <Box
+                            onClick={() => {
+                              // Search by city prefix (all locations starting with this code)
+                              setLocSelected(cityCode);
+                              setLocalInput(`${cityCode} (${cityName})`);
+                              setLocInput(cityCode);
+                              setFieldFocused(false);
+                              setSelectedOptionIndex(-1);
+                            }}
+                            sx={{
+                              px: 2,
+                              py: 1.5,
+                              backgroundColor: isSelected ? 'primary.dark' : 'primary.main',
+                              color: 'primary.contrastText',
+                              borderBottom: 1,
+                              borderColor: 'divider',
+                              cursor: 'pointer',
+                              borderLeft: isSelected ? 4 : 0,
+                              borderLeftColor: 'primary.contrastText',
+                              '&:hover': {
+                                backgroundColor: 'primary.dark'
+                              },
+                              transition: 'all 0.2s ease'
+                            }}
+                          >
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              🔍 Search all locations in {cityName}
+                            </Typography>
+                          </Box>
+                        );
+                      }
+                      return null;
+                    })()}
+
+                    {locOptions.slice(0, 50).map((option, index) => {
+                      const cityCode = option.slice(0, 3);
+                      const cityName = cityNameByCode3[cityCode];
+                      const hasCityHint = localInput.length === 3 && cityNameByCode3[localInput.toUpperCase()];
+                      const adjustedIndex = hasCityHint ? index + 1 : index; // Adjust for city hint
+                      const isSelected = adjustedIndex === selectedOptionIndex;
+
+                      return (
+                        <Box
+                          key={option}
+                          onClick={() => selectLocation(option)}
+                          sx={{
+                            px: 2,
+                            py: 1.5,
+                            cursor: 'pointer',
+                            backgroundColor: isSelected ? 'primary.light' : 'transparent',
+                            borderLeft: isSelected ? 4 : 0,
+                            borderLeftColor: 'primary.main',
+                            '&:hover': {
+                              backgroundColor: isSelected ? 'primary.light' : 'action.hover',
+                              borderLeft: 4,
+                              borderLeftColor: 'primary.main'
+                            },
+                            '&:not(:last-child)': {
+                              borderBottom: 1,
+                              borderColor: 'divider'
+                            },
+                            transition: 'all 0.2s ease'
+                          }}
+                        >
+                          <Typography
+                            variant="body1"
+                            sx={{
+                              fontWeight: 600,
+                              color: isSelected ? 'primary.main' : 'text.primary'
+                            }}
+                          >
+                            {option}
+                          </Typography>
+                          {cityName && (
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                color: isSelected ? 'primary.dark' : 'text.secondary',
+                                mt: 0.25
+                              }}
+                            >
+                              📍 {cityName}
+                            </Typography>
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                </Paper>
               )}
-            />
+            </Box>
           </Grid>
 
           {/* City Name Search */}
           <Grid item xs={12} md={6}>
             <Autocomplete
               options={Object.values(cityNameByCode3).sort()}
-              freeSolo
+              freeSolo={false} // Change to false for better performance
+              openOnFocus={false} // Disable auto-open for performance
               // Keep popup size fixed and make options scrollable
               slotProps={{
-                paper: { sx: { maxHeight: 320, overflowY: 'auto' } },
-                listbox: { sx: { maxHeight: 280, overflowY: 'auto' } },
+                paper: { sx: { maxHeight: 200, overflowY: 'auto' } }, // Reduced height
+                listbox: { sx: { maxHeight: 160, overflowY: 'auto' } },
               }}
               ListboxProps={{
-                style: { maxHeight: 280, overflowY: 'auto' },
+                style: { maxHeight: 160, overflowY: 'auto' },
               }}
+              limitTags={5}
+              disableListWrap={true}
               renderInput={(params) => (
                 <TextField
                   {...params}
@@ -897,30 +1246,8 @@ export default function StatisticsPage() {
                   size="small"
                 />
               )}
-              onChange={(_, value) => {
-                if (value) {
-                  // Find location code for this city name
-                  const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
-                    name.toLowerCase() === value.toLowerCase()
-                  )?.[0];
-
-                  if (cityCode) {
-                    setLocSelected(cityCode);
-                    setLocInput(cityCode);
-                  }
-                }
-              }}
-              filterOptions={(options, { inputValue }) => {
-                // If no input, show all cities (but limited by maxHeight)
-                if (!inputValue.trim()) {
-                  return options;
-                }
-                // Otherwise filter by input
-                const filtered = options.filter(option =>
-                  option.toLowerCase().includes(inputValue.toLowerCase())
-                );
-                return filtered;
-              }}
+              onChange={handleCityNameChange}
+              filterOptions={filterCityOptions}
               getOptionLabel={(option) => option}
               renderOption={(props, option) => {
                 // Find the corresponding location code
@@ -947,7 +1274,7 @@ export default function StatisticsPage() {
 
         {locError && (
           <Box sx={{ mb: 2 }}>
-            <Alert severity="info" variant="outlined">{locError}</Alert>
+            <Alert severity="warning" variant="outlined">{locError}</Alert>
           </Box>
         )}
 
@@ -1032,55 +1359,62 @@ export default function StatisticsPage() {
                 </Box>
               ) : (
                 <Box>
-                  {/* Justice institutions (Justiz) */}
-                  <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
-                    Justice institutions (Justiz)
-                  </Typography>
-                  <List dense sx={{ mb: 1 }}>
-                    {(locStats.phonesByModelJustiz || [])
-                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                      .slice(0, 5)
-                      .map(({ model, count }) => (
-                        <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
-                          <ListItemText
-                            primary={
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                <Typography variant="body2" color="text.secondary">{model}</Typography>
-                                <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      ))}
-                    {(locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
-                      <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
-                    )}
-                  </List>
+                  {/* Show only Justice section for Justice locations, only JVA section for JVA locations */}
+                  {(!locSelected || isJusticeLocation(locSelected)) && (
+                    <>
+                      <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
+                        Justice institutions (Justiz)
+                      </Typography>
+                      <List dense sx={{ mb: 1 }}>
+                        {(locStats.phonesByModelJustiz || [])
+                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                          .slice(0, 5)
+                          .map(({ model, count }) => (
+                            <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
+                              <ListItemText
+                                primary={
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                    <Typography variant="body2" color="text.secondary">{model}</Typography>
+                                    <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                                  </Box>
+                                }
+                              />
+                            </ListItem>
+                          ))}
+                        {(locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
+                          <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
+                        )}
+                      </List>
+                    </>
+                  )}
 
-                  {/* Correctional Facility (JVA) */}
-                  <Typography variant="body2" sx={{ fontWeight: 600, color: 'warning.main', mb: 0.5 }}>
-                    Correctional Facility (JVA)
-                  </Typography>
-                  <List dense>
-                    {(locStats.phonesByModelJVA || [])
-                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                      .slice(0, 5)
-                      .map(({ model, count }) => (
-                        <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
-                          <ListItemText
-                            primary={
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                <Typography variant="body2" color="text.secondary">{model}</Typography>
-                                <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      ))}
-                    {(locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
-                      <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
-                    )}
-                  </List>
+                  {(!locSelected || isJVALocation(locSelected)) && (
+                    <>
+                      <Typography variant="body2" sx={{ fontWeight: 600, color: 'warning.main', mb: 0.5 }}>
+                        Correctional Facility (JVA)
+                      </Typography>
+                      <List dense>
+                        {(locStats.phonesByModelJVA || [])
+                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                          .slice(0, 5)
+                          .map(({ model, count }) => (
+                            <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
+                              <ListItemText
+                                primary={
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                    <Typography variant="body2" color="text.secondary">{model}</Typography>
+                                    <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                                  </Box>
+                                }
+                              />
+                            </ListItem>
+                          ))}
+                        {(locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
+                          <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
+                        )}
+                      </List>
+                    </>
+                  )}
                 </Box>
               )}
             </Grid>
@@ -1144,12 +1478,12 @@ export default function StatisticsPage() {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || []).map((s) => ({ hostname: s, vlanCount: 0, vlans: [] }))).map((sw) => (
+                      {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || [])).map((sw) => (
                         <TableRow key={sw.hostname} hover>
                           <TableCell sx={{ whiteSpace: 'nowrap' }}>
                             {/* Switch Hostname mit getrennten Klick-Bereichen wie in DataTable */}
                             {(() => {
-                              const hostname = sw.hostname;
+                              const hostname = String(sw.hostname || '');
                               // Split hostname in hostname Teil (vor erstem .) und Domain Teil
                               const parts = hostname.split('.');
                               const hostnameShort = parts[0] || hostname;
@@ -1275,6 +1609,7 @@ export default function StatisticsPage() {
                             })()}
                           </TableCell>
                           <TableCell>
+                            {/* Show VLANs for this specific switch */}
                             {sw.vlans && sw.vlans.length > 0 ? (
                               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                                 {sw.vlans.map(({ vlan, count }) => {
@@ -1338,10 +1673,15 @@ export default function StatisticsPage() {
                     </TableHead>
                     <TableBody>
                       {(locStats.kemPhones || []).map((p, idx) => {
-                        const key = (p['MAC Address'] || p['IP Address'] || String(idx));
-                        const mac = p['MAC Address'];
-                        const ip = p['IP Address'];
-                        const kem1 = (p['KEM'] || '').trim();
+                        // Handle both old format (CSV fields) and new format (backend objects)
+                        const key = (p.mac || p['MAC Address'] || p.ip || p['IP Address'] || String(idx));
+                        const mac = p.mac || p['MAC Address'];
+                        const ip = p.ip || p['IP Address'];
+                        const model = p.model || p['Model Name'];
+                        const serial = p.serial || p['Serial Number'];
+                        const switchHostname = p.switch || p['Switch Hostname'];
+                        // For new format, assume 1 KEM (since they are in kemPhones array)
+                        const kem1 = p['KEM'] ? (p['KEM'] || '').trim() : 'KEM';
                         const kem2 = (p['KEM 2'] || '').trim();
                         const kemCount = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
                         return (
@@ -1391,8 +1731,8 @@ export default function StatisticsPage() {
                               ) : 'n/a'}
                             </TableCell>
                             <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                              {p['Switch Hostname'] ? (() => {
-                                const hostname = p['Switch Hostname'];
+                              {switchHostname ? (() => {
+                                const hostname = String(switchHostname || '');
                                 // Split hostname in hostname Teil (vor erstem .) und Domain Teil
                                 const parts = hostname.split('.');
                                 const hostnameShort = parts[0] || hostname;
@@ -1703,6 +2043,17 @@ export default function StatisticsPage() {
           </Box>
         )}
       </Paper>
+
+      {/* Snackbar for location validation feedback */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={handleSnackbarClose}
+        message={snackbar.message}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
     </Box>
   );
-}
+});
+
+export default StatisticsPage;

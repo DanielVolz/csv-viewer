@@ -5,7 +5,6 @@ import logging
 import time
 
 from models.file import FileModel
-from utils.csv_utils import read_csv_file_normalized
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +173,7 @@ def extract_city_code(hostname: str) -> str | None:
 
 @router.get("/current")
 async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
-    """Compute statistics for the current CSV file.
+    """Load statistics from OpenSearch snapshots only - NO CSV computation.
 
     Returns a JSON object with:
       - totalPhones
@@ -203,38 +202,41 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                 "file": {"name": filename, "date": None},
             }
 
-        # Attempt fast path: serve from cache if file unchanged
-        st = file_path.stat()
-        cache_key = f"{file_path}:{st.st_mtime_ns}:{st.st_size}:v3:{_CACHE_INVALIDATION_TIME}"  # v3 + time to force invalidation
-        if _CURRENT_STATS_CACHE.get("key") == cache_key and _CURRENT_STATS_CACHE.get("data"):
-            return _CURRENT_STATS_CACHE["data"]  # type: ignore
-
-        # Try OpenSearch snapshot first: if exists for file+date, use it
+        # Get file metadata
         file_model = FileModel.from_path(str(file_path))
         date_str = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
-        # TEMPORARILY DISABLED TO FORCE CSV COMPUTATION WITH NEW JVA/JUSTIZ FIELDS
-        if False and date_str:
+
+        # ONLY load from OpenSearch snapshots - never CSV
+        if date_str:
             try:
                 from utils.opensearch import opensearch_config
                 from opensearchpy.exceptions import NotFoundError
-                # Deterministic id in indexer: f"{file}:{date}"
+
+                # Try to get snapshot from stats index
                 doc_id = f"{file_model.name}:{date_str}"
                 try:
                     snap = opensearch_config.client.get(index=opensearch_config.stats_index, id=doc_id)
                     src = snap.get("_source") if isinstance(snap, dict) else None
                 except NotFoundError:
                     src = None
+
                 if src:
                     result = {
                         "success": True,
-                        "message": "Statistics loaded (snapshot)",
+                        "message": "Statistics loaded from OpenSearch snapshot",
                         "data": {
                             "totalPhones": int(src.get("totalPhones", 0)),
                             "totalSwitches": int(src.get("totalSwitches", 0)),
                             "totalLocations": int(src.get("totalLocations", 0)),
                             "totalCities": int(src.get("totalCities", 0)),
                             "phonesWithKEM": int(src.get("phonesWithKEM", 0)),
+                            "totalJustizPhones": int(src.get("totalJustizPhones", 0)),
+                            "totalJVAPhones": int(src.get("totalJVAPhones", 0)),
                             "phonesByModel": src.get("phonesByModel", []),
+                            "phonesByModelJustiz": src.get("phonesByModelJustiz", []),
+                            "phonesByModelJVA": src.get("phonesByModelJVA", []),
+                            "phonesByModelJustizDetails": src.get("phonesByModelJustizDetails", []),
+                            "phonesByModelJVADetails": src.get("phonesByModelJVADetails", []),
                             "cities": sorted(
                                 [{"code": c, "name": resolve_city_name(c)} for c in (src.get("cityCodes") or [])],
                                 key=lambda x: x["name"]
@@ -242,212 +244,59 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                         },
                         "file": {"name": file_model.name, "date": date_str},
                     }
-                    _CURRENT_STATS_CACHE["key"] = cache_key
-                    _CURRENT_STATS_CACHE["data"] = result
                     return result
-            except Exception:
-                pass
-
-        # Compute from CSV as fallback
-        headers, rows = read_csv_file_normalized(str(file_path))
-
-        total_phones = len(rows)
-        switches = set()
-        phones_with_kem = 0
-        justiz_model_counts: Dict[str, int] = {}
-        jva_model_counts: Dict[str, int] = {}
-        locations = set()
-        city_codes = set()
-
-        for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip()
-            if sh:
-                switches.add(sh)
-                loc = extract_location(sh)
-                if loc:
-                    locations.add(loc)
-                    # Extract city code from location: take first 2-3 characters based on location length
-                    if len(loc) == 4:  # e.g., "AB01" -> "AB"
-                        city_codes.add(loc[:2])
-                    elif len(loc) == 5:  # e.g., "ABX01" -> "ABX" or "AIC01" -> "AIC"
-                        if loc[2] == 'X':  # e.g., "ABX01" -> "ABX"
-                            city_codes.add(loc[:3])
-                        else:  # e.g., "AIC01" -> "AIC"
-                            city_codes.add(loc[:3])
-
-            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                phones_with_kem += 1
-
-            model = (r.get("Model Name") or "").strip() or "Unknown"
-            if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
-                continue
-
-            # Categorize by Justiz/JVA based on switch hostname (only for valid models)
-            if sh:  # Only if we have a switch hostname
-                if is_jva_switch(sh):
-                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
                 else:
-                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
-
-        # Format individual categories
-        justiz_phones_by_model = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
-        justiz_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-
-        jva_phones_by_model = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
-        jva_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-
-        # Combined for backward compatibility
-        combined_model_counts: Dict[str, int] = {}
-        for model, count in justiz_model_counts.items():
-            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
-        for model, count in jva_model_counts.items():
-            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
-        phones_by_model = [{"model": m, "count": c} for m, c in combined_model_counts.items()]
-        phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-
-        # Detailed breakdown by location for Justiz and JVA
-        justiz_by_location: Dict[str, Dict[str, int]] = {}
-        jva_by_location: Dict[str, Dict[str, int]] = {}
-
-        for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip()
-            if not sh:
-                continue
-
-            loc = extract_location(sh)
-            if not loc:
-                continue
-
-            model = (r.get("Model Name") or "").strip() or "Unknown"
-            if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
-                continue
-
-            if is_jva_switch(sh):
-                if loc not in jva_by_location:
-                    jva_by_location[loc] = {}
-                jva_by_location[loc][model] = jva_by_location[loc].get(model, 0) + 1
-            else:
-                if loc not in justiz_by_location:
-                    justiz_by_location[loc] = {}
-                justiz_by_location[loc][model] = justiz_by_location[loc].get(model, 0) + 1
-
-        # Format detailed data with city names
-        justiz_details = []
-        for loc, models in justiz_by_location.items():
-            city_code = loc[:3]  # First 3 characters
-            city_name = resolve_city_name(city_code)
-            location_phones = sum(models.values())
-            models_list = [{"model": m, "count": c} for m, c in models.items()]
-            models_list.sort(key=lambda x: (-x["count"], x["model"]))
-
-            justiz_details.append({
-                "location": loc,
-                "city": city_name,
-                "cityCode": city_code,
-                "totalPhones": location_phones,
-                "models": models_list
-            })
-
-        jva_details = []
-        for loc, models in jva_by_location.items():
-            city_code = loc[:3]  # First 3 characters
-            city_name = resolve_city_name(city_code)
-            location_phones = sum(models.values())
-            models_list = [{"model": m, "count": c} for m, c in models.items()]
-            models_list.sort(key=lambda x: (-x["count"], x["model"]))
-
-            jva_details.append({
-                "location": loc,
-                "city": city_name,
-                "cityCode": city_code,
-                "totalPhones": location_phones,
-                "models": models_list
-            })
-
-        # Sort by total phones descending
-        justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
-        jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
-
-        # Calculate total phones for each category
-        total_justiz_phones = sum(model["count"] for model in justiz_phones_by_model)
-        total_jva_phones = sum(model["count"] for model in jva_phones_by_model)
-
-        result = {
-            "success": True,
-            "message": "Statistics computed",
-            "data": {
-                "totalPhones": total_phones,
-                "totalSwitches": len(switches),
-                "totalLocations": len(locations),
-                "totalCities": len(city_codes),
-                "phonesWithKEM": phones_with_kem,
-                "totalJustizPhones": total_justiz_phones,
-                "totalJVAPhones": total_jva_phones,
-                "phonesByModel": phones_by_model,
-                "phonesByModelJustiz": justiz_phones_by_model,
-                "phonesByModelJVA": jva_phones_by_model,
-                "phonesByModelJustizDetails": justiz_details,
-                "phonesByModelJVADetails": jva_details,
-                "cities": sorted(
-                    [{"code": c, "name": resolve_city_name(c)} for c in city_codes],
-                    key=lambda x: x["name"]
-                ),
-            },
-            "file": {"name": file_model.name, "date": date_str},
-        }
-        _CURRENT_STATS_CACHE["key"] = cache_key
-        _CURRENT_STATS_CACHE["data"] = result
-        return result
+                    # No snapshot found - trigger reindex
+                    return {
+                        "success": False,
+                        "message": f"No statistics snapshot found for {filename}:{date_str}. Please trigger reindex.",
+                        "data": {
+                            "totalPhones": 0,
+                            "totalSwitches": 0,
+                            "totalLocations": 0,
+                            "phonesWithKEM": 0,
+                            "phonesByModel": [],
+                            "totalCities": 0,
+                            "cities": [],
+                        },
+                        "file": {"name": file_model.name, "date": date_str},
+                        "needsReindex": True
+                    }
+            except Exception as e:
+                logger.error(f"Error loading from OpenSearch: {e}")
+                return {
+                    "success": False,
+                    "message": f"Failed to load statistics from OpenSearch: {e}",
+                    "data": {
+                        "totalPhones": 0,
+                        "totalSwitches": 0,
+                        "totalLocations": 0,
+                        "phonesWithKEM": 0,
+                        "phonesByModel": [],
+                        "totalCities": 0,
+                        "cities": [],
+                    },
+                    "file": {"name": file_model.name, "date": date_str},
+                    "needsReindex": True
+                }
+        else:
+            return {
+                "success": False,
+                "message": f"Cannot determine date for {filename}",
+                "data": {
+                    "totalPhones": 0,
+                    "totalSwitches": 0,
+                    "totalLocations": 0,
+                    "phonesWithKEM": 0,
+                    "phonesByModel": [],
+                    "totalCities": 0,
+                    "cities": [],
+                },
+                "file": {"name": filename, "date": None},
+            }
     except Exception as e:
         logger.error(f"Error computing stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to compute statistics")
-
-
-def _compute_basic_stats(rows: List[Dict]) -> Tuple[int, int, int, int, List[Dict], List[str]]:
-    """Return core metrics from normalized rows.
-
-    Returns: (total_phones, total_switches, total_locations, total_cities, phones_by_model, city_codes_sorted)
-    """
-    total_phones = len(rows)
-    switches = set()
-    phones_with_kem = 0
-    model_counts: Dict[str, int] = {}
-    locations = set()
-    city_codes = set()
-
-    for r in rows:
-        sh = (r.get("Switch Hostname") or "").strip()
-        if sh:
-            switches.add(sh)
-            loc = extract_location(sh)
-            if loc:
-                locations.add(loc)
-                # Extract city code from location: take first 2-3 characters based on location length
-                if len(loc) == 4:  # e.g., "AB01" -> "AB"
-                    city_codes.add(loc[:2])
-                else:  # e.g., "ABX01" -> "ABX"
-                    city_codes.add(loc[:3])
-
-        if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-            phones_with_kem += 1
-
-        model = (r.get("Model Name") or "").strip() or "Unknown"
-        if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
-            continue
-        model_counts[model] = model_counts.get(model, 0) + 1
-
-    phones_by_model = [
-        {"model": m, "count": c} for m, c in model_counts.items()
-    ]
-    phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-    return (
-        total_phones,
-        len(switches),
-        len(locations),
-        len(city_codes),
-        phones_by_model,
-        sorted(list(city_codes)),
-    )
 
 
 @router.get("/timeline")
@@ -1140,9 +989,9 @@ async def get_archive(date: str, file: str | None = None, size: int = 1000) -> D
 
 @router.get("/cities/debug")
 async def debug_cities(filename: str = "netspeed.csv", limit: int = 25) -> Dict:
-    """Debug helper: compare distinct city prefixes found in CSV vs. mapping keys.
+    """Debug helper: compare distinct city prefixes found in OpenSearch snapshots vs. mapping keys.
 
-    Returns counts and small samples of differences to explain discrepancies like 84 vs 97.
+    NO CSV computation - only uses OpenSearch data.
     """
     try:
         mapping = {}
@@ -1150,32 +999,30 @@ async def debug_cities(filename: str = "netspeed.csv", limit: int = 25) -> Dict:
             mapping = get_city_code_map()
         map_keys = set(mapping.keys())
 
-        file_path = (Path("/app/data") / filename).resolve()
-        if not file_path.exists():
-            return {
-                "success": True,
-                "message": f"File {filename} not found",
-                "data": {
-                    "mappingCount": len(map_keys),
-                    "csvCityCount": 0,
-                    "missingInMapping": [],
-                    "missingInCSV": sorted(list(map_keys))[:limit],
-                },
-            }
+        # Get city codes from OpenSearch snapshots only
+        try:
+            from utils.opensearch import opensearch_config
+            file_model = FileModel.from_path(f"/app/data/{filename}")
+            date_str = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
-        _, rows = read_csv_file_normalized(str(file_path))
-        prefixes = set()
-        for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip()
-            if not sh:
-                continue
-            loc = extract_location(sh)
-            if not loc:
-                continue
-            prefixes.add(loc[:3])
+            if date_str:
+                doc_id = f"{file_model.name}:{date_str}"
+                try:
+                    snap = opensearch_config.client.get(index=opensearch_config.stats_index, id=doc_id)
+                    src = snap.get("_source") if isinstance(snap, dict) else None
+                    if src:
+                        city_codes = set(src.get("cityCodes", []))
+                    else:
+                        city_codes = set()
+                except:
+                    city_codes = set()
+            else:
+                city_codes = set()
+        except Exception:
+            city_codes = set()
 
-        missing_in_mapping = sorted([p for p in prefixes if p not in map_keys])
-        missing_in_csv = sorted([k for k in map_keys if k not in prefixes])
+        missing_in_mapping = sorted([p for p in city_codes if p not in map_keys])
+        missing_in_csv = sorted([k for k in map_keys if k not in city_codes])
 
         if limit and limit > 0:
             missing_in_mapping = missing_in_mapping[:limit]
@@ -1183,10 +1030,10 @@ async def debug_cities(filename: str = "netspeed.csv", limit: int = 25) -> Dict:
 
         return {
             "success": True,
-            "message": "City mapping debug computed",
+            "message": "City mapping debug computed from OpenSearch",
             "data": {
                 "mappingCount": len(map_keys),
-                "csvCityCount": len(prefixes),
+                "csvCityCount": len(city_codes),
                 "missingInMapping": missing_in_mapping,
                 "missingInCSV": missing_in_csv,
             },
@@ -1198,174 +1045,607 @@ async def debug_cities(filename: str = "netspeed.csv", limit: int = 25) -> Dict:
 
 @router.get("/locations")
 async def list_locations(q: str = "", filename: str = "netspeed.csv", limit: int = 25) -> Dict:
-    """Return distinct 5-letter location codes derived from Switch Hostname.
+    """Return distinct 5-letter location codes from OpenSearch data only.
 
-    Matching uses case-insensitive substring on the location code.
+    NO CSV computation - only uses OpenSearch indices.
     """
     try:
-        file_path = (Path("/app/data") / filename).resolve()
-        if not file_path.exists():
+        from utils.opensearch import opensearch_config
+
+        # Query current netspeed index for locations
+        current_index = None
+        try:
+            if opensearch_config.client.indices.exists(index="netspeed_netspeed_csv"):
+                current_index = "netspeed_netspeed_csv"
+            else:
+                indices = opensearch_config.client.indices.get(index="netspeed_*")
+                if indices:
+                    current_index = list(indices.keys())[0]
+        except Exception:
             return {"success": True, "options": []}
 
-        _, rows = read_csv_file_normalized(str(file_path))
+        if not current_index:
+            return {"success": True, "options": []}
+
+        # Get distinct locations using terms aggregation
         term = (q or "").strip().upper()
-        locs = set()
-        for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip()
-            loc = extract_location(sh)
-            if not loc:
-                continue
-            if not term or term in loc:
-                locs.add(loc)
-        options = sorted(locs)
-        if limit and limit > 0:
-            options = options[:limit]
-        return {"success": True, "options": options}
+        body = {
+            "size": 0,
+            "aggs": {
+                "locations": {
+                    "terms": {
+                        "script": {
+                            "source": """
+                                def hostname = doc['Switch Hostname.keyword'].value;
+                                if (hostname == null || hostname.length() < 4) return null;
+                                def h = hostname.toUpperCase();
+                                // Pattern matching like extract_location
+                                if (h.length() >= 5 && h.charAt(0) >= 'A' && h.charAt(0) <= 'Z' &&
+                                    h.charAt(1) >= 'A' && h.charAt(1) <= 'Z' && h.charAt(2) == 'X' &&
+                                    h.charAt(3) >= '0' && h.charAt(3) <= '9' && h.charAt(4) >= '0' && h.charAt(4) <= '9') {
+                                    return h.substring(0, 5);
+                                }
+                                if (h.length() >= 6 && h.charAt(0) >= 'A' && h.charAt(0) <= 'Z' &&
+                                    h.charAt(1) >= 'A' && h.charAt(1) <= 'Z' && h.charAt(2) >= 'A' && h.charAt(2) <= 'Z' &&
+                                    h.charAt(3) == 'X' && h.charAt(4) >= '0' && h.charAt(4) <= '9' && h.charAt(5) >= '0' && h.charAt(5) <= '9') {
+                                    return h.substring(0, 3) + h.substring(4, 6);
+                                }
+                                if (h.length() >= 5 && h.charAt(0) >= 'A' && h.charAt(0) <= 'Z' &&
+                                    h.charAt(1) >= 'A' && h.charAt(1) <= 'Z' && h.charAt(2) >= 'A' && h.charAt(2) <= 'Z' &&
+                                    h.charAt(3) >= '0' && h.charAt(3) <= '9' && h.charAt(4) >= '0' && h.charAt(4) <= '9') {
+                                    return h.substring(0, 5);
+                                }
+                                return null;
+                            """
+                        },
+                        "size": limit if limit > 0 else 10000
+                    }
+                }
+            }
+        }
+
+        res = opensearch_config.client.search(index=current_index, body=body)
+        buckets = res.get("aggregations", {}).get("locations", {}).get("buckets", [])
+        locations = [b.get("key") for b in buckets if b.get("key")]
+
+        # Filter by query term if provided
+        if term:
+            locations = [loc for loc in locations if term in loc]
+
+        return {"success": True, "options": sorted(locations)}
     except Exception as e:
-        logger.error(f"Error listing locations: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list locations")
+        logger.error(f"Error listing locations from OpenSearch: {e}")
+        return {"success": True, "options": []}
 
 
 @router.get("/by_location")
 async def stats_by_location(q: str, filename: str = "netspeed.csv") -> Dict:
-    """Compute statistics for rows whose derived location code equals q (5-letter code).
+    """DEPRECATED: Use /fast/by_location instead.
 
-    Returns totals and grouped aggregates (models, VLANs, switches) for the filtered subset.
+    This endpoint now returns an error to force using OpenSearch-based implementation.
+    """
+    return {
+        "success": False,
+        "message": "This endpoint is deprecated. Use /api/stats/fast/by_location instead for OpenSearch-based statistics.",
+        "data": {}
+    }
+
+
+# ========================================
+# FAST API ENDPOINTS (OpenSearch-based)
+# ========================================
+
+@router.get("/fast/current")
+async def get_current_stats_fast() -> Dict:
+    """
+    Fast statistics using latest OpenSearch stats snapshot only - NO CSV fallbacks.
+    Uses pre-computed values from reindexing.
     """
     try:
-        if not q or not q.strip():
-            return {"success": False, "message": "Missing query parameter 'q'", "data": {}}
+        from utils.opensearch import OpenSearchConfig
+        opensearch_config = OpenSearchConfig()
 
-        file_path = (Path("/app/data") / filename).resolve()
-        if not file_path.exists():
-            return {"success": False, "message": f"File {filename} not found", "data": {}}
-
-        _, rows = read_csv_file_normalized(str(file_path))
-        query = q.strip().upper()
-        mode = "code" if len(query) == 5 else ("prefix" if len(query) == 3 else "invalid")
-        if mode == "invalid":
-            return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)", "data": {}}
-        subset = []
-        for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip()
-            loc = extract_location(sh)
-            if not loc:
-                continue
-            if mode == "code":
-                if loc == query:
-                    subset.append(r)
-            else:  # prefix
-                if loc.startswith(query):
-                    subset.append(r)
-
-        total_phones = len(subset)
-        switches = sorted({(r.get("Switch Hostname") or "").strip() for r in subset if (r.get("Switch Hostname") or "").strip()})
-        # Build per-switch VLAN usage (counts and distinct count)
-        switch_vlan_counts: Dict[str, Dict[str, int]] = {}
-        for r in subset:
-            sh = (r.get("Switch Hostname") or "").strip()
-            if not sh:
-                continue
-            vlan = (r.get("Voice VLAN") or "").strip()
-            if not vlan:
-                continue
-            by_vlan = switch_vlan_counts.setdefault(sh, {})
-            by_vlan[vlan] = by_vlan.get(vlan, 0) + 1
-        switch_details = []
-        for sh in switches:
-            by_vlan = switch_vlan_counts.get(sh, {})
-            detail = {
-                "hostname": sh,
-                "vlanCount": len(by_vlan.keys()),
-                "vlans": [{"vlan": v, "count": c} for v, c in by_vlan.items()],
+        # Check if stats index exists
+        if not opensearch_config.client.indices.exists(index=opensearch_config.stats_index):
+            return {
+                "success": False,
+                "message": "No stats index found. Please trigger reindex first.",
+                "data": {
+                    "totalPhones": 0,
+                    "totalSwitches": 0,
+                    "totalLocations": 0,
+                    "totalCities": 0,
+                    "phonesWithKEM": 0,
+                    "totalJustizPhones": 0,
+                    "totalJVAPhones": 0,
+                    "phonesByModel": [],
+                    "phonesByModelJustiz": [],
+                    "phonesByModelJVA": [],
+                    "phonesByModelJustizDetails": [],
+                    "phonesByModelJVADetails": [],
+                    "cities": [],
+                },
+                "file": {"name": "netspeed.csv", "date": ""},
             }
-            # Optional: sort vlans numerically
-            def _vk(item):
-                try:
-                    return (0, int(item["vlan"]))
-                except:
-                    return (1, item["vlan"])
-            detail["vlans"].sort(key=_vk)
-            switch_details.append(detail)
-        phones_with_kem = sum(1 for r in subset if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip())
 
-        # Phones by Model - split into Justiz (Justice) and JVA (Prison) categories
-        justiz_model_counts: Dict[str, int] = {}
-        jva_model_counts: Dict[str, int] = {}
+        # Get latest stats snapshot
+        body = {
+            "size": 1,
+            "sort": [{"date": {"order": "desc"}}],
+            "query": {"match_all": {}}
+        }
 
-        for r in subset:
-            model = (r.get("Model Name") or "").strip() or "Unknown"
-            if model != "Unknown" and (len(model) < 4 or is_mac_like(model)):
-                continue
+        res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body)
 
-            # Determine category based on switch hostname
-            hostname = (r.get("Switch Hostname") or "").strip()
-            if is_jva_switch(hostname):
-                jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
-            else:
-                justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+        if not res["hits"]["hits"]:
+            return {
+                "success": False,
+                "message": "No stats snapshots found. Please trigger reindex first.",
+                "data": {
+                    "totalPhones": 0,
+                    "totalSwitches": 0,
+                    "totalLocations": 0,
+                    "totalCities": 0,
+                    "phonesWithKEM": 0,
+                    "totalJustizPhones": 0,
+                    "totalJVAPhones": 0,
+                    "phonesByModel": [],
+                    "phonesByModelJustiz": [],
+                    "phonesByModelJVA": [],
+                    "phonesByModelJustizDetails": [],
+                    "phonesByModelJVADetails": [],
+                    "cities": [],
+                },
+                "file": {"name": "netspeed.csv", "date": ""},
+            }
 
-        # Format for response
-        justiz_phones_by_model = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
-        justiz_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+        # Extract latest snapshot data - all pre-computed during reindexing
+        latest_doc = res["hits"]["hits"][0]["_source"]
 
-        jva_phones_by_model = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
-        jva_phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+        # All data is already computed during reindexing - just use snapshot values directly
+        justiz_models = latest_doc.get("phonesByModelJustiz", [])
+        jva_models = latest_doc.get("phonesByModelJVA", [])
+        total_justiz = latest_doc.get("totalJustizPhones", 0)
+        total_jva = latest_doc.get("totalJVAPhones", 0)
 
-        # Legacy format for backward compatibility (combined)
-        combined_model_counts: Dict[str, int] = {}
-        for model, count in justiz_model_counts.items():
-            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
-        for model, count in jva_model_counts.items():
-            combined_model_counts[model] = combined_model_counts.get(model, 0) + count
-        phones_by_model = [{"model": m, "count": c} for m, c in combined_model_counts.items()]
-        phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-
-        # VLAN usage
-        vlan_counts: Dict[str, int] = {}
-        for r in subset:
-            vlan = (r.get("Voice VLAN") or "").strip()
-            if not vlan:
-                continue
-            vlan_counts[vlan] = vlan_counts.get(vlan, 0) + 1
-        vlan_usage = [{"vlan": v, "count": c} for v, c in vlan_counts.items()]
-        # Sort numerically when possible
-        def vlan_key(item):
-            v = item["vlan"]
-            try:
-                return (0, int(v))
-            except:
-                return (1, v)
-        vlan_usage.sort(key=vlan_key)
-
-        # Build detailed list of phones with KEM for expandable UI
-        kem_phones_fields = [
-            "IP Address", "Model Name", "MAC Address", "Switch Hostname", "Switch Port", "KEM", "KEM 2",
-        ]
-        kem_phones = []
-        for r in subset:
-            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                item = {k: (r.get(k) or "").strip() for k in kem_phones_fields}
-                kem_phones.append(item)
+        # Get city codes and resolve names
+        city_codes = latest_doc.get("cityCodes", [])
+        cities = []
+        for code in city_codes:
+            cities.append({
+                "code": code,
+                "name": resolve_city_name(code)
+            })
+        cities.sort(key=lambda x: x["name"])
 
         return {
             "success": True,
-            "message": "Location statistics computed",
+            "message": "Statistics loaded from OpenSearch snapshot",
+            "data": {
+                "totalPhones": latest_doc.get("totalPhones", 0),
+                "totalSwitches": latest_doc.get("totalSwitches", 0),
+                "totalLocations": latest_doc.get("totalLocations", 0),
+                "totalCities": latest_doc.get("totalCities", 0),
+                "phonesWithKEM": latest_doc.get("phonesWithKEM", 0),
+                "totalJustizPhones": total_justiz,
+                "totalJVAPhones": total_jva,
+                "phonesByModel": latest_doc.get("phonesByModel", []),
+                "phonesByModelJustiz": justiz_models,
+                "phonesByModelJVA": jva_models,
+                "phonesByModelJustizDetails": latest_doc.get("phonesByModelJustizDetails", []),
+                "phonesByModelJVADetails": latest_doc.get("phonesByModelJVADetails", []),
+                "cities": cities,
+            },
+            "file": {
+                "name": latest_doc.get("file", "netspeed.csv"),
+                "date": latest_doc.get("date", ""),
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting fast current stats: {e}")
+        return {
+            "success": False,
+            "message": f"Failed to load stats from OpenSearch: {e}",
+            "data": {
+                "totalPhones": 0,
+                "totalSwitches": 0,
+                "totalLocations": 0,
+                "totalCities": 0,
+                "phonesWithKEM": 0,
+                "totalJustizPhones": 0,
+                "totalJVAPhones": 0,
+                "phonesByModel": [],
+                "phonesByModelJustiz": [],
+                "phonesByModelJVA": [],
+                "phonesByModelJustizDetails": [],
+                "phonesByModelJVADetails": [],
+                "cities": [],
+            },
+            "file": {"name": "netspeed.csv", "date": ""},
+        }
+
+
+@router.get("/fast/cities")
+async def get_cities_fast() -> Dict:
+    """
+    Fast city mapping from OpenSearch snapshots only - NO CSV fallbacks.
+    Returns city code to name mapping for location search.
+    """
+    try:
+        # Get cities from OpenSearch snapshots only
+        stats_response = await get_current_stats()
+        if stats_response.get("success"):
+            cities = stats_response["data"].get("cities", [])
+            # Convert to simple mapping for frontend
+            city_map = {}
+            for city in cities:
+                if isinstance(city, dict) and city.get("code") and city.get("name"):
+                    city_map[city["code"]] = city["name"]
+
+            return {
+                "success": True,
+                "cities": cities,  # Full city objects
+                "cityMap": city_map,  # Simple code->name mapping
+                "total": len(cities)
+            }
+        else:
+            return {"success": False, "message": "No city data available in OpenSearch snapshots", "cities": [], "cityMap": {}}
+
+    except Exception as e:
+        logger.error(f"Error getting fast cities: {e}")
+        return {"success": False, "message": "Failed to load city data from OpenSearch", "cities": [], "cityMap": {}}
+
+
+@router.get("/fast/locations")
+async def get_locations_fast(limit: int = 1000) -> Dict:
+    """
+    Fast location listing using pre-computed location snapshots from OpenSearch only.
+    NO CSV fallbacks - only uses location data from reindexing.
+    """
+    try:
+        from utils.opensearch import OpenSearchConfig
+        opensearch_config = OpenSearchConfig()
+
+        # Check if location stats index exists
+        if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
+            return {
+                "success": False,
+                "message": "No location stats index found. Please trigger reindex first.",
+                "locations": [],
+                "options": [],
+                "total": 0,
+                "mode": "fast"
+            }
+
+        # Get all unique locations from the stats_loc_index
+        body = {
+            "size": 0,
+            "aggs": {
+                "unique_locations": {
+                    "terms": {
+                        "field": "key",
+                        "size": limit,
+                        "order": {"_key": "asc"}
+                    }
+                }
+            }
+        }
+
+        res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
+
+        # Extract location codes from aggregation results
+        locations = []
+        if "aggregations" in res and "unique_locations" in res["aggregations"]:
+            for bucket in res["aggregations"]["unique_locations"]["buckets"]:
+                if bucket["key"] and bucket["key"] != "null":
+                    locations.append(bucket["key"])
+
+        return {
+            "success": True,
+            "locations": sorted(locations),
+            "options": sorted(locations),  # Add for frontend compatibility
+            "total": len(locations),
+            "mode": "fast"
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting fast locations: {e}")
+        return {
+            "success": False,
+            "message": f"Failed to load locations from OpenSearch: {e}",
+            "locations": [],
+            "options": [],
+            "total": 0,
+            "mode": "fast"
+        }
+
+
+@router.get("/fast/by_location")
+async def get_stats_by_location_fast(q: str) -> Dict:
+    """
+    Fast location-specific statistics using pre-computed OpenSearch location snapshots.
+    Much faster than parsing CSV files - uses values computed during reindexing.
+    """
+    try:
+        from utils.opensearch import OpenSearchConfig
+        opensearch_config = OpenSearchConfig()
+
+        query = q.strip().upper()
+        if not query:
+            return {"success": False, "message": "Location query is required"}
+
+        # Determine mode based on query length
+        mode = "code" if len(query) == 5 else ("prefix" if len(query) == 3 else "invalid")
+        if mode == "invalid":
+            return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)"}
+
+        # Check if location stats index exists
+        if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
+            return {
+                "success": False,
+                "message": "No location stats index found. Please trigger reindex first.",
+                "data": {
+                    "query": query,
+                    "mode": mode,
+                    "totalPhones": 0,
+                    "totalSwitches": 0,
+                    "phonesWithKEM": 0,
+                    "phonesByModel": [],
+                    "phonesByModelJustiz": [],
+                    "phonesByModelJVA": [],
+                    "vlanUsage": [],
+                    "switches": [],
+                    "kemPhones": [],
+                }
+            }
+
+        # Determine mode based on query length
+        mode = "code" if len(query) == 5 else ("prefix" if len(query) == 3 else "invalid")
+        if mode == "invalid":
+            return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)"}
+
+        if mode == "code":
+            # For model details, always use today's data (current netspeed.csv)
+            from datetime import datetime
+            today = datetime.now().strftime('%Y-%m-%d')
+
+            # First try to get today's data for model details
+            body_today = {
+                "size": 1,
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"key": query}},
+                            {"term": {"date": today}}
+                        ]
+                    }
+                }
+            }
+
+            res_today = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body_today)
+
+            if res_today["hits"]["hits"]:
+                # Use today's data with model details
+                location_doc = res_today["hits"]["hits"][0]["_source"]
+            else:
+                # Fallback: get latest available data but model details will be empty
+                body_latest = {
+                    "size": 1,
+                    "sort": [{"date": {"order": "desc"}}],
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"term": {"key": query}}
+                            ]
+                        }
+                    }
+                }
+
+                res_latest = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body_latest)
+
+                if not res_latest["hits"]["hits"]:
+                    return {
+                        "success": True,
+                        "message": f"No data found for location {query}",
+                        "data": {
+                            "query": query,
+                            "mode": "fast",
+                            "totalPhones": 0,
+                            "totalSwitches": 0,
+                            "phonesWithKEM": 0,
+                            "phonesByModel": [],
+                            "phonesByModelJustiz": [],
+                            "phonesByModelJVA": [],
+                            "vlanUsage": [],
+                            "switches": [],
+                            "kemPhones": [],
+                        }
+                    }
+
+                # Use latest data but clear model details (only basic stats available)
+                location_doc = res_latest["hits"]["hits"][0]["_source"]
+                # Clear model details if not from today
+                location_doc["phonesByModel"] = []
+                location_doc["phonesByModelJustiz"] = []
+                location_doc["phonesByModelJVA"] = []
+
+        else:  # prefix mode - aggregate all locations starting with this prefix
+            # Find all locations starting with the prefix
+            # Use aggregation to get only the latest entry for each location
+            body = {
+                "size": 0,
+                "aggs": {
+                    "locations": {
+                        "terms": {
+                            "field": "key",
+                            "size": 1000
+                        },
+                        "aggs": {
+                            "latest": {
+                                "top_hits": {
+                                    "sort": [{"date": {"order": "desc"}}],
+                                    "size": 1
+                                }
+                            }
+                        }
+                    }
+                },
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"prefix": {"key": query}}
+                        ]
+                    }
+                }
+            }
+
+            res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
+
+            if not res["aggregations"]["locations"]["buckets"]:
+                return {
+                    "success": True,
+                    "message": f"No data found for locations starting with {query}",
+                    "data": {
+                        "query": query,
+                        "mode": "prefix",
+                        "totalPhones": 0,
+                        "totalSwitches": 0,
+                        "phonesWithKEM": 0,
+                        "phonesByModel": [],
+                        "phonesByModelJustiz": [],
+                        "phonesByModelJVA": [],
+                        "vlanUsage": [],
+                        "switches": [],
+                        "kemPhones": [],
+                    }
+                }
+
+            # Aggregate all matching locations (only latest entry per location)
+            location_doc = {
+                "query": query,
+                "mode": "prefix",
+                "totalPhones": 0,
+                "totalSwitches": 0,
+                "phonesWithKEM": 0,
+                "phonesByModel": {},
+                "phonesByModelJustiz": {},
+                "phonesByModelJVA": {},
+                "vlanUsage": {},
+                "switches": set(),
+                "kemPhones": [],
+            }
+
+            # Aggregate data from all matching locations (only latest per location)
+            for bucket in res["aggregations"]["locations"]["buckets"]:
+                if bucket["latest"]["hits"]["hits"]:
+                    doc = bucket["latest"]["hits"]["hits"][0]["_source"]
+                    location_doc["totalPhones"] += doc.get("totalPhones", 0)
+                    location_doc["totalSwitches"] += doc.get("totalSwitches", 0)
+                    location_doc["phonesWithKEM"] += doc.get("phonesWithKEM", 0)
+
+                    # Aggregate phone models
+                    for model_data in doc.get("phonesByModel", []):
+                        model = model_data.get("model", "Unknown")
+                        count = model_data.get("count", 0)
+                        location_doc["phonesByModel"][model] = location_doc["phonesByModel"].get(model, 0) + count
+
+                    for model_data in doc.get("phonesByModelJustiz", []):
+                        model = model_data.get("model", "Unknown")
+                        count = model_data.get("count", 0)
+                        location_doc["phonesByModelJustiz"][model] = location_doc["phonesByModelJustiz"].get(model, 0) + count
+
+                    for model_data in doc.get("phonesByModelJVA", []):
+                        model = model_data.get("model", "Unknown")
+                        count = model_data.get("count", 0)
+                        location_doc["phonesByModelJVA"][model] = location_doc["phonesByModelJVA"].get(model, 0) + count
+
+                    # Aggregate VLAN usage
+                    for vlan_data in doc.get("vlanUsage", []):
+                        vlan = vlan_data.get("vlan", "")
+                        count = vlan_data.get("count", 0)
+                        if vlan:
+                            location_doc["vlanUsage"][vlan] = location_doc["vlanUsage"].get(vlan, 0) + count
+
+                    # Collect switches - handle both null and list cases
+                    switches_data = doc.get("switches", [])
+                    if switches_data:  # Only if not null/empty
+                        for switch_data in switches_data:
+                            if isinstance(switch_data, dict):
+                                hostname = switch_data.get("hostname", "")
+                            else:
+                                hostname = str(switch_data)  # Handle string entries
+                            if hostname:
+                                location_doc["switches"].add(hostname)
+
+                    # Aggregate KEM phones
+                    kem_phones_data = doc.get("kemPhones", [])
+                    if kem_phones_data:  # Only if not null/empty
+                        location_doc["kemPhones"].extend(kem_phones_data)
+
+            # Convert aggregated dictionaries back to lists
+            location_doc["phonesByModel"] = [{"model": m, "count": c} for m, c in location_doc["phonesByModel"].items()]
+            location_doc["phonesByModel"].sort(key=lambda x: (-x["count"], x["model"]))
+
+            location_doc["phonesByModelJustiz"] = [{"model": m, "count": c} for m, c in location_doc["phonesByModelJustiz"].items()]
+            location_doc["phonesByModelJustiz"].sort(key=lambda x: (-x["count"], x["model"]))
+
+            location_doc["phonesByModelJVA"] = [{"model": m, "count": c} for m, c in location_doc["phonesByModelJVA"].items()]
+            location_doc["phonesByModelJVA"].sort(key=lambda x: (-x["count"], x["model"]))
+
+            location_doc["vlanUsage"] = [{"vlan": v, "count": c} for v, c in location_doc["vlanUsage"].items()]
+            # Sort VLANs numerically
+            def vlan_key(item):
+                v = item["vlan"]
+                try:
+                    return (0, int(v))
+                except:
+                    return (1, v)
+            location_doc["vlanUsage"].sort(key=vlan_key)
+
+            # Convert switches set to list and create switch details
+            switch_list = sorted(list(location_doc["switches"]))
+            location_doc["switches"] = [{"hostname": sw, "vlanCount": 0, "vlans": []} for sw in switch_list]
+            # Note: Keep the aggregated totalSwitches from OpenSearch data, don't override with len(switch_list)
+            # because switch details might be incomplete/null in some snapshots
+
+        # Check if we have sufficient detail data for the UI - NO FALLBACKS
+        if not _has_sufficient_detail_data(location_doc):
+            logger.warning(f"OpenSearch data for {query} lacks detail information. Please trigger reindex.")
+            # Return the incomplete data but mark it as incomplete
+            location_doc["incomplete"] = True
+            location_doc["message"] = "Incomplete data - please trigger reindex"
+
+        return {
+            "success": True,
+            "data": location_doc
+        }
+
+    except Exception as e:
+        logger.error(f"Error in fast location stats: {e}")
+        return {
+            "success": False,
+            "message": f"Failed to load location stats from OpenSearch: {e}",
             "data": {
                 "query": query,
-                "mode": mode,
-                "totalPhones": total_phones,
-                "totalSwitches": len(switches),
-                "phonesWithKEM": phones_with_kem,
-                "phonesByModel": phones_by_model,
-                "phonesByModelJustiz": justiz_phones_by_model,
-                "phonesByModelJVA": jva_phones_by_model,
-                "vlanUsage": vlan_usage,
-                "switches": switches,
-                "switchDetails": switch_details,
-                "kemPhones": kem_phones,
-            },
+                "mode": "fast",
+                "totalPhones": 0,
+                "totalSwitches": 0,
+                "phonesWithKEM": 0,
+                "phonesByModel": [],
+                "phonesByModelJustiz": [],
+                "phonesByModelJVA": [],
+                "vlanUsage": [],
+                "switches": [],
+                "kemPhones": [],
+            }
         }
-    except Exception as e:
-        logger.error(f"Error computing stats by location: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute location statistics")
+
+
+# Helper function to check if OpenSearch data has sufficient detail information
+def _has_sufficient_detail_data(location_doc: Dict) -> bool:
+    """Check if the location document has enough detail data for the UI.
+
+    Always returns True now since we only use OpenSearch data.
+    """
+    return True

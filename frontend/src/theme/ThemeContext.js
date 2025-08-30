@@ -6,7 +6,7 @@ import { CssBaseline } from '@mui/material';
 // Create a context for the theme
 const ThemeContext = createContext({
   isDarkMode: false,
-  toggleTheme: () => { },
+  toggleTheme: () => {},
 });
 
 // Create a provider component
@@ -54,13 +54,13 @@ export const ThemeProvider = ({ children }) => {
     }
   }, [isDarkMode]);
 
-  // Apply the theme to the body when the component mounts (debug logs only)
+  // Apply the theme to the body when the component mounts
   useEffect(() => {
     console.log('ThemeProvider mounted, dark mode is:', isDarkMode);
     return () => {
       console.log('ThemeProvider unmounted');
     };
-  }, [isDarkMode]);
+  }, []);
 
   // Provide the current theme and toggle function
   return (

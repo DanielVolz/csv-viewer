@@ -165,7 +165,51 @@ class OpenSearchConfig:
                     "mode": {"type": "keyword"},  # 'code'
                     "totalPhones": {"type": "long"},
                     "totalSwitches": {"type": "long"},
-                    "phonesWithKEM": {"type": "long"}
+                    "phonesWithKEM": {"type": "long"},
+                    "phonesByModel": {
+                        "type": "nested",
+                        "properties": {
+                            "model": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "phonesByModelJustiz": {
+                        "type": "nested",
+                        "properties": {
+                            "model": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "phonesByModelJVA": {
+                        "type": "nested",
+                        "properties": {
+                            "model": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "vlanUsage": {
+                        "type": "nested",
+                        "properties": {
+                            "vlan": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "switches": {
+                        "type": "nested",
+                        "properties": {
+                            "hostname": {"type": "keyword"}
+                        }
+                    },
+                    "kemPhones": {
+                        "type": "nested",
+                        "properties": {
+                            "ip": {"type": "ip"},
+                            "model": {"type": "keyword"},
+                            "mac": {"type": "keyword"},
+                            "serial": {"type": "keyword"},
+                            "switch": {"type": "keyword"}
+                        }
+                    }
                 }
             },
             "settings": {
@@ -385,7 +429,7 @@ class OpenSearchConfig:
     def index_stats_location_snapshots(self, *, file: str, date: str | None, loc_docs: List[Dict[str, Any]]) -> bool:
         """Bulk index per-location snapshot docs for a given file/date.
 
-        Each doc in loc_docs must contain: { key, mode='code', totalPhones, totalSwitches, phonesWithKEM }
+        Each doc in loc_docs must contain: { key, mode='code', totalPhones, totalSwitches, phonesWithKEM, phonesByModel, phonesByModelJustiz, phonesByModelJVA }
         """
         try:
             self.create_stats_loc_index()
@@ -405,6 +449,12 @@ class OpenSearchConfig:
                     "totalPhones": int(d.get('totalPhones', 0)),
                     "totalSwitches": int(d.get('totalSwitches', 0)),
                     "phonesWithKEM": int(d.get('phonesWithKEM', 0)),
+                    "phonesByModel": d.get('phonesByModel', []),
+                    "phonesByModelJustiz": d.get('phonesByModelJustiz', []),
+                    "phonesByModelJVA": d.get('phonesByModelJVA', []),
+                    "vlanUsage": d.get('vlanUsage', []),
+                    "switches": d.get('switches', []),
+                    "kemPhones": d.get('kemPhones', []),
                 }
                 doc_id = f"{file}:{date}:{key}"
                 actions.append({

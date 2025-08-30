@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Routes, Route, useLocation, useNavigate, Navigate, MemoryRouter } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate, Navigate, MemoryRouter, BrowserRouter } from 'react-router-dom';
 import {
   Container,
   AppBar,
@@ -183,7 +183,7 @@ function App() {
   const content = <AppContent />;
   const wrapped = process.env.NODE_ENV === 'test'
     ? (<MemoryRouter initialEntries={["/search"]}>{content}</MemoryRouter>)
-    : content;
+    : (<BrowserRouter>{content}</BrowserRouter>);
   return (
     <SettingsProvider>
       {wrapped}

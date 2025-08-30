@@ -48,6 +48,9 @@ def index_csv(file_path: str) -> dict:
                 city_codes = set()
                 phones_with_kem = 0
                 model_counts: Dict[str, int] = {}
+                justiz_model_counts: Dict[str, int] = {}
+                jva_model_counts: Dict[str, int] = {}
+
                 for r in _rows:
                     sh = (r.get("Switch Hostname") or "").strip()
                     if sh:
@@ -62,19 +65,165 @@ def index_csv(file_path: str) -> dict:
                             pass
                     if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
                         phones_with_kem += 1
+
+                    # Process model name
+                    model = (r.get("Model Name") or "").strip() or "Unknown"
+                    # Skip invalid models (MAC-like strings)
+                    if model != "Unknown":
+                        try:
+                            from api.stats import is_mac_like
+                            if len(model) < 4 or is_mac_like(model):
+                                model = "Unknown"
+                        except Exception:
+                            pass
+
+                    # Count overall models
+                    model_counts[model] = model_counts.get(model, 0) + 1
+
+                    # Count Justiz/JVA breakdown
+                    if sh:
+                        try:
+                            from api.stats import is_jva_switch
+                            if is_jva_switch(sh):
+                                jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                            else:
+                                justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+                        except Exception:
+                            # Default to Justiz if can't determine
+                            justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
+                # Format results
+                phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+                phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
+                phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+
+                phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
+                phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+
+                total_justiz_phones = sum(justiz_model_counts.values())
+                total_jva_phones = sum(jva_model_counts.values())
+
+                # Calculate detailed breakdown by location for Justiz/JVA
+                justiz_details_by_location: Dict[str, Dict[str, int]] = {}
+                jva_details_by_location: Dict[str, Dict[str, int]] = {}
+
+                for r in _rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if not sh:
+                        continue
+
+                    # Extract location code
+                    try:
+                        from api.stats import extract_location
+                        location = extract_location(sh)
+                    except Exception:
+                        location = None
+
+                    if not location:
+                        continue
+
+                    # Process model name
                     model = (r.get("Model Name") or "").strip() or "Unknown"
                     if model != "Unknown":
-                        model_counts[model] = model_counts.get(model, 0) + 1
-                phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                        try:
+                            from api.stats import is_mac_like
+                            if len(model) < 4 or is_mac_like(model):
+                                model = "Unknown"
+                        except Exception:
+                            pass
+
+                    # Determine if JVA or Justiz and count by location
+                    try:
+                        from api.stats import is_jva_switch
+                        if is_jva_switch(sh):
+                            # JVA location
+                            if location not in jva_details_by_location:
+                                jva_details_by_location[location] = {}
+                            jva_details_by_location[location][model] = jva_details_by_location[location].get(model, 0) + 1
+                        else:
+                            # Justiz location
+                            if location not in justiz_details_by_location:
+                                justiz_details_by_location[location] = {}
+                            justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
+                    except Exception:
+                        # Default to Justiz
+                        if location not in justiz_details_by_location:
+                            justiz_details_by_location[location] = {}
+                        justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
+
+                # Format details results
+                phones_by_model_justiz_details = []
+                for location, models in justiz_details_by_location.items():
+                    location_total = sum(models.values())
+                    model_list = [{"model": m, "count": c} for m, c in models.items()]
+                    model_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    # Get city name for display
+                    city_code = location[:3] if location and len(location) >= 3 else ""
+                    city_name = ""
+                    if city_code:
+                        try:
+                            from api.stats import resolve_city_name
+                            city_name = resolve_city_name(city_code)
+                        except Exception:
+                            city_name = city_code
+
+                    display_name = f"{location} - {city_name}" if city_name and city_name != city_code else location
+
+                    phones_by_model_justiz_details.append({
+                        "location": location,
+                        "locationDisplay": display_name,
+                        "totalPhones": location_total,
+                        "models": model_list  # Frontend expects 'models' not 'phonesByModel'
+                    })
+                phones_by_model_justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
+                phones_by_model_jva_details = []
+                for location, models in jva_details_by_location.items():
+                    location_total = sum(models.values())
+                    model_list = [{"model": m, "count": c} for m, c in models.items()]
+                    model_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    # Get city name for display
+                    city_code = location[:3] if location and len(location) >= 3 else ""
+                    city_name = ""
+                    if city_code:
+                        try:
+                            from api.stats import resolve_city_name
+                            city_name = resolve_city_name(city_code)
+                        except Exception:
+                            city_name = city_code
+
+                    display_name = f"{location} - {city_name}" if city_name and city_name != city_code else location
+
+                    phones_by_model_jva_details.append({
+                        "location": location,
+                        "locationDisplay": display_name,
+                        "totalPhones": location_total,
+                        "models": model_list  # Frontend expects 'models' not 'phonesByModel'
+                    })
+                phones_by_model_jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
                 metrics = {
                     "totalPhones": total_phones,
                     "totalSwitches": len(switches),
                     "totalLocations": len(locations),
                     "totalCities": len(city_codes),
                     "phonesWithKEM": phones_with_kem,
+                    "totalJustizPhones": total_justiz_phones,
+                    "totalJVAPhones": total_jva_phones,
                     "phonesByModel": phones_by_model,
+                    "phonesByModelJustiz": phones_by_model_justiz,
+                    "phonesByModelJVA": phones_by_model_jva,
+                    "phonesByModelJustizDetails": phones_by_model_justiz_details,
+                    "phonesByModelJVADetails": phones_by_model_jva_details,
                     "cityCodes": sorted(list(city_codes)),
                 }
+                logger.info(f"JUSTIZ/JVA DEBUG: total_justiz_phones={total_justiz_phones}, total_jva_phones={total_jva_phones}")
+                logger.info(f"JUSTIZ/JVA DEBUG: justiz_model_counts={justiz_model_counts}")
+                logger.info(f"JUSTIZ/JVA DEBUG: jva_model_counts={jva_model_counts}")
                 opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
                 # Additionally: build per-location snapshot docs and index in bulk
                 # Aggregate per 5-char location code for speed at query-time
@@ -99,14 +248,127 @@ def index_csv(file_path: str) -> dict:
                         plc["totalSwitches"] += 1
                     if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
                         plc["phonesWithKEM"] += 1
+
+                # Collect additional details for each location (VLANs, switches, KEM phones)
+                location_details = {}
+                for r in _rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if not sh:
+                        continue
+
+                    # Extract location code
+                    try:
+                        from api.stats import extract_location
+                        location = extract_location(sh)
+                    except Exception:
+                        location = None
+
+                    if not location:
+                        continue
+
+                    if location not in location_details:
+                        location_details[location] = {
+                            "vlans": {},
+                            "switches": set(),
+                            "switch_vlans": {},  # NEW: VLANs per switch
+                            "kem_phones": []
+                        }
+
+                    # Collect VLAN usage (total for location)
+                    vlan = (r.get("Voice VLAN") or "").strip()
+                    if vlan:
+                        location_details[location]["vlans"][vlan] = location_details[location]["vlans"].get(vlan, 0) + 1
+
+                        # NEW: Collect VLANs per switch
+                        if sh not in location_details[location]["switch_vlans"]:
+                            location_details[location]["switch_vlans"][sh] = {}
+                        location_details[location]["switch_vlans"][sh][vlan] = location_details[location]["switch_vlans"][sh].get(vlan, 0) + 1
+
+                    # Collect switches
+                    location_details[location]["switches"].add(sh)
+
+                    # Collect KEM phones
+                    kem = (r.get("KEM") or "").strip()
+                    if kem and kem.upper() == "KEM":
+                        ip = (r.get("IP Address") or "").strip()
+                        model = (r.get("Model Name") or "").strip() or "Unknown"
+                        mac = (r.get("MAC Address") or "").strip()
+                        serial = (r.get("Serial Number") or "").strip()
+
+                        if ip:  # Only add if we have an IP address
+                            location_details[location]["kem_phones"].append({
+                                "ip": ip,
+                                "model": model,
+                                "mac": mac,
+                                "serial": serial,
+                                "switch": sh
+                            })
+
+                # Build loc_docs with model details from already calculated data
                 loc_docs = []
                 for k, agg in per_loc_counts.items():
+                    # Find this location in the already calculated detail data
+                    justiz_detail = next((item for item in phones_by_model_justiz_details if item["location"] == k), None)
+                    jva_detail = next((item for item in phones_by_model_jva_details if item["location"] == k), None)
+
+                    # Extract model data
+                    loc_justiz_models = justiz_detail["models"] if justiz_detail else []
+                    loc_jva_models = jva_detail["models"] if jva_detail else []
+
+                    # Combine all models for this location
+                    loc_all_models = {}
+                    for model_data in loc_justiz_models:
+                        model = model_data["model"]
+                        count = model_data["count"]
+                        loc_all_models[model] = loc_all_models.get(model, 0) + count
+
+                    for model_data in loc_jva_models:
+                        model = model_data["model"]
+                        count = model_data["count"]
+                        loc_all_models[model] = loc_all_models.get(model, 0) + count
+
+                    # Convert to list format
+                    loc_all_models_list = [{"model": m, "count": c} for m, c in loc_all_models.items()]
+                    loc_all_models_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    # Get additional details for this location
+                    details = location_details.get(k, {"vlans": {}, "switches": set(), "kem_phones": []})
+
+                    # Format VLAN usage
+                    vlan_usage = [{"vlan": v, "count": c} for v, c in details["vlans"].items()]
+                    # Sort VLANs numerically
+                    def vlan_key(item):
+                        v = item["vlan"]
+                        try:
+                            return (0, int(v))
+                        except:
+                            return (1, v)
+                    vlan_usage.sort(key=vlan_key)
+
+                    # Format switches with their VLANs
+                    switches = []
+                    switch_vlans = details.get("switch_vlans", {})
+                    for sw in sorted(details["switches"]):
+                        sw_vlans = switch_vlans.get(sw, {})
+                        vlan_list = [{"vlan": v, "count": c} for v, c in sw_vlans.items()]
+                        vlan_list.sort(key=vlan_key)
+                        switches.append({
+                            "hostname": sw,
+                            "vlans": vlan_list
+                        })
+
                     loc_docs.append({
                         "key": k,
                         "mode": "code",
                         "totalPhones": agg["totalPhones"],
                         "totalSwitches": agg["totalSwitches"],
                         "phonesWithKEM": agg["phonesWithKEM"],
+                        "phonesByModel": loc_all_models_list,
+                        "phonesByModelJustiz": loc_justiz_models,
+                        "phonesByModelJVA": loc_jva_models,
+                        "vlanUsage": vlan_usage,
+                        "switches": switches,
+                        "kemPhones": details["kem_phones"]
                     })
                 try:
                     opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
@@ -165,6 +427,43 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
                 fm = _FM.from_path(str(f))
                 date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
                 _, rows = read_csv_file_normalized(str(f))
+
+                # Calculate detailed model stats like index_csv does
+                justiz_details_by_location: Dict[str, Dict[str, int]] = {}
+                jva_details_by_location: Dict[str, Dict[str, int]] = {}
+
+                # Process each row for detailed model calculations
+                for r in rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    model = (r.get("Model Name") or "Unknown").strip()
+                    if not sh:
+                        continue
+
+                    try:
+                        from api.stats import extract_location as _extract_location
+                        location = _extract_location(sh)
+                    except Exception:
+                        location = None
+                    if not location:
+                        continue
+
+                    # Determine if this is JVA or Justiz
+                    try:
+                        from api.stats import is_jva_switch
+                        is_jva = is_jva_switch(sh)
+                    except Exception:
+                        is_jva = False
+
+                    if is_jva:
+                        if location not in jva_details_by_location:
+                            jva_details_by_location[location] = {}
+                        jva_details_by_location[location][model] = jva_details_by_location[location].get(model, 0) + 1
+                    else:
+                        if location not in justiz_details_by_location:
+                            justiz_details_by_location[location] = {}
+                        justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
+
+                # Now do the basic location counting (for totalPhones, totalSwitches, phonesWithKEM)
                 per_loc_counts: Dict[str, Dict[str, int]] = {}
                 per_loc_switches: Dict[str, set] = {}
                 for r in rows:
@@ -186,14 +485,111 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
                         plc["totalSwitches"] += 1
                     if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
                         plc["phonesWithKEM"] += 1
+
+                # Collect additional details for each location (VLANs, switches, KEM phones)
+                location_details = {}
+                for r in rows:
+                    sh = (r.get("Switch Hostname") or "").strip()
+                    if not sh:
+                        continue
+
+                    # Extract location code
+                    try:
+                        from api.stats import extract_location as _extract_location
+                        location = _extract_location(sh)
+                    except Exception:
+                        location = None
+
+                    if not location:
+                        continue
+
+                    if location not in location_details:
+                        location_details[location] = {
+                            "vlans": {},
+                            "switches": set(),
+                            "kem_phones": []
+                        }
+
+                    # Collect VLAN usage
+                    vlan = (r.get("Voice VLAN") or "").strip()
+                    if vlan:
+                        location_details[location]["vlans"][vlan] = location_details[location]["vlans"].get(vlan, 0) + 1
+
+                    # Collect switches
+                    location_details[location]["switches"].add(sh)
+
+                    # Collect KEM phones
+                    kem = (r.get("KEM") or "").strip()
+                    if kem and kem.upper() == "KEM":
+                        ip = (r.get("IP Address") or "").strip()
+                        model = (r.get("Model Name") or "").strip() or "Unknown"
+                        mac = (r.get("MAC Address") or "").strip()
+                        serial = (r.get("Serial Number") or "").strip()
+
+                        if ip:  # Only add if we have an IP address
+                            location_details[location]["kem_phones"].append({
+                                "ip": ip,
+                                "model": model,
+                                "mac": mac,
+                                "serial": serial,
+                                "switch": sh
+                            })
+
+                # Build loc_docs with model details from calculated data
                 loc_docs = []
                 for k, agg in per_loc_counts.items():
+                    # Get model breakdowns for this location
+                    loc_justiz_models = []
+                    loc_jva_models = []
+                    loc_all_models = {}
+
+                    # Extract from justiz details
+                    if k in justiz_details_by_location:
+                        for model, count in justiz_details_by_location[k].items():
+                            loc_justiz_models.append({"model": model, "count": count})
+                            loc_all_models[model] = loc_all_models.get(model, 0) + count
+
+                    # Extract from JVA details
+                    if k in jva_details_by_location:
+                        for model, count in jva_details_by_location[k].items():
+                            loc_jva_models.append({"model": model, "count": count})
+                            loc_all_models[model] = loc_all_models.get(model, 0) + count
+
+                    # Create combined model list
+                    loc_all_models_list = [{"model": m, "count": c} for m, c in loc_all_models.items()]
+                    loc_all_models_list.sort(key=lambda x: (-x["count"], x["model"]))
+                    loc_justiz_models.sort(key=lambda x: (-x["count"], x["model"]))
+                    loc_jva_models.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    # Get additional details for this location
+                    details = location_details.get(k, {"vlans": {}, "switches": set(), "kem_phones": []})
+
+                    # Format VLAN usage
+                    vlan_usage = [{"vlan": v, "count": c} for v, c in details["vlans"].items()]
+                    # Sort VLANs numerically
+                    def vlan_key(item):
+                        v = item["vlan"]
+                        try:
+                            return (0, int(v))
+                        except:
+                            return (1, v)
+                    vlan_usage.sort(key=vlan_key)
+
+                    # Format switches
+                    switches = [{"hostname": sw} for sw in sorted(details["switches"])]
+
                     loc_docs.append({
                         "key": k,
                         "mode": "code",
                         "totalPhones": agg["totalPhones"],
                         "totalSwitches": agg["totalSwitches"],
                         "phonesWithKEM": agg["phonesWithKEM"],
+                        "phonesByModel": loc_all_models_list,
+                        "phonesByModelJustiz": loc_justiz_models,
+                        "phonesByModelJVA": loc_jva_models,
+                        "vlanUsage": vlan_usage,
+                        "switches": switches,
+                        "kemPhones": details["kem_phones"]
                     })
                 if loc_docs:
                     opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
@@ -348,7 +744,6 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                     "index": 0,
                     "total_files": len(ordered_files),
                     "documents_indexed": 0,
-                    "last_file_docs": 0,
                 })
             except Exception:
                 pass
@@ -363,8 +758,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             try:
                 update_active(index_state,
                               current_file=file_path.name,
-                              index=i + 1,
-                              last_file_docs=0)
+                              index=i + 1)
                 save_state(index_state)
                 try:
                     self.update_state(state='PROGRESS', meta={
@@ -374,7 +768,6 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         "index": i + 1,
                         "total_files": len(ordered_files),
                         "documents_indexed": total_documents,
-                        "last_file_docs": 0,
                     })
                 except Exception:
                     pass
@@ -421,6 +814,9 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                     city_codes = set()
                     phones_with_kem = 0
                     model_counts: Dict[str, int] = {}
+                    justiz_model_counts: Dict[str, int] = {}
+                    jva_model_counts: Dict[str, int] = {}
+
                     for r in _rows:
                         sh = (r.get("Switch Hostname") or "").strip()
                         if sh:
@@ -436,17 +832,160 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                 pass
                         if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
                             phones_with_kem += 1
+
+                        # Process model name
+                        model = (r.get("Model Name") or "").strip() or "Unknown"
+                        # Skip invalid models (MAC-like strings)
+                        if model != "Unknown":
+                            try:
+                                from api.stats import is_mac_like
+                                if len(model) < 4 or is_mac_like(model):
+                                    model = "Unknown"
+                            except Exception:
+                                pass
+
+                        # Count overall models
+                        model_counts[model] = model_counts.get(model, 0) + 1
+
+                        # Count Justiz/JVA breakdown
+                        if sh:
+                            try:
+                                from api.stats import is_jva_switch
+                                if is_jva_switch(sh):
+                                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                                else:
+                                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+                            except Exception:
+                                # Default to Justiz if can't determine
+                                justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
+                    # Format results
+                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                    phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
+                    phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
+                    phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+
+                    total_justiz_phones = sum(justiz_model_counts.values())
+                    total_jva_phones = sum(jva_model_counts.values())
+
+                    # Calculate detailed breakdown by location for Justiz/JVA
+                    justiz_details_by_location: Dict[str, Dict[str, int]] = {}
+                    jva_details_by_location: Dict[str, Dict[str, int]] = {}
+
+                    for r in _rows:
+                        sh = (r.get("Switch Hostname") or "").strip()
+                        if not sh:
+                            continue
+
+                        # Extract location code
+                        try:
+                            from api.stats import extract_location
+                            location = extract_location(sh)
+                        except Exception:
+                            location = None
+
+                        if not location:
+                            continue
+
+                        # Process model name
                         model = (r.get("Model Name") or "").strip() or "Unknown"
                         if model != "Unknown":
-                            model_counts[model] = model_counts.get(model, 0) + 1
-                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                            try:
+                                from api.stats import is_mac_like
+                                if len(model) < 4 or is_mac_like(model):
+                                    model = "Unknown"
+                            except Exception:
+                                pass
+
+                        # Determine if JVA or Justiz and count by location
+                        try:
+                            from api.stats import is_jva_switch
+                            if is_jva_switch(sh):
+                                # JVA location
+                                if location not in jva_details_by_location:
+                                    jva_details_by_location[location] = {}
+                                jva_details_by_location[location][model] = jva_details_by_location[location].get(model, 0) + 1
+                            else:
+                                # Justiz location
+                                if location not in justiz_details_by_location:
+                                    justiz_details_by_location[location] = {}
+                                justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
+                        except Exception:
+                            # Default to Justiz
+                            if location not in justiz_details_by_location:
+                                justiz_details_by_location[location] = {}
+                            justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
+
+                    # Format details results
+                    phones_by_model_justiz_details = []
+                    for location, models in justiz_details_by_location.items():
+                        location_total = sum(models.values())
+                        model_list = [{"model": m, "count": c} for m, c in models.items()]
+                        model_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+                        # Get city name for display
+                        city_code = location[:3] if location and len(location) >= 3 else ""
+                        city_name = ""
+                        if city_code:
+                            try:
+                                from api.stats import resolve_city_name
+                                city_name = resolve_city_name(city_code)
+                            except Exception:
+                                city_name = city_code
+
+                        display_name = f"{location} - {city_name}" if city_name and city_name != city_code else location
+
+                        phones_by_model_justiz_details.append({
+                            "location": location,
+                            "locationDisplay": display_name,
+                            "totalPhones": location_total,
+                            "models": model_list  # Frontend expects 'models' not 'phonesByModel'
+                        })
+                    phones_by_model_justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
+                    phones_by_model_jva_details = []
+                    for location, models in jva_details_by_location.items():
+                        location_total = sum(models.values())
+                        model_list = [{"model": m, "count": c} for m, c in models.items()]
+                        model_list.sort(key=lambda x: (-x["count"], x["model"]))
+
+                        # Get city name for display
+                        city_code = location[:3] if location and len(location) >= 3 else ""
+                        city_name = ""
+                        if city_code:
+                            try:
+                                from api.stats import resolve_city_name
+                                city_name = resolve_city_name(city_code)
+                            except Exception:
+                                city_name = city_code
+
+                        display_name = f"{location} - {city_name}" if city_name and city_name != city_code else location
+
+                        phones_by_model_jva_details.append({
+                            "location": location,
+                            "locationDisplay": display_name,
+                            "totalPhones": location_total,
+                            "models": model_list  # Frontend expects 'models' not 'phonesByModel'
+                        })
+                    phones_by_model_jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
                     metrics = {
                         "totalPhones": total_phones,
                         "totalSwitches": len(switches),
                         "totalLocations": len(locations),
                         "totalCities": len(city_codes),
                         "phonesWithKEM": phones_with_kem,
+                        "totalJustizPhones": total_justiz_phones,
+                        "totalJVAPhones": total_jva_phones,
                         "phonesByModel": phones_by_model,
+                        "phonesByModelJustiz": phones_by_model_justiz,
+                        "phonesByModelJVA": phones_by_model_jva,
+                        "phonesByModelJustizDetails": phones_by_model_justiz_details,
+                        "phonesByModelJVADetails": phones_by_model_jva_details,
                         "cityCodes": sorted(list(city_codes)),
                     }
                     opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
@@ -503,8 +1042,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                     update_active(index_state,
                                   current_file=file_path.name,
                                   index=i + 1,
-                                  documents_indexed=total_documents,
-                                  last_file_docs=count)
+                                  documents_indexed=total_documents)
                     save_state(index_state)
                 except Exception as e:
                     logger.debug(f"Progress update failed: {e}")
@@ -517,7 +1055,6 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         "index": i + 1,
                         "total_files": len(ordered_files),
                         "documents_indexed": total_documents,
-                        "last_file_docs": count,
                     })
                 except Exception:
                     pass
