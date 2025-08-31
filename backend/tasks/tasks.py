@@ -50,6 +50,7 @@ def index_csv(file_path: str) -> dict:
                 model_counts: Dict[str, int] = {}
                 justiz_model_counts: Dict[str, int] = {}
                 jva_model_counts: Dict[str, int] = {}
+                global_kem_phones: List[Dict] = []  # Global KEM phone list
 
                 for r in _rows:
                     sh = (r.get("Switch Hostname") or "").strip()
@@ -65,6 +66,30 @@ def index_csv(file_path: str) -> dict:
                             pass
                     if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
                         phones_with_kem += 1
+
+                        # Add to global KEM phones list
+                        kem_data = {
+                            "ip": r.get("IP Address", ""),
+                            "mac": r.get("MAC Address", ""),
+                            "hostname": r.get("Switch Hostname", ""),
+                            "port": r.get("Switch Port", ""),
+                            "model": (r.get("Model Name") or "").strip() or "Unknown",
+                            "kem": r.get("KEM", "").strip(),
+                            "kem2": r.get("KEM 2", "").strip(),
+                            "vlan": r.get("VLAN", "")
+                        }
+                        # Extract location if available
+                        if sh:
+                            try:
+                                from api.stats import extract_location
+                                loc = extract_location(sh)
+                                kem_data["location"] = loc
+                            except Exception:
+                                kem_data["location"] = ""
+                        else:
+                            kem_data["location"] = ""
+
+                        global_kem_phones.append(kem_data)
 
                     # Process model name
                     model = (r.get("Model Name") or "").strip() or "Unknown"
@@ -670,6 +695,7 @@ def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
 def index_all_csv_files(self, directory_path: str) -> dict:
     """
     Task to index all CSV files in a directory.
+    Includes protection against concurrent execution.
 
     Args:
         directory_path: Path to the directory containing CSV files
@@ -678,6 +704,27 @@ def index_all_csv_files(self, directory_path: str) -> dict:
         dict: A dictionary containing the indexing results
     """
     logger.info(f"Indexing all CSV files in {directory_path}")
+
+    # Protection against concurrent indexing tasks
+    try:
+        index_state = load_state()
+        active_task = index_state.get("active_task", {})
+        if active_task.get("status") == "running":
+            existing_task_id = active_task.get("task_id")
+            current_task_id = getattr(self.request, 'id', 'unknown')
+
+            # If another task is already running, abort this one
+            if existing_task_id and existing_task_id != current_task_id:
+                logger.warning(f"Another indexing task {existing_task_id} is already running. Aborting task {current_task_id}")
+                return {
+                    "status": "aborted",
+                    "message": f"Another indexing task {existing_task_id} is already running",
+                    "directory": directory_path,
+                    "files_processed": 0,
+                    "total_documents": 0,
+                }
+    except Exception as e:
+        logger.warning(f"Failed to check for concurrent tasks: {e}")
 
     try:
         path = Path(directory_path)

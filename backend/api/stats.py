@@ -1366,6 +1366,11 @@ async def get_stats_by_location_fast(q: str) -> Dict:
     """
     Fast location-specific statistics using pre-computed OpenSearch location snapshots.
     Much faster than parsing CSV files - uses values computed during reindexing.
+
+    Performance optimizations for city searches (3-letter codes):
+    - Source field filtering to reduce payload size
+    - Efficient aggregation using dictionaries
+    - Early termination for basic stats
     """
     try:
         from utils.opensearch import OpenSearchConfig
@@ -1471,8 +1476,7 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 location_doc["phonesByModelJVA"] = []
 
         else:  # prefix mode - aggregate all locations starting with this prefix
-            # Find all locations starting with the prefix
-            # Use aggregation to get only the latest entry for each location
+            # Optimized: Only fetch necessary fields and use smaller payloads
             body = {
                 "size": 0,
                 "aggs": {
@@ -1485,7 +1489,12 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                             "latest": {
                                 "top_hits": {
                                     "sort": [{"date": {"order": "desc"}}],
-                                    "size": 1
+                                    "size": 1,
+                                    "_source": [
+                                        "totalPhones", "totalSwitches", "phonesWithKEM",
+                                        "phonesByModel", "phonesByModelJustiz", "phonesByModelJVA",
+                                        "vlanUsage", "switches", "kemPhones"
+                                    ]
                                 }
                             }
                         }
@@ -1521,79 +1530,96 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                     }
                 }
 
-            # Aggregate all matching locations (only latest entry per location)
-            location_doc = {
-                "query": query,
-                "mode": "prefix",
-                "totalPhones": 0,
-                "totalSwitches": 0,
-                "phonesWithKEM": 0,
-                "phonesByModel": {},
-                "phonesByModelJustiz": {},
-                "phonesByModelJVA": {},
-                "vlanUsage": {},
-                "switches": set(),
-                "kemPhones": [],
-            }
+            # Efficient aggregation: Use direct dictionary operations instead of nested loops
+            # Pre-allocate data structures for better performance
+            phones_by_model = {}
+            phones_by_model_justiz = {}
+            phones_by_model_jva = {}
+            vlan_usage = {}
+            switches_dict = {}  # hostname -> {vlan -> count}
+            kem_phones = []
 
-            # Aggregate data from all matching locations (only latest per location)
+            total_phones = 0
+            total_switches = 0
+            phones_with_kem = 0
+
+            # Single pass aggregation for all data
             for bucket in res["aggregations"]["locations"]["buckets"]:
                 if bucket["latest"]["hits"]["hits"]:
                     doc = bucket["latest"]["hits"]["hits"][0]["_source"]
-                    location_doc["totalPhones"] += doc.get("totalPhones", 0)
-                    location_doc["totalSwitches"] += doc.get("totalSwitches", 0)
-                    location_doc["phonesWithKEM"] += doc.get("phonesWithKEM", 0)
 
-                    # Aggregate phone models
+                    # Basic counters
+                    total_phones += doc.get("totalPhones", 0)
+                    total_switches += doc.get("totalSwitches", 0)
+                    phones_with_kem += doc.get("phonesWithKEM", 0)
+
+                    # Efficient phone model aggregation
                     for model_data in doc.get("phonesByModel", []):
                         model = model_data.get("model", "Unknown")
                         count = model_data.get("count", 0)
-                        location_doc["phonesByModel"][model] = location_doc["phonesByModel"].get(model, 0) + count
+                        phones_by_model[model] = phones_by_model.get(model, 0) + count
 
                     for model_data in doc.get("phonesByModelJustiz", []):
                         model = model_data.get("model", "Unknown")
                         count = model_data.get("count", 0)
-                        location_doc["phonesByModelJustiz"][model] = location_doc["phonesByModelJustiz"].get(model, 0) + count
+                        phones_by_model_justiz[model] = phones_by_model_justiz.get(model, 0) + count
 
                     for model_data in doc.get("phonesByModelJVA", []):
                         model = model_data.get("model", "Unknown")
                         count = model_data.get("count", 0)
-                        location_doc["phonesByModelJVA"][model] = location_doc["phonesByModelJVA"].get(model, 0) + count
+                        phones_by_model_jva[model] = phones_by_model_jva.get(model, 0) + count
 
-                    # Aggregate VLAN usage
+                    # Efficient VLAN aggregation
                     for vlan_data in doc.get("vlanUsage", []):
                         vlan = vlan_data.get("vlan", "")
                         count = vlan_data.get("count", 0)
                         if vlan:
-                            location_doc["vlanUsage"][vlan] = location_doc["vlanUsage"].get(vlan, 0) + count
+                            vlan_usage[vlan] = vlan_usage.get(vlan, 0) + count
 
-                    # Collect switches - handle both null and list cases
+                    # Efficient switch aggregation (ALL switches, no limits)
                     switches_data = doc.get("switches", [])
-                    if switches_data:  # Only if not null/empty
+                    if switches_data:
                         for switch_data in switches_data:
                             if isinstance(switch_data, dict):
                                 hostname = switch_data.get("hostname", "")
-                            else:
-                                hostname = str(switch_data)  # Handle string entries
-                            if hostname:
-                                location_doc["switches"].add(hostname)
+                                vlans_data = switch_data.get("vlans", [])
+                                if hostname:
+                                    if hostname not in switches_dict:
+                                        switches_dict[hostname] = {}
 
-                    # Aggregate KEM phones
+                                    # Direct VLAN aggregation
+                                    for vlan_obj in vlans_data:
+                                        if isinstance(vlan_obj, dict):
+                                            vlan = vlan_obj.get("vlan", "")
+                                            count = vlan_obj.get("count", 0)
+                                            if vlan:
+                                                switches_dict[hostname][vlan] = switches_dict[hostname].get(vlan, 0) + count
+
+                    # KEM phones aggregation
                     kem_phones_data = doc.get("kemPhones", [])
-                    if kem_phones_data:  # Only if not null/empty
-                        location_doc["kemPhones"].extend(kem_phones_data)
+                    if kem_phones_data:
+                        kem_phones.extend(kem_phones_data)
 
-            # Convert aggregated dictionaries back to lists
-            location_doc["phonesByModel"] = [{"model": m, "count": c} for m, c in location_doc["phonesByModel"].items()]
+            # Convert aggregated data to final format efficiently
+            location_doc = {
+                "query": query,
+                "mode": "prefix",
+                "totalPhones": total_phones,
+                "totalSwitches": total_switches,
+                "phonesWithKEM": phones_with_kem,
+                "phonesByModel": [{"model": m, "count": c} for m, c in phones_by_model.items()],
+                "phonesByModelJustiz": [{"model": m, "count": c} for m, c in phones_by_model_justiz.items()],
+                "phonesByModelJVA": [{"model": m, "count": c} for m, c in phones_by_model_jva.items()],
+                "vlanUsage": [{"vlan": v, "count": c} for v, c in vlan_usage.items()],
+                "switches": [],
+                "kemPhones": kem_phones,
+            }
+
+            # Sort phone models by count (descending)
             location_doc["phonesByModel"].sort(key=lambda x: (-x["count"], x["model"]))
-
-            location_doc["phonesByModelJustiz"] = [{"model": m, "count": c} for m, c in location_doc["phonesByModelJustiz"].items()]
             location_doc["phonesByModelJustiz"].sort(key=lambda x: (-x["count"], x["model"]))
-
-            location_doc["phonesByModelJVA"] = [{"model": m, "count": c} for m, c in location_doc["phonesByModelJVA"].items()]
             location_doc["phonesByModelJVA"].sort(key=lambda x: (-x["count"], x["model"]))
 
-            location_doc["vlanUsage"] = [{"vlan": v, "count": c} for v, c in location_doc["vlanUsage"].items()]
             # Sort VLANs numerically
             def vlan_key(item):
                 v = item["vlan"]
@@ -1603,11 +1629,16 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                     return (1, v)
             location_doc["vlanUsage"].sort(key=vlan_key)
 
-            # Convert switches set to list and create switch details
-            switch_list = sorted(list(location_doc["switches"]))
-            location_doc["switches"] = [{"hostname": sw, "vlanCount": 0, "vlans": []} for sw in switch_list]
-            # Note: Keep the aggregated totalSwitches from OpenSearch data, don't override with len(switch_list)
-            # because switch details might be incomplete/null in some snapshots
+            # Convert switches to final format - ALL switches included
+            switch_list = []
+            for hostname, vlans_dict in switches_dict.items():
+                vlans_list = [{"vlan": vlan, "count": count} for vlan, count in vlans_dict.items()]
+                vlans_list.sort(key=vlan_key)
+                switch_list.append({
+                    "hostname": hostname,
+                    "vlans": vlans_list
+                })
+            location_doc["switches"] = sorted(switch_list, key=lambda x: x["hostname"])
 
         # Check if we have sufficient detail data for the UI - NO FALLBACKS
         if not _has_sufficient_detail_data(location_doc):

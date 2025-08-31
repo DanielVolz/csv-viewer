@@ -331,8 +331,16 @@ class OpenSearchConfig:
                     ordered.append(current_index)
                 elif legacy_index in indices:
                     ordered.append(legacy_index)
-                # Add wildcard covering only canonical netspeed.csv.N indices (exclude archives)
+
+                # Add all historical netspeed indices explicitly (not just wildcard)
+                # This ensures MAC address searches find data in netspeed.csv.0, netspeed.csv.1, etc.
+                historical_indices = [idx for idx in indices if idx.startswith("netspeed_netspeed_csv_") and idx != current_index]
+                ordered.extend(sorted(historical_indices))
+
+                # Also add wildcard as fallback for any missed indices
                 ordered.append("netspeed_netspeed_csv_*")
+
+                logger.info(f"Historical search indices: {ordered}")
                 return ordered
             else:
                 # If not including historical files, search only the current netspeed file index
@@ -1082,6 +1090,37 @@ class OpenSearchConfig:
             Dict[str, Any]: Query body
         """
         logger.debug(f"Building query body for query: {query}, field: {field}, size: {size}")
+
+        # Special handling for KEM searches - search in KEM and KEM 2 fields
+        if not field and isinstance(query, str) and query.upper().strip() == "KEM":
+            # Use all columns including KEM fields for KEM searches
+            all_columns = [
+                "#", "File Name", "Creation Date", "IP Address", "Line Number", "Serial Number", "Model Name",
+                "KEM", "KEM 2", "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
+                "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+            ]
+            return {
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"KEM.keyword": "KEM"}},
+                            {"term": {"KEM 2.keyword": "KEM"}},
+                            {"match": {"KEM": "KEM"}},
+                            {"match": {"KEM 2": "KEM"}}
+                        ],
+                        "minimum_should_match": 1
+                    }
+                },
+                "_source": all_columns,
+                "size": size,
+                "sort": [{"Creation Date": {"order": "desc"}}, {
+                    "_script": {"type": "number", "order": "asc", "script": {
+                        "lang": "painless",
+                        "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
+                        "params": {"f": "netspeed.csv"}
+                    }}
+                }, {"_score": {"order": "desc"}}]
+            }
 
         if field:
             from utils.csv_utils import DESIRED_ORDER
@@ -2042,9 +2081,13 @@ class OpenSearchConfig:
             if looks_like_mac_first:
                 # Force historical for the general phase regardless of caller flag
                 indices = self.get_search_indices(True)
+            # Check if this is a KEM search - optimize performance but return ALL results
+            is_kem_search = isinstance(query, str) and query.upper().strip() == "KEM"
+
             # Use canonical MAC inside the general body for MAC queries
             qb_query = str(canonical_mac) if looks_like_mac_first and canonical_mac else query
             query_body = self._build_query_body(qb_query, field, size)
+
             logger.info(f"Search query: indices={indices}, query={query_body}")
             response = self.client.search(index=indices, body=query_body)
             logger.info(f"Search response: {response}")
@@ -2062,7 +2105,12 @@ class OpenSearchConfig:
                 ])
 
             # Deduplicate documents while preserving sort order
-            unique_documents = self._deduplicate_documents_preserve_order(documents)
+            # Skip expensive deduplication for KEM searches to improve performance
+            if is_kem_search:
+                unique_documents = documents
+                logger.info(f"Skipping deduplication for KEM search to improve performance")
+            else:
+                unique_documents = self._deduplicate_documents_preserve_order(documents)
 
             # Always restrict results to canonical netspeed files only:
             # - netspeed.csv
@@ -2311,9 +2359,32 @@ class OpenSearchConfig:
             # Apply display column filtering for consistency
             from utils.csv_utils import DESIRED_ORDER
 
+            # Enhance documents with KEM information in Line Number field for icon display
+            enhanced_documents = []
+            for doc in unique_documents:
+                enhanced_doc = doc.copy()
+
+                # Embed KEM information in Line Number field for frontend icon display
+                line_number = enhanced_doc.get('Line Number', '')
+                kem_field = enhanced_doc.get('KEM', '')
+                kem2_field = enhanced_doc.get('KEM 2', '')
+
+                # Build KEM suffix for Line Number
+                kem_parts = []
+                if kem_field and str(kem_field).strip():
+                    kem_parts.append('KEM')
+                if kem2_field and str(kem2_field).strip():
+                    kem_parts.append('KEM2')
+
+                # Embed KEM info in Line Number if present
+                if kem_parts:
+                    enhanced_doc['Line Number'] = f"{line_number} {' '.join(kem_parts)}"
+
+                enhanced_documents.append(enhanced_doc)
+
             # Filter documents to only include desired columns
             filtered_documents = []
-            for doc in unique_documents:
+            for doc in enhanced_documents:
                 filtered_doc = {}
                 for header in DESIRED_ORDER:
                     if header in doc:

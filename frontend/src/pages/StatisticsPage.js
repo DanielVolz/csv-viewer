@@ -220,8 +220,22 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const [locOptions, setLocOptions] = React.useState([]);
   const [allLocOptions, setAllLocOptions] = React.useState([]); // Cache all locations
   const [locError, setLocError] = React.useState(null);
-  const [locSelected, setLocSelected] = React.useState(null);
-  const [debouncedLocSelected, setDebouncedLocSelected] = React.useState(null); // Debounced version for API calls
+  const [locSelected, setLocSelected] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      return saved.statistics?.lastSelectedLocation || null;
+    } catch {
+      return null;
+    }
+  });
+  const [debouncedLocSelected, setDebouncedLocSelected] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      return saved.statistics?.lastSelectedLocation || null;
+    } catch {
+      return null;
+    }
+  }); // Debounced version for API calls
   const [snackbar, setSnackbar] = React.useState({ open: false, message: '' });
   const [locStats, setLocStats] = React.useState({
     query: '',
@@ -244,7 +258,14 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const locTimelineLoadedKeyRef = React.useRef('');
 
   // Local input state for immediate UI response, debounced for filtering
-  const [localInput, setLocalInput] = React.useState('');
+  const [localInput, setLocalInput] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      return saved.statistics?.lastSelectedLocation || '';
+    } catch {
+      return '';
+    }
+  });
   const [fieldFocused, setFieldFocused] = React.useState(false);
   const [isSearching, setIsSearching] = React.useState(false);
   const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(-1); // For keyboard navigation
@@ -259,6 +280,20 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     if (!val || val.trim() === '') {
       setLocSelected(null);
       setIsSearching(false);
+
+      // Immediately clear statistics when input is cleared
+      setLocStats({
+        totalPhones: 0,
+        totalSwitches: 0,
+        phonesWithKEM: 0,
+        phonesByModel: [],
+        phonesByModelJustiz: [],
+        phonesByModelJVA: [],
+        vlanUsage: [],
+        switches: [],
+        kemPhones: [],
+      });
+      setLocStatsLoading(false);
     } else if (val.length >= 2) {
       setIsSearching(true); // Start search indicator
     }
@@ -284,9 +319,44 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       // If user is typing something different than the expected display, clear selection
       if (localInput !== expectedDisplay && localInput !== locSelected) {
         setLocSelected(null);
+
+        // Also clear stats when selection is cleared due to typing mismatch
+        setLocStats({
+          totalPhones: 0,
+          totalSwitches: 0,
+          phonesWithKEM: 0,
+          phonesByModel: [],
+          phonesByModelJustiz: [],
+          phonesByModelJVA: [],
+          vlanUsage: [],
+          switches: [],
+          kemPhones: [],
+        });
+        setLocStatsLoading(false);
       }
     }
   }, [localInput, locSelected, cityNameByCode3]);
+
+  // Save selected location to localStorage when it changes
+  React.useEffect(() => {
+    if (saveStatisticsPrefs) {
+      saveStatisticsPrefs({ lastSelectedLocation: locSelected });
+    }
+  }, [locSelected, saveStatisticsPrefs]);
+
+  // Update localInput display when city names are loaded or location changes
+  React.useEffect(() => {
+    if (locSelected && cityNameByCode3) {
+      const cityCode = locSelected.slice(0, 3);
+      const cityName = cityNameByCode3[cityCode];
+      const displayValue = cityName ? `${locSelected} (${cityName})` : locSelected;
+
+      // Only update if current localInput doesn't already match the expected display
+      if (localInput !== displayValue) {
+        setLocalInput(displayValue);
+      }
+    }
+  }, [locSelected, cityNameByCode3, localInput]);
 
   const handleLocationFocus = React.useCallback(() => {
     setFieldFocused(true);
@@ -412,6 +482,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
       if (cityCode) {
         setLocSelected(cityCode);
+        setLocalInput(`${cityCode} (${value})`); // Show city name in input
         setLocInput(cityCode);
       }
     }
@@ -1087,10 +1158,30 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                     <CloseIcon
                       fontSize="small"
                       onClick={() => {
+                        // Immediate clear - no delays
                         setLocSelected(null);
                         setLocalInput('');
                         setLocInput('');
                         setSelectedOptionIndex(-1);
+
+                        // Immediately clear statistics data to avoid delay
+                        setLocStats({
+                          totalPhones: 0,
+                          totalSwitches: 0,
+                          phonesWithKEM: 0,
+                          phonesByModel: [],
+                          phonesByModelJustiz: [],
+                          phonesByModelJVA: [],
+                          vlanUsage: [],
+                          switches: [],
+                          kemPhones: [],
+                        });
+                        setLocStatsLoading(false);
+
+                        // Clear from localStorage as well
+                        if (saveStatisticsPrefs) {
+                          saveStatisticsPrefs({ lastSelectedLocation: null });
+                        }
                       }}
                       sx={{
                         cursor: 'pointer',
@@ -1255,8 +1346,11 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                   name === option
                 )?.[0];
 
+                // Extract key from props to avoid React warning
+                const { key, ...otherProps } = props;
+
                 return (
-                  <li {...props}>
+                  <li key={key} {...otherProps}>
                     <Box>
                       <Typography variant="body2">{option}</Typography>
                       {cityCode && (
@@ -1285,16 +1379,34 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         </Grid>
 
         {locStats?.mode === 'prefix' && locStats?.query && (
-          <Typography variant="caption" color="text.secondary">
-            Aggregated across all sites starting with {locStats.query} (e.g., {locStats.query}01, {locStats.query}02, ...)
-          </Typography>
+          <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              City-wide Statistics for {cityNameByCode3[locStats.query] || locStats.query}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Showing aggregated data across all locations starting with {locStats.query} (e.g., {locStats.query}01, {locStats.query}02, {locStats.query}03, ...)
+            </Typography>
+          </Alert>
         )}
 
         {/* Location-specific timeline (last 31 days) */}
         {locSelected && (
           <Box sx={{ mt: 2 }}>
             <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
-              Timeline for {locSelected} ({(locTimeline.series || []).length} days)
+              Timeline for {(() => {
+                // If it's a 3-letter code and we have city data in prefix mode, show city name
+                if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
+                  return `${cityNameByCode3[locSelected]} (${locSelected})`;
+                }
+                // If it's a 5-letter location code, show with city name
+                if (locSelected?.length === 5) {
+                  const cityCode = locSelected.slice(0, 3);
+                  const cityName = cityNameByCode3[cityCode];
+                  return cityName ? `${locSelected} (${cityName})` : locSelected;
+                }
+                // Otherwise just show the location code
+                return locSelected;
+              })()} ({(locTimeline.series || []).length} days)
             </Typography>
             {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
@@ -1359,62 +1471,58 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 </Box>
               ) : (
                 <Box>
-                  {/* Show only Justice section for Justice locations, only JVA section for JVA locations */}
-                  {(!locSelected || isJusticeLocation(locSelected)) && (
-                    <>
-                      <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
-                        Justice institutions (Justiz)
-                      </Typography>
-                      <List dense sx={{ mb: 1 }}>
-                        {(locStats.phonesByModelJustiz || [])
-                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                          .slice(0, 5)
-                          .map(({ model, count }) => (
-                            <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
-                              <ListItemText
-                                primary={
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                    <Typography variant="body2" color="text.secondary">{model}</Typography>
-                                    <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
-                                  </Box>
-                                }
-                              />
-                            </ListItem>
-                          ))}
-                        {(locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
-                          <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
-                        )}
-                      </List>
-                    </>
-                  )}
+                  {/* Show both sections for city search (3-letter codes), or specific section for exact locations, but only if data exists */}
+                  {(!locSelected || locSelected.length === 3 || isJusticeLocation(locSelected)) &&
+                    (locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
+                      <>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
+                          Justice institutions (Justiz)
+                        </Typography>
+                        <List dense sx={{ mb: 1 }}>
+                          {(locStats.phonesByModelJustiz || [])
+                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                            .slice(0, 5)
+                            .map(({ model, count }) => (
+                              <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
+                                <ListItemText
+                                  primary={
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                      <Typography variant="body2" color="text.secondary">{model}</Typography>
+                                      <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                                    </Box>
+                                  }
+                                />
+                              </ListItem>
+                            ))}
+                        </List>
+                      </>
+                    )}
 
-                  {(!locSelected || isJVALocation(locSelected)) && (
-                    <>
-                      <Typography variant="body2" sx={{ fontWeight: 600, color: 'warning.main', mb: 0.5 }}>
-                        Correctional Facility (JVA)
-                      </Typography>
-                      <List dense>
-                        {(locStats.phonesByModelJVA || [])
-                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                          .slice(0, 5)
-                          .map(({ model, count }) => (
-                            <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
-                              <ListItemText
-                                primary={
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                    <Typography variant="body2" color="text.secondary">{model}</Typography>
-                                    <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
-                                  </Box>
-                                }
-                              />
-                            </ListItem>
-                          ))}
-                        {(locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !locStatsLoading && (
-                          <Typography variant="body2" color="text.secondary" sx={{ px: 0, py: 0.5 }}>No data</Typography>
-                        )}
-                      </List>
-                    </>
-                  )}
+                  {(!locSelected || locSelected.length === 3 || isJVALocation(locSelected)) &&
+                    (locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
+                      <>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: 'warning.main', mb: 0.5 }}>
+                          Correctional Facility (JVA)
+                        </Typography>
+                        <List dense>
+                          {(locStats.phonesByModelJVA || [])
+                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                            .slice(0, 5)
+                            .map(({ model, count }) => (
+                              <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
+                                <ListItemText
+                                  primary={
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                      <Typography variant="body2" color="text.secondary">{model}</Typography>
+                                      <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                                    </Box>
+                                  }
+                                />
+                              </ListItem>
+                            ))}
+                        </List>
+                      </>
+                    )}
                 </Box>
               )}
             </Grid>
@@ -1458,7 +1566,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 2, mb: 1, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="body2" fontWeight={700} color="primary.main">
-                Switches at this Location {locStats.totalSwitches?.toLocaleString?.() ?? locStats.totalSwitches}
+                Switches {(() => {
+                  if (locStats?.mode === 'prefix' && cityNameByCode3[locStats?.query]) {
+                    return `in ${cityNameByCode3[locStats.query]} (${locStats.query})`;
+                  }
+                  return 'at this Location';
+                })()} ({locStats.totalSwitches?.toLocaleString?.() ?? locStats.totalSwitches})
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
