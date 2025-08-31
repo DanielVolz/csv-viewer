@@ -298,7 +298,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   // Timeline state (configurable days)
   const [timeline, setTimeline] = React.useState({ loading: false, error: null, series: [] });
   const [backfillInfo, setBackfillInfo] = React.useState(null);
-  const [timelineDays, setTimelineDays] = React.useState(0); // 0 = full history by default
+  const [timelineDays, setTimelineDays] = React.useState(0); // 0 = all days by default
   const timelineLimitRef = React.useRef(0);
   // Top locations aggregate timeline state
   const [topCount, setTopCount] = React.useState(10);
@@ -359,7 +359,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     timeout: 150,
     style: { transitionDuration: '150ms' }
   };
-  // KPI selection for the timeline (controls which series are shown)
+  // KPI selection for the timelines (independent per scope)
   const KPI_DEFS = React.useMemo(() => ([
     { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
     { id: 'phonesWithKEM', label: 'Phones with KEM', color: '#2e7d32' },
@@ -369,18 +369,34 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   ]), []);
   // For per-location timeline, exclude Locations/Cities which don't make sense in that context
   const KPI_DEFS_LOC = React.useMemo(() => KPI_DEFS.filter(k => k.id !== 'totalLocations' && k.id !== 'totalCities'), [KPI_DEFS]);
-  // Default: exclude the very large 'Total Phones' so other KPIs are readable initially;
-  // initialize from localStorage if available (including empty array)
-  const [selectedKpis, setSelectedKpis] = React.useState(() => {
+  // Defaults: exclude 'Total Phones' so other KPIs are readable initially
+  const defaultKpisGlobal = React.useMemo(() => KPI_DEFS.filter(k => k.id !== 'totalPhones').map(k => k.id), [KPI_DEFS]);
+  const defaultKpisLoc = React.useMemo(() => KPI_DEFS_LOC.filter(k => k.id !== 'totalPhones').map(k => k.id), [KPI_DEFS_LOC]);
+  // Global timeline KPI selection
+  const [selectedKpisGlobal, setSelectedKpisGlobal] = React.useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
-      const arr = saved.statistics?.selectedKpis;
-      if (Array.isArray(arr)) return arr;
+      const stats = saved.statistics || {};
+      if (Array.isArray(stats.selectedKpisGlobal)) return stats.selectedKpisGlobal;
+      if (Array.isArray(stats.selectedKpis)) return stats.selectedKpis; // backward compat
     } catch { /* ignore */ }
-    return KPI_DEFS.filter(k => k.id !== 'totalPhones').map(k => k.id);
+    return defaultKpisGlobal;
   });
-  const toggleKpi = (id) => {
-    setSelectedKpis((prev) => prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]);
+  const toggleKpiGlobal = (id) => {
+    setSelectedKpisGlobal((prev) => prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]);
+  };
+  // Per-location timeline KPI selection (independent)
+  const [selectedKpisLoc, setSelectedKpisLoc] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
+      const stats = saved.statistics || {};
+      if (Array.isArray(stats.selectedKpisLoc)) return stats.selectedKpisLoc;
+      if (Array.isArray(stats.selectedKpis)) return stats.selectedKpis; // fallback
+    } catch { /* ignore */ }
+    return defaultKpisLoc;
+  });
+  const toggleKpiLoc = (id) => {
+    setSelectedKpisLoc((prev) => prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]);
   };
 
   // Location-specific state
@@ -683,8 +699,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       const prefs = getStatisticsPrefs?.() || {};
       if (prefs.locSelected) setLocSelected(prefs.locSelected);
       if (typeof prefs.locInput === 'string') setLocInput(prefs.locInput);
-      if (Array.isArray(prefs.selectedKpis)) setSelectedKpis(prefs.selectedKpis);
-      if (Number.isFinite(prefs.topCount)) setTopCount(prefs.topCount);
+      // KPI selections (independent)
+      if (Array.isArray(prefs.selectedKpisGlobal)) setSelectedKpisGlobal(prefs.selectedKpisGlobal);
+      if (Array.isArray(prefs.selectedKpisLoc)) setSelectedKpisLoc(prefs.selectedKpisLoc);
+      // Backward compatibility: a single selectedKpis applies to both
+      if (Array.isArray(prefs.selectedKpis)) {
+        setSelectedKpisGlobal(prefs.selectedKpis);
+        setSelectedKpisLoc(prefs.selectedKpis);
+      }
+      // Keep Top Locations fixed at Top 10; don't hydrate saved topCount
       if (typeof prefs.topExtras === 'string') setTopExtras(prefs.topExtras);
       if (Number.isFinite(prefs.topDays)) setTopDays(prefs.topDays);
       if (typeof prefs.topKpi === 'string') setTopKpi(prefs.topKpi);
@@ -734,13 +757,19 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   React.useEffect(() => {
     if (!statsHydratedRef.current) return;
-    saveStatisticsPrefs?.({ selectedKpis });
-  }, [selectedKpis, saveStatisticsPrefs]);
+    saveStatisticsPrefs?.({ selectedKpisGlobal });
+  }, [selectedKpisGlobal, saveStatisticsPrefs]);
 
   React.useEffect(() => {
     if (!statsHydratedRef.current) return;
-    saveStatisticsPrefs?.({ topCount, topExtras, topDays, topKpi });
-  }, [topCount, topExtras, topDays, topKpi, saveStatisticsPrefs]);
+    saveStatisticsPrefs?.({ selectedKpisLoc });
+  }, [selectedKpisLoc, saveStatisticsPrefs]);
+
+  React.useEffect(() => {
+    if (!statsHydratedRef.current) return;
+    // Keep Top Locations fixed to Top 10; don't persist topCount
+    saveStatisticsPrefs?.({ topExtras, topDays, topKpi });
+  }, [topExtras, topDays, topKpi, saveStatisticsPrefs]);
 
   // Funktion um Switch Port für einen Hostname zu holen
   const getSwitchPortForHostname = React.useCallback(async (hostname) => {
@@ -797,7 +826,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   // Fetch Top-N locations aggregate timeline when controls change (debounced)
   React.useEffect(() => {
-    const key = `${topCount}|${(topExtras || '').trim()}|${topDays}`;
+    const fixedCount = 10;
+    const key = `${fixedCount}|${(topExtras || '').trim()}|${topDays}`;
     if (topLoadedKey === key && (topTimeline.dates || []).length) return;
     let abort = false;
     const controller = new AbortController();
@@ -805,7 +835,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       try {
         setTopTimeline((t) => ({ ...t, loading: true, error: null }));
         const params = new URLSearchParams();
-        params.set('count', String(topCount));
+        params.set('count', String(fixedCount));
         params.set('limit', String(topDays || 0));
         if ((topExtras || '').trim()) params.set('extra', (topExtras || '').trim());
         params.set('mode', 'per_key');
@@ -838,7 +868,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       }
     }, 350);
     return () => { abort = true; controller.abort(); clearTimeout(h); };
-  }, [topCount, topExtras, topDays, getStatisticsPrefs, topLoadedKey, topTimeline.dates]);
+  }, [topExtras, topDays, getStatisticsPrefs, topLoadedKey, topTimeline.dates]);
 
   // Build per-location line series for selected KPI
   const topSeriesPerKey = React.useMemo(() => {
@@ -858,6 +888,36 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       data: (byKey[k]?.[topKpi] || new Array(dates.length).fill(0)),
     }));
   }, [topTimeline, topSelectedKeys, topKpi]);
+
+  // Map currently displayed series colors to their keys for chip styling
+  const topKeyColorMap = React.useMemo(() => {
+    const map = {};
+    for (const s of topSeriesPerKey) map[s.id] = s.color;
+    return map;
+  }, [topSeriesPerKey]);
+
+  // Sorted list of location keys for chips: selected first, then by latest KPI value desc, then label asc
+  const sortedTopKeysForChips = React.useMemo(() => {
+    const keys = topTimeline.keys || [];
+    const labels = topTimeline.labels || {};
+    const byKey = topTimeline.seriesByKey || {};
+    const dates = topTimeline.dates || [];
+    const lastIdx = Math.max(0, dates.length - 1);
+    const getVal = (k) => Number(byKey[k]?.[topKpi]?.[lastIdx] ?? 0);
+    const getLabel = (k) => (labels && labels[k]) ? labels[k] : k;
+    const selectedSet = new Set(topSelectedKeys || []);
+    const arr = [...keys];
+    arr.sort((a, b) => {
+      const aSel = selectedSet.has(a) ? 1 : 0;
+      const bSel = selectedSet.has(b) ? 1 : 0;
+      if (aSel !== bSel) return bSel - aSel; // selected first
+      const av = getVal(a);
+      const bv = getVal(b);
+      if (av !== bv) return bv - av; // higher value first
+      return String(getLabel(a)).localeCompare(String(getLabel(b)));
+    });
+    return arr;
+  }, [topTimeline.keys, topTimeline.labels, topTimeline.seriesByKey, topTimeline.dates, topSelectedKeys, topKpi]);
 
   // Eagerly fetch global timeline on mount and when days changes
   React.useEffect(() => {
@@ -2118,240 +2178,453 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           </Alert>
         )}
 
-        {/* Location-specific timeline (last 31 days) */}
-        {locSelected && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
-              Timeline for {(() => {
-                // If it's a 3-letter code and we have city data in prefix mode, show city name
-                if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
-                  return `${cityNameByCode3[locSelected]} (${locSelected})`;
-                }
-                // If it's a 5-letter location code, show with city name
-                if (locSelected?.length === 5) {
-                  const cityCode = locSelected.slice(0, 3);
-                  const cityName = cityNameByCode3[cityCode];
-                  return cityName ? `${locSelected} (${cityName})` : locSelected;
-                }
-                // Otherwise just show the location code
-                return locSelected;
-              })()} ({(locTimeline.series || []).length} days)
-            </Typography>
-            {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-              {KPI_DEFS_LOC.map((k) => {
-                const selected = selectedKpis.includes(k.id);
-                return (
-                  <Chip
-                    key={k.id}
-                    label={k.label}
-                    size="small"
-                    color={selected ? 'success' : 'default'}
-                    variant={selected ? 'filled' : 'outlined'}
-                    onClick={() => toggleKpi(k.id)}
-                  />
-                );
-              })}
-            </Box>
-            {locTimeline.loading ? (
-              <Skeleton variant="rectangular" height={220} />
-            ) : locTimeline.error ? (
-              <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
-            ) : (
-              <Box sx={{ width: '100%', overflowX: 'auto' }}>
-                {selectedKpis.length === 0 ? (
-                  <Alert severity="info" variant="outlined">Select at least one KPI to display.</Alert>
-                ) : (
-                  <LineChart
-                    height={240}
-                    xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-                    series={KPI_DEFS_LOC.filter(k => selectedKpis.includes(k.id)).map((k) => ({
-                      id: k.id,
-                      label: k.label,
-                      color: k.color,
-                      data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
-                    }))}
-                    margin={{ left: 40, right: 20, top: 56, bottom: 20 }}
-                    slotProps={{
-                      legend: {
-                        position: { vertical: 'top', horizontal: 'middle' },
-                        direction: 'row',
-                        itemGap: 16,
-                      },
-                    }}
-                    sx={{ minWidth: 520 }}
-                  />
-                )}
-              </Box>
-            )}
-          </Box>
-        )}
-
         {/* Additional per-location details */}
         <Box sx={{ mt: 2 }}>
-          <Grid container spacing={2} sx={{ mt: 0 }}>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
-              {locStatsLoading ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} variant="rectangular" height={28} />
-                  ))}
-                </Box>
-              ) : (
-                <Box>
-                  {/* Show both sections for city search (3-letter codes), or specific section for exact locations, but only if data exists */}
-                  {(!locSelected || locSelected.length === 3 || isJusticeLocation(locSelected)) &&
-                    (locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
-                      <Box sx={{
-                        mb: 2,
-                        p: 1.5,
-                        borderRadius: 1,
-                        backgroundColor: justiceTheme.background,
-                        border: '1px solid',
-                        borderColor: justiceTheme.border
-                      }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: justiceTheme.primary, mb: 0.5 }}>
-                          Justice institutions (Justiz)
-                        </Typography>
-                        <List dense sx={{ mb: 0 }}>
-                          {(locStats.phonesByModelJustiz || [])
-                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                            .slice(0, 5)
-                            .map(({ model, count }) => (
+          {/* Phones by Model - Full Width */}
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
+          {locStatsLoading ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} variant="rectangular" height={28} />
+              ))}
+            </Box>
+          ) : (
+            <Grid container spacing={2}>
+              {/* Justice institutions Box */}
+              {(!locSelected || locSelected.length === 3 || isJusticeLocation(locSelected)) &&
+                (locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
+                  <Grid item xs={12} md={4}>
+                    <Box sx={{
+                      p: 1.5,
+                      borderRadius: 1,
+                      backgroundColor: justiceTheme.background,
+                      border: '1px solid',
+                      borderColor: justiceTheme.border,
+                      height: 'fit-content'
+                    }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, color: justiceTheme.primary, mb: 0.5 }}>
+                        Justice institutions (Justiz)
+                      </Typography>
+                      <List dense sx={{ mb: 0 }}>
+                        {(locStats.phonesByModelJustiz || [])
+                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                          .slice(0, 5)
+                          .map(({ model, count }) => {
+                            const label = String(model);
+                            const lower = label.toLowerCase();
+                            let color = 'default';
+                            if (lower.includes('kem')) color = 'success';
+                            else if (lower.includes('conference')) color = 'info';
+                            else if (lower.includes('wireless')) color = 'warning';
+                            else color = 'primary';
+                            return (
                               <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
                                 <ListItemText
                                   primary={
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                      <Typography variant="body2" color="text.secondary">{model}</Typography>
-                                      <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                      <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                      <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
                                     </Box>
                                   }
                                 />
                               </ListItem>
-                            ))}
-                        </List>
-                      </Box>
-                    )}
+                            );
+                          })}
+                      </List>
+                    </Box>
+                  </Grid>
+                )}
 
-                  {(!locSelected || locSelected.length === 3 || isJVALocation(locSelected)) &&
-                    (locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
-                      <Box sx={{
-                        mb: 2,
-                        p: 1.5,
-                        borderRadius: 1,
-                        backgroundColor: jvaTheme.background,
-                        border: '1px solid',
-                        borderColor: jvaTheme.border
-                      }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: jvaTheme.primary, mb: 0.5 }}>
-                          Correctional Facility (JVA)
-                        </Typography>
-                        <List dense>
-                          {(locStats.phonesByModelJVA || [])
-                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                            .slice(0, 5)
-                            .map(({ model, count }) => (
+              {/* JVA Box */}
+              {(!locSelected || locSelected.length === 3 || isJVALocation(locSelected)) &&
+                (locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
+                  <Grid item xs={12} md={4}>
+                    <Box sx={{
+                      p: 1.5,
+                      borderRadius: 1,
+                      backgroundColor: jvaTheme.background,
+                      border: '1px solid',
+                      borderColor: jvaTheme.border,
+                      height: 'fit-content'
+                    }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, color: jvaTheme.primary, mb: 0.5 }}>
+                        Correctional Facility (JVA)
+                      </Typography>
+                      <List dense>
+                        {(locStats.phonesByModelJVA || [])
+                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                          .slice(0, 5)
+                          .map(({ model, count }) => {
+                            const label = String(model);
+                            const lower = label.toLowerCase();
+                            let color = 'default';
+                            if (lower.includes('kem')) color = 'success';
+                            else if (lower.includes('conference')) color = 'info';
+                            else if (lower.includes('wireless')) color = 'error';
+                            else color = 'warning';
+                            return (
                               <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
                                 <ListItemText
                                   primary={
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                      <Typography variant="body2" color="text.secondary">{model}</Typography>
-                                      <Typography variant="body2" fontWeight={600}>{Number(count || 0).toLocaleString()}</Typography>
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                      <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                      <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
                                     </Box>
                                   }
                                 />
                               </ListItem>
-                            ))}
-                        </List>
-                      </Box>
-                    )}
-                </Box>
+                            );
+                          })}
+                      </List>
+                    </Box>
+                  </Grid>
+                )}
+
+              {/* VLAN Usage Box */}
+              {(locStats.vlanUsage || []).length > 0 && (
+                <Grid item xs={12} md={4}>
+                  <Box sx={{
+                    p: 1.5,
+                    borderRadius: 1,
+                    backgroundColor: (theme) => alpha(theme.palette.primary.light, theme.palette.mode === 'dark' ? 0.08 : 0.05),
+                    border: '1px solid',
+                    borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
+                    height: 'fit-content'
+                  }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
+                      VLAN Usage
+                    </Typography>
+                    <List dense>
+                      {(locStats.vlanUsage || []).slice(0, 5).map(({ vlan, count }) => {
+                        const vLabel = String(vlan ?? '').trim();
+                        const lower = vLabel.toLowerCase();
+                        let color = 'default';
+                        let variant = 'outlined';
+                        if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
+                        else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
+                        else if (lower.includes('data')) { color = 'primary'; }
+                        else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
+                        else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
+                        return (
+                          <ListItem key={`vlan-${vlan}`} sx={{ py: 0.2, px: 0 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                  <Chip label={vLabel} size="small" color={color} variant={variant} />
+                                  <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                </Box>
+                              }
+                            />
+                          </ListItem>
+                        );
+                      })}
+                    </List>
+                  </Box>
+                </Grid>
               )}
             </Grid>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'primary.main' }}>VLAN Usage</Typography>
-              {locStatsLoading ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} variant="rectangular" height={28} />
-                  ))}
-                </Box>
-              ) : (
-                <List dense>
-                  {(locStats.vlanUsage || []).map(({ vlan, count }) => {
-                    const vLabel = String(vlan ?? '').trim();
-                    const lower = vLabel.toLowerCase();
-                    let color = 'default';
-                    let variant = 'outlined';
-                    if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
-                    else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
-                    else if (lower.includes('data')) { color = 'primary'; }
-                    else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
-                    else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
-                    return (
-                      <ListItem key={`vlan-${vlan}`} sx={{ py: 0.5 }}>
-                        <ListItemText
-                          primary={
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                              <Chip label={vLabel} size="small" color={color} variant={variant} />
-                              <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+          )}
+        </Box>
+
+        <Accordion
+          disableGutters
+          elevation={0}
+          TransitionProps={fastTransitionProps}
+          sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 2, mb: 1, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="body2" fontWeight={700} color="primary.main">
+              Switches {(() => {
+                if (locStats?.mode === 'prefix' && cityNameByCode3[locStats?.query]) {
+                  return `in ${cityNameByCode3[locStats.query]} (${locStats.query})`;
+                }
+                return 'at this Location';
+              })()} ({locStats.totalSwitches?.toLocaleString?.() ?? locStats.totalSwitches})
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            {locStatsLoading ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} variant="rectangular" height={24} />
+                ))}
+              </Box>
+            ) : (
+              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Switch</TableCell>
+                      <TableCell>VLAN</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || [])).map((sw) => (
+                      <TableRow key={sw.hostname} hover>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          {/* Switch Hostname mit getrennten Klick-Bereichen wie in DataTable */}
+                          {(() => {
+                            const hostname = String(sw.hostname || '');
+                            // Split hostname in hostname Teil (vor erstem .) und Domain Teil
+                            const parts = hostname.split('.');
+                            const hostnameShort = parts[0] || hostname;
+                            const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+
+                            const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
+
+                            const sshTitle = sshUsername
+                              ? `Connect SSH ${sshUsername}@${hostname}`
+                              : `SSH connection (SSH username not set)`;
+
+                            return (
+                              <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+                                {/* Hostname short part - kopiert hostname Teil vor dem . */}
+                                <Tooltip arrow placement="top" title={copyHostnameTitle}>
+                                  <Typography
+                                    variant="body2"
+                                    component="span"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      // Copy hostname short part (before first .)
+                                      copyToClipboard(hostnameShort).then(success => {
+                                        if (success) {
+                                          showCopyToast('Copied hostname', hostnameShort);
+                                        } else {
+                                          toast.error(`❌ Copy failed`, {
+                                            autoClose: 2000,
+                                            pauseOnHover: true,
+                                            pauseOnFocusLoss: false
+                                          });
+                                        }
+                                      });
+                                    }}
+                                    sx={{
+                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
+                                      cursor: 'pointer',
+                                      textDecoration: 'underline',
+                                      '&:hover': {
+                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
+                                        textDecoration: 'underline'
+                                      }
+                                    }}
+                                  >
+                                    {hostnameShort}
+                                  </Typography>
+                                </Tooltip>
+
+                                {/* Domain part - SSH Verbindung + kopiert Switch Port Cisco Format */}
+                                {domainPart && (
+                                  <Tooltip arrow placement="top" title={sshTitle}>
+                                    <Typography
+                                      variant="body2"
+                                      component="span"
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+
+                                        // First: Try to get switch port data and copy Cisco format
+                                        try {
+                                          const switchPort = await getSwitchPortForHostname(hostname);
+                                          if (switchPort) {
+                                            const ciscoFormat = convertToCiscoFormat(switchPort);
+                                            if (ciscoFormat && ciscoFormat.trim() !== '') {
+                                              await copyToClipboard(ciscoFormat);
+                                              showCopyToast('Copied Cisco port', ciscoFormat);
+                                            } else {
+                                              showCopyToast('Copied switch port', switchPort);
+                                              await copyToClipboard(switchPort);
+                                            }
+                                          }
+                                        } catch (error) {
+                                          console.warn('Failed to copy switch port:', error);
+                                        }
+
+                                        // Second: SSH link functionality
+                                        if (sshUsername && sshUsername.trim() !== '') {
+                                          const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                          toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                          setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                        } else {
+                                          // If no SSH username, show warning
+                                          const ToastContent = () => (
+                                            <div>
+                                              ⚠️ SSH username not configured!{' '}
+                                              <span
+                                                onClick={() => {
+                                                  try { navigateToSettings?.(); } catch { }
+                                                  try { toast.dismiss(); } catch { }
+                                                }}
+                                                style={{
+                                                  color: '#4f46e5',
+                                                  textDecoration: 'underline',
+                                                  cursor: 'pointer',
+                                                  fontWeight: 'bold'
+                                                }}
+                                              >
+                                                Go to Settings
+                                              </span> to set your SSH username.
+                                            </div>
+                                          );
+                                          toast.warning(<ToastContent />, {
+                                            autoClose: 6000,
+                                            pauseOnHover: true,
+                                            pauseOnFocusLoss: false
+                                          });
+                                        }
+                                      }}
+                                      sx={{
+                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 0.8)' : '#689f38',
+                                        cursor: 'pointer',
+                                        textDecoration: 'underline',
+                                        '&:hover': {
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 1)' : '#558b2f',
+                                          textDecoration: 'underline'
+                                        }
+                                      }}
+                                    >
+                                      {domainPart}
+                                    </Typography>
+                                  </Tooltip>
+                                )}
+                              </Box>
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell>
+                          {/* Show VLANs for this specific switch */}
+                          {sw.vlans && sw.vlans.length > 0 ? (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                              {sw.vlans.map(({ vlan, count }) => {
+                                const label = String(vlan ?? '').trim();
+                                const lower = label.toLowerCase();
+                                let color = 'default';
+                                let variant = 'outlined';
+                                if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
+                                else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
+                                else if (lower.includes('data')) { color = 'primary'; }
+                                else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
+                                else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
+                                else if (lower.includes('inactive') || lower.includes('down') || lower.includes('disabled')) { color = 'default'; variant = 'outlined'; }
+                                return (
+                                  <Chip
+                                    key={`${sw.hostname}-vlan-${vlan}`}
+                                    size="small"
+                                    label={`${label}: ${count}`}
+                                    color={color}
+                                    variant={variant}
+                                  />
+                                );
+                              })}
                             </Box>
-                          }
-                        />
-                      </ListItem>
-                    );
-                  })}
-                </List>
-              )}
-            </Grid>
-          </Grid>
-          <Accordion
-            disableGutters
-            elevation={0}
-            TransitionProps={fastTransitionProps}
-            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 2, mb: 1, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
-          >
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="body2" fontWeight={700} color="primary.main">
-                Switches {(() => {
-                  if (locStats?.mode === 'prefix' && cityNameByCode3[locStats?.query]) {
-                    return `in ${cityNameByCode3[locStats.query]} (${locStats.query})`;
-                  }
-                  return 'at this Location';
-                })()} ({locStats.totalSwitches?.toLocaleString?.() ?? locStats.totalSwitches})
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              {locStatsLoading ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} variant="rectangular" height={24} />
-                  ))}
-                </Box>
-              ) : (
-                <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Switch</TableCell>
-                        <TableCell>VLAN</TableCell>
+                          ) : (
+                            <Typography variant="body2" color="text.secondary">—</Typography>
+                          )}
+                        </TableCell>
                       </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || [])).map((sw) => (
-                        <TableRow key={sw.hostname} hover>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          disableGutters
+          elevation={0}
+          TransitionProps={fastTransitionProps}
+          sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="body2" fontWeight={700} color="success.main">
+              Phones with KEM at this Location {locStats.phonesWithKEM?.toLocaleString?.() ?? locStats.phonesWithKEM}
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            {locStatsLoading ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} variant="rectangular" height={24} />
+                ))}
+              </Box>
+            ) : (
+              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>IP Address</TableCell>
+                      <TableCell>MAC Address</TableCell>
+                      <TableCell>Switch Hostname</TableCell>
+                      <TableCell align="right">KEMs</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(locStats.kemPhones || []).map((p, idx) => {
+                      // Handle both old format (CSV fields) and new format (backend objects)
+                      const key = (p.mac || p['MAC Address'] || p.ip || p['IP Address'] || String(idx));
+                      const mac = p.mac || p['MAC Address'];
+                      const ip = p.ip || p['IP Address'];
+                      const model = p.model || p['Model Name'];
+                      const serial = p.serial || p['Serial Number'];
+                      const switchHostname = p.switch || p['Switch Hostname'];
+                      // For new format, assume 1 KEM (since they are in kemPhones array)
+                      const kem1 = p['KEM'] ? (p['KEM'] || '').trim() : 'KEM';
+                      const kem2 = (p['KEM 2'] || '').trim();
+                      const kemCount = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
+                      return (
+                        <TableRow key={key} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'action.hover' } }} hover>
                           <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            {/* Switch Hostname mit getrennten Klick-Bereichen wie in DataTable */}
-                            {(() => {
-                              const hostname = String(sw.hostname || '');
+                            {ip ? (
+                              <Tooltip arrow placement="top" title={`Open http://${ip}`}>
+                                <Typography
+                                  variant="body2"
+                                  component="a"
+                                  href={`http://${encodeURIComponent(ip)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  sx={{
+                                    textDecoration: 'underline',
+                                    color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+                                    cursor: 'pointer',
+                                    '&:hover': {
+                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                                      textDecoration: 'underline'
+                                    }
+                                  }}
+                                >
+                                  {ip}
+                                </Typography>
+                              </Tooltip>
+                            ) : 'n/a'}
+                          </TableCell>
+                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                            {mac ? (
+                              <Typography
+                                variant="body2"
+                                component="a"
+                                href={`/?q=${encodeURIComponent(mac)}`}
+                                sx={{
+                                  textDecoration: 'underline',
+                                  color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+                                  cursor: 'pointer',
+                                  '&:hover': {
+                                    color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                                    textDecoration: 'underline'
+                                  }
+                                }}
+                              >
+                                {mac}
+                              </Typography>
+                            ) : 'n/a'}
+                          </TableCell>
+                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                            {switchHostname ? (() => {
+                              const hostname = String(switchHostname || '');
                               // Split hostname in hostname Teil (vor erstem .) und Domain Teil
                               const parts = hostname.split('.');
                               const hostnameShort = parts[0] || hostname;
                               const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
 
                               const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
-
                               const sshTitle = sshUsername
                                 ? `Connect SSH ${sshUsername}@${hostname}`
                                 : `SSH connection (SSH username not set)`;
@@ -2392,7 +2665,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                     </Typography>
                                   </Tooltip>
 
-                                  {/* Domain part - SSH Verbindung + kopiert Switch Port Cisco Format */}
+                                  {/* Domain part - SSH Verbindung */}
                                   {domainPart && (
                                     <Tooltip arrow placement="top" title={sshTitle}>
                                       <Typography
@@ -2401,21 +2674,24 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                         onClick={async (e) => {
                                           e.stopPropagation();
 
-                                          // First: Try to get switch port data and copy Cisco format
-                                          try {
-                                            const switchPort = await getSwitchPortForHostname(hostname);
-                                            if (switchPort) {
-                                              const ciscoFormat = convertToCiscoFormat(switchPort);
-                                              if (ciscoFormat && ciscoFormat.trim() !== '') {
-                                                await copyToClipboard(ciscoFormat);
-                                                showCopyToast('Copied Cisco port', ciscoFormat);
-                                              } else {
-                                                showCopyToast('Copied switch port', switchPort);
-                                                await copyToClipboard(switchPort);
-                                              }
+                                          // First: Copy Cisco port format
+                                          const ciscoFormat = p["Switch Port"] ? convertToCiscoFormat(p["Switch Port"]) : '';
+                                          if (ciscoFormat && ciscoFormat.trim() !== '') {
+                                            const copied = await copyToClipboard(ciscoFormat);
+                                            if (copied) {
+                                              showCopyToast('Copied Cisco port', ciscoFormat);
+                                            } else {
+                                              toast.error(`❌ Copy failed`, {
+                                                autoClose: 2000,
+                                                pauseOnHover: true,
+                                                pauseOnFocusLoss: false
+                                              });
                                             }
-                                          } catch (error) {
-                                            console.warn('Failed to copy switch port:', error);
+                                          } else {
+                                            toast.warning('No switch port available to copy', {
+                                              autoClose: 2000,
+                                              pauseOnHover: true
+                                            });
                                           }
 
                                           // Second: SSH link functionality
@@ -2424,14 +2700,14 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                             toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
                                             setTimeout(() => { window.location.href = sshUrl; }, 150);
                                           } else {
-                                            // If no SSH username, show warning
+                                            // If no SSH username, show warning but don't copy hostname again
                                             const ToastContent = () => (
                                               <div>
-                                                ⚠️ SSH username not configured!{' '}
+                                                📋 Copied Cisco port! ⚠️ SSH username not configured!{' '}
                                                 <span
                                                   onClick={() => {
-                                                    try { navigateToSettings?.(); } catch { }
-                                                    try { toast.dismiss(); } catch { }
+                                                    navigateToSettings();
+                                                    toast.dismiss();
                                                   }}
                                                   style={{
                                                     color: '#4f46e5',
@@ -2441,22 +2717,18 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                                   }}
                                                 >
                                                   Go to Settings
-                                                </span> to set your SSH username.
+                                                </span>{' '}to set your SSH username.
                                               </div>
                                             );
-                                            toast.warning(<ToastContent />, {
-                                              autoClose: 6000,
-                                              pauseOnHover: true,
-                                              pauseOnFocusLoss: false
-                                            });
+                                            toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
                                           }
                                         }}
                                         sx={{
-                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 0.8)' : '#689f38',
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 0.8)' : '#1976d2',
                                           cursor: 'pointer',
                                           textDecoration: 'underline',
                                           '&:hover': {
-                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 1)' : '#558b2f',
+                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 1)' : '#1565c0',
                                             textDecoration: 'underline'
                                           }
                                         }}
@@ -2467,326 +2739,151 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                   )}
                                 </Box>
                               );
-                            })()}
+                            })() : 'n/a'}
                           </TableCell>
-                          <TableCell>
-                            {/* Show VLANs for this specific switch */}
-                            {sw.vlans && sw.vlans.length > 0 ? (
-                              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                                {sw.vlans.map(({ vlan, count }) => {
-                                  const label = String(vlan ?? '').trim();
-                                  const lower = label.toLowerCase();
-                                  let color = 'default';
-                                  let variant = 'outlined';
-                                  if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
-                                  else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
-                                  else if (lower.includes('data')) { color = 'primary'; }
-                                  else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
-                                  else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
-                                  else if (lower.includes('inactive') || lower.includes('down') || lower.includes('disabled')) { color = 'default'; variant = 'outlined'; }
-                                  return (
-                                    <Chip
-                                      key={`${sw.hostname}-vlan-${vlan}`}
-                                      size="small"
-                                      label={`${label}: ${count}`}
-                                      color={color}
-                                      variant={variant}
-                                    />
-                                  );
-                                })}
-                              </Box>
-                            ) : (
-                              <Typography variant="body2" color="text.secondary">—</Typography>
-                            )}
-                          </TableCell>
+                          <TableCell align="right">{kemCount}</TableCell>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              )}
-            </AccordionDetails>
-          </Accordion>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </AccordionDetails>
+        </Accordion>
 
-          <Accordion
-            disableGutters
-            elevation={0}
-            TransitionProps={fastTransitionProps}
-            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
-          >
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="body2" fontWeight={700} color="success.main">
-                Phones with KEM at this Location {locStats.phonesWithKEM?.toLocaleString?.() ?? locStats.phonesWithKEM}
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              {locStatsLoading ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} variant="rectangular" height={24} />
-                  ))}
-                </Box>
-              ) : (
-                <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>IP Address</TableCell>
-                        <TableCell>MAC Address</TableCell>
-                        <TableCell>Switch Hostname</TableCell>
-                        <TableCell align="right">KEMs</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(locStats.kemPhones || []).map((p, idx) => {
-                        // Handle both old format (CSV fields) and new format (backend objects)
-                        const key = (p.mac || p['MAC Address'] || p.ip || p['IP Address'] || String(idx));
-                        const mac = p.mac || p['MAC Address'];
-                        const ip = p.ip || p['IP Address'];
-                        const model = p.model || p['Model Name'];
-                        const serial = p.serial || p['Serial Number'];
-                        const switchHostname = p.switch || p['Switch Hostname'];
-                        // For new format, assume 1 KEM (since they are in kemPhones array)
-                        const kem1 = p['KEM'] ? (p['KEM'] || '').trim() : 'KEM';
-                        const kem2 = (p['KEM 2'] || '').trim();
-                        const kemCount = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
-                        return (
-                          <TableRow key={key} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'action.hover' } }} hover>
-                            <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                              {ip ? (
-                                <Tooltip arrow placement="top" title={`Open http://${ip}`}>
-                                  <Typography
-                                    variant="body2"
-                                    component="a"
-                                    href={`http://${encodeURIComponent(ip)}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    sx={{
-                                      textDecoration: 'underline',
-                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
-                                      cursor: 'pointer',
-                                      '&:hover': {
-                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-                                        textDecoration: 'underline'
-                                      }
-                                    }}
-                                  >
-                                    {ip}
-                                  </Typography>
-                                </Tooltip>
-                              ) : 'n/a'}
-                            </TableCell>
-                            <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                              {mac ? (
-                                <Typography
-                                  variant="body2"
-                                  component="a"
-                                  href={`/?q=${encodeURIComponent(mac)}`}
-                                  sx={{
-                                    textDecoration: 'underline',
-                                    color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
-                                    cursor: 'pointer',
-                                    '&:hover': {
-                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-                                      textDecoration: 'underline'
-                                    }
-                                  }}
-                                >
-                                  {mac}
-                                </Typography>
-                              ) : 'n/a'}
-                            </TableCell>
-                            <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                              {switchHostname ? (() => {
-                                const hostname = String(switchHostname || '');
-                                // Split hostname in hostname Teil (vor erstem .) und Domain Teil
-                                const parts = hostname.split('.');
-                                const hostnameShort = parts[0] || hostname;
-                                const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
-
-                                const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
-                                const sshTitle = sshUsername
-                                  ? `Connect SSH ${sshUsername}@${hostname}`
-                                  : `SSH connection (SSH username not set)`;
-
-                                return (
-                                  <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
-                                    {/* Hostname short part - kopiert hostname Teil vor dem . */}
-                                    <Tooltip arrow placement="top" title={copyHostnameTitle}>
-                                      <Typography
-                                        variant="body2"
-                                        component="span"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          // Copy hostname short part (before first .)
-                                          copyToClipboard(hostnameShort).then(success => {
-                                            if (success) {
-                                              showCopyToast('Copied hostname', hostnameShort);
-                                            } else {
-                                              toast.error(`❌ Copy failed`, {
-                                                autoClose: 2000,
-                                                pauseOnHover: true,
-                                                pauseOnFocusLoss: false
-                                              });
-                                            }
-                                          });
-                                        }}
-                                        sx={{
-                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
-                                          cursor: 'pointer',
-                                          textDecoration: 'underline',
-                                          '&:hover': {
-                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
-                                            textDecoration: 'underline'
-                                          }
-                                        }}
-                                      >
-                                        {hostnameShort}
-                                      </Typography>
-                                    </Tooltip>
-
-                                    {/* Domain part - SSH Verbindung */}
-                                    {domainPart && (
-                                      <Tooltip arrow placement="top" title={sshTitle}>
-                                        <Typography
-                                          variant="body2"
-                                          component="span"
-                                          onClick={async (e) => {
-                                            e.stopPropagation();
-
-                                            // First: Copy Cisco port format
-                                            const ciscoFormat = p["Switch Port"] ? convertToCiscoFormat(p["Switch Port"]) : '';
-                                            if (ciscoFormat && ciscoFormat.trim() !== '') {
-                                              const copied = await copyToClipboard(ciscoFormat);
-                                              if (copied) {
-                                                showCopyToast('Copied Cisco port', ciscoFormat);
-                                              } else {
-                                                toast.error(`❌ Copy failed`, {
-                                                  autoClose: 2000,
-                                                  pauseOnHover: true,
-                                                  pauseOnFocusLoss: false
-                                                });
-                                              }
-                                            } else {
-                                              toast.warning('No switch port available to copy', {
-                                                autoClose: 2000,
-                                                pauseOnHover: true
-                                              });
-                                            }
-
-                                            // Second: SSH link functionality
-                                            if (sshUsername && sshUsername.trim() !== '') {
-                                              const sshUrl = `ssh://${sshUsername}@${hostname}`;
-                                              toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
-                                              setTimeout(() => { window.location.href = sshUrl; }, 150);
-                                            } else {
-                                              // If no SSH username, show warning but don't copy hostname again
-                                              const ToastContent = () => (
-                                                <div>
-                                                  📋 Copied Cisco port! ⚠️ SSH username not configured!{' '}
-                                                  <span
-                                                    onClick={() => {
-                                                      navigateToSettings();
-                                                      toast.dismiss();
-                                                    }}
-                                                    style={{
-                                                      color: '#4f46e5',
-                                                      textDecoration: 'underline',
-                                                      cursor: 'pointer',
-                                                      fontWeight: 'bold'
-                                                    }}
-                                                  >
-                                                    Go to Settings
-                                                  </span>{' '}to set your SSH username.
-                                                </div>
-                                              );
-                                              toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
-                                            }
-                                          }}
-                                          sx={{
-                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 0.8)' : '#1976d2',
-                                            cursor: 'pointer',
-                                            textDecoration: 'underline',
-                                            '&:hover': {
-                                              color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 1)' : '#1565c0',
-                                              textDecoration: 'underline'
-                                            }
-                                          }}
-                                        >
-                                          {domainPart}
-                                        </Typography>
-                                      </Tooltip>
-                                    )}
-                                  </Box>
-                                );
-                              })() : 'n/a'}
-                            </TableCell>
-                            <TableCell align="right">{kemCount}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              )}
-            </AccordionDetails>
-          </Accordion>
-        </Box>
+        {/* Location-specific timeline (last 31 days) - moved to bottom */}
+        {locSelected && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
+              Timeline for {(() => {
+                // If it's a 3-letter code and we have city data in prefix mode, show city name
+                if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
+                  return `${cityNameByCode3[locSelected]} (${locSelected})`;
+                }
+                // If it's a 5-letter location code, show with city name
+                if (locSelected?.length === 5) {
+                  const cityCode = locSelected.slice(0, 3);
+                  const cityName = cityNameByCode3[cityCode];
+                  return cityName ? `${locSelected} (${cityName})` : locSelected;
+                }
+                // Otherwise just show the location code
+                return locSelected;
+              })()} ({(locTimeline.series || []).length} days)
+            </Typography>
+            {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+              {KPI_DEFS_LOC.map((k) => {
+                const selected = selectedKpisLoc.includes(k.id);
+                return (
+                  <Chip
+                    key={k.id}
+                    label={k.label}
+                    size="small"
+                    color="default"
+                    variant={selected ? 'filled' : 'outlined'}
+                    onClick={() => toggleKpiLoc(k.id)}
+                    sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                  />
+                );
+              })}
+            </Box>
+            {locTimeline.loading ? (
+              <Skeleton variant="rectangular" height={220} />
+            ) : locTimeline.error ? (
+              <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
+            ) : (
+              <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                {selectedKpisLoc.length === 0 ? (
+                  <Alert severity="info" variant="outlined">Select at least one KPI to display.</Alert>
+                ) : (
+                  <LineChart
+                    height={240}
+                    xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
+                    series={KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
+                      id: k.id,
+                      label: k.label,
+                      color: k.color,
+                      data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
+                    }))}
+                    margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+                    slotProps={{
+                      legend: {
+                        position: { vertical: 'top', horizontal: 'middle' },
+                        direction: 'row',
+                        itemGap: 16,
+                      },
+                    }}
+                    sx={{ minWidth: 520 }}
+                  />
+                )}
+              </Box>
+            )}
+          </Box>
+        )}
 
         {/* Only summary metrics per location as requested */}
       </Paper>
 
-      {/* Timeline in separate section */}
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Timeline ({(timeline.series || []).length} days)</Typography>
-          <TextField
-            size="small"
-            type="number"
-            label="Days (0 = full)"
-            value={timelineDays}
-            onChange={(e) => {
-              const v = parseInt(e.target.value || '0', 10);
-              setTimelineDays(Number.isFinite(v) ? Math.max(0, v) : 0);
-            }}
-            sx={{ width: 160, ml: 'auto' }}
-          />
+      {/* Global Timeline (separate from per-location) */}
+      <Paper variant="outlined" sx={{ p: 2, mt: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.primary.main}`, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+        <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 700, color: 'primary.main' }}>
+          Global Timeline ({(timeline.series || []).length} days)
+        </Typography>
+
+        {/* Controls row: KPI chips left, days input right */}
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            {KPI_DEFS.map((k) => {
+              const selected = selectedKpisGlobal.includes(k.id);
+              return (
+                <Chip
+                  key={k.id}
+                  label={k.label}
+                  size="small"
+                  color="default"
+                  variant={selected ? 'filled' : 'outlined'}
+                  onClick={() => toggleKpiGlobal(k.id)}
+                  sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                />
+              );
+            })}
+          </Box>
+          <Box sx={{ ml: 'auto' }}>
+            <TextField
+              label="Days (0 = all)"
+              size="small"
+              type="number"
+              inputProps={{ min: 0 }}
+              value={timelineDays}
+              onChange={(e) => {
+                const v = Math.max(0, Number(e.target.value || 0));
+                setTimelineDays(v);
+              }}
+              sx={{ width: 160 }}
+            />
+          </Box>
         </Box>
-        {/* KPI selector */}
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-          {KPI_DEFS.map((k) => {
-            const selected = selectedKpis.includes(k.id);
-            return (
-              <Chip
-                key={k.id}
-                label={k.label}
-                size="small"
-                color={selected ? 'success' : 'default'}
-                variant={selected ? 'filled' : 'outlined'}
-                onClick={() => toggleKpi(k.id)}
-              />
-            );
-          })}
-        </Box>
+
         {timeline.loading ? (
-          <Skeleton variant="rectangular" height={220} />
+          <Skeleton variant="rectangular" height={240} />
         ) : timeline.error ? (
           <Alert severity="info" variant="outlined">{timeline.error}</Alert>
         ) : (
           <Box sx={{ width: '100%', overflowX: 'auto' }}>
-            {selectedKpis.length === 0 ? (
+            {selectedKpisGlobal.length === 0 ? (
               <Alert severity="info" variant="outlined">Select at least one KPI to display.</Alert>
             ) : (
               <LineChart
                 height={260}
                 xAxis={[{ data: (timeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-                series={KPI_DEFS.filter(k => selectedKpis.includes(k.id)).map((k) => ({
+                series={KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id)).map((k) => ({
                   id: k.id,
                   label: k.label,
                   color: k.color,
                   data: (timeline.series || []).map((p) => p.metrics?.[k.id] || 0),
                 }))}
-                margin={{ left: 40, right: 20, top: 56, bottom: 20 }}
+                margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
                 slotProps={{
                   legend: {
                     position: { vertical: 'top', horizontal: 'middle' },
@@ -2799,125 +2896,112 @@ const StatisticsPage = React.memo(function StatisticsPage() {
             )}
           </Box>
         )}
-        {timeline.error && (
-          <Box sx={{ mt: 1, display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Button size="small" variant="outlined" onClick={triggerBackfill}>Backfill snapshots</Button>
-            {backfillInfo && (
-              <Typography variant="caption" color="text.secondary">{backfillInfo}</Typography>
-            )}
-          </Box>
-        )}
       </Paper>
 
-      {/* Top Cities Timeline */}
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.primary.main}`, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.06 : 0.04) }}>
-        <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 700 }}>Top Cities Timeline — {TOP_KPI_DEFS.find(d => d.id === topKpi)?.label || ''} ({(topTimeline.dates || []).length} days)</Typography>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, alignItems: 'center' }}>
-          <Typography variant="body2" color="text.secondary">Show:</Typography>
-          {[
-            { n: 10, label: 'Top 10' },
-          ].map(({ n, label }) => (
-            <Chip
-              key={n}
-              label={label}
-              size="small"
-              color={topCount === n ? 'success' : 'default'}
-              variant={topCount === n ? 'filled' : 'outlined'}
-              onClick={() => { setTopCount(n); setTopLoadedKey(''); }}
-            />
-          ))}
-          <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>KPI:</Typography>
-          {TOP_KPI_DEFS.map((k) => (
-            <Chip
-              key={k.id}
-              label={k.label}
-              size="small"
-              color={topKpi === k.id ? 'success' : 'default'}
-              variant={topKpi === k.id ? 'filled' : 'outlined'}
-              onClick={() => setTopKpi(k.id)}
-            />
-          ))}
-          <TextField
-            size="small"
-            type="number"
-            label="Days (0 = full)"
-            value={topDays}
-            onChange={(e) => { const v = parseInt(e.target.value || '0', 10); setTopDays(Number.isFinite(v) ? Math.max(0, v) : 0); setTopLoadedKey(''); }}
-            sx={{ width: 140 }}
-          />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto', minWidth: 300 }}>
-            <TextField
-              size="small"
-              fullWidth
-              label="Add city codes (3 letters, comma-separated)"
-              placeholder="e.g., ABC, XYZ"
-              value={topExtras}
-              onChange={(e) => { setTopExtras(e.target.value); setTopLoadedKey(''); }}
-            />
-          </Box>
-        </Box>
-        {/* Select/deselect locations */}
-        {(topTimeline.keys || []).length > 0 && (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
-            <Chip size="small" label="Select all" variant="outlined" onClick={selectAllTopKeys} />
-            <Chip size="small" label="Clear all" variant="outlined" onClick={clearAllTopKeys} />
-            {(topTimeline.keys || []).map((k) => (
+      {/* Top Locations Timeline */}
+      <Paper variant="outlined" sx={{ p: 2, mt: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+        <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 700, color: 'secondary.main' }}>
+          Top 10 Locations Timeline ({(topTimeline.dates || []).length} days)
+        </Typography>
+
+        {/* Controls row: KPI chips left, count chips center, days input right */}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+          {/* KPI */}
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            {TOP_KPI_DEFS.map((k) => (
               <Chip
-                key={k}
+                key={k.id}
+                label={k.label}
                 size="small"
-                label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
-                color={topSelectedKeys.includes(k) ? 'success' : 'default'}
-                variant={topSelectedKeys.includes(k) ? 'filled' : 'outlined'}
-                onClick={() => toggleTopKey(k)}
+                color="default"
+                variant={topKpi === k.id ? 'filled' : 'outlined'}
+                onClick={() => setTopKpi(k.id)}
+                sx={topKpi === k.id ? { bgcolor: k.color || '#1976d2', color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
               />
             ))}
           </Box>
-        )}
-        {/* KPIs fixed for this timeline: Total Phones, Phones with KEM, Total Switches (aggregated over selected keys) */}
+
+          {/* Count chips removed (fixed to Top 10) */}
+
+          {/* Days input (0 = all) */}
+          <Box sx={{ ml: 'auto' }}>
+            <TextField
+              label="Days (0 = all)"
+              size="small"
+              type="number"
+              inputProps={{ min: 0 }}
+              value={topDays}
+              onChange={(e) => {
+                const v = Math.max(0, Number(e.target.value || 0));
+                setTopDays(v);
+              }}
+              sx={{ width: 160 }}
+            />
+          </Box>
+        </Box>
+
+        {/* Keys selection */}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+          <Chip
+            label="Select All"
+            size="small"
+            color="success"
+            variant="filled"
+            onClick={selectAllTopKeys}
+            sx={{ fontWeight: 700 }}
+          />
+          <Chip
+            label="Clear"
+            size="small"
+            color="error"
+            variant="filled"
+            onClick={clearAllTopKeys}
+            sx={{ fontWeight: 700 }}
+          />
+          {sortedTopKeysForChips.map((k) => {
+            const selected = topSelectedKeys.includes(k);
+            const chipColor = topKeyColorMap[k];
+            return (
+              <Chip
+                key={`key-${k}`}
+                label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
+                size="small"
+                color="default"
+                variant={selected ? 'filled' : 'outlined'}
+                onClick={() => toggleTopKey(k)}
+                sx={selected ? { bgcolor: chipColor || 'secondary.main', color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+              />
+            );
+          })}
+        </Box>
+
         {topTimeline.loading ? (
-          <Skeleton variant="rectangular" height={220} />
+          <Skeleton variant="rectangular" height={240} />
         ) : topTimeline.error ? (
           <Alert severity="info" variant="outlined">{topTimeline.error}</Alert>
         ) : (
           <Box sx={{ width: '100%', overflowX: 'auto' }}>
-            <LineChart
-              height={380}
-              xAxis={[{ data: (topTimeline.dates || []).map((d) => String(d).slice(5)), scaleType: 'point' }]}
-              series={topSeriesPerKey}
-              margin={{ left: 40, right: 20, top: 16, bottom: 24 }}
-              slotProps={{
-                legend: { hidden: true },
-                tooltip: {
-                  sx: {
-                    maxWidth: 640,
-                    '& ul': {
-                      columns: topCount >= 50 ? 4 : topCount >= 25 ? 2 : 1,
-                      columnGap: 16,
-                      margin: 0,
-                      padding: 0,
-                    },
+            {topSelectedKeys.length === 0 ? (
+              <Alert severity="info" variant="outlined">Select at least one location to display.</Alert>
+            ) : (
+              <LineChart
+                height={300}
+                xAxis={[{ data: (topTimeline.dates || []).map((d) => (d ? String(d).slice(5) : d)), scaleType: 'point' }]}
+                series={topSeriesPerKey}
+                margin={{ left: 52, right: 20, top: 120, bottom: 28 }}
+                slotProps={{
+                  legend: {
+                    position: { vertical: 'top', horizontal: 'middle' },
+                    direction: 'row',
+                    itemGap: 20,
                   },
-                },
-              }}
-              sx={{ minWidth: 520 }}
-            />
-            {(topSelectedKeys || []).length > 0 && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                Showing {topSelectedKeys.length} location lines
-              </Typography>
+                }}
+                sx={{ minWidth: 520 }}
+              />
             )}
           </Box>
         )}
       </Paper>
-
-      {/* Snackbar for location validation feedback */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={4000}
-        onClose={handleSnackbarClose}
-        message={snackbar.message}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      />
     </Box>
   );
 });
