@@ -13,6 +13,8 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import GavelIcon from '@mui/icons-material/Gavel';
 import SecurityIcon from '@mui/icons-material/Security';
 import PublicIcon from '@mui/icons-material/Public';
+import PlaceIcon from '@mui/icons-material/Place';
+import BusinessIcon from '@mui/icons-material/Business';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -1196,6 +1198,25 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 </Typography>
                 <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                   <List dense sx={{ flex: 1 }}>
+                    {/* Total Phones für Justiz */}
+                    <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
+                      <ListItemText
+                        primary={
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                            <Chip
+                              label="Total Phones"
+                              size="small"
+                              color="info"
+                              variant="filled"
+                              sx={{ fontWeight: 600 }}
+                            />
+                            <Typography variant="body2" fontWeight={700} sx={{ color: 'info.main', fontSize: '1rem' }}>
+                              {Number(data.totalJustizPhones || 0).toLocaleString()}
+                            </Typography>
+                          </Box>
+                        }
+                      />
+                    </ListItem>
                     {(data.phonesByModelJustiz || [])
                       .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
                       .map(({ model, count }) => {
@@ -1229,15 +1250,26 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                     <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', mr: 1 }}>
-                          <Typography variant="caption" color="text.secondary">
-                            View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
-                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <PlaceIcon sx={{ fontSize: '1.1rem', color: 'info.main' }} />
+                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                              View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
+                            </Typography>
+                          </Box>
                           <Box sx={{ display: 'flex', gap: 1 }}>
                             <Button
                               size="small"
                               variant="outlined"
                               onClick={(e) => { e.stopPropagation(); expandAllJustizCities(); }}
-                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                              sx={{
+                                minWidth: 'auto',
+                                px: 1.5,
+                                py: 0.5,
+                                fontSize: '0.7rem',
+                                borderRadius: 2,
+                                textTransform: 'none',
+                                fontWeight: 500
+                              }}
                             >
                               Expand All
                             </Button>
@@ -1245,7 +1277,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               size="small"
                               variant="outlined"
                               onClick={(e) => { e.stopPropagation(); collapseAllJustizCities(); }}
-                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                              sx={{
+                                minWidth: 'auto',
+                                px: 1.5,
+                                py: 0.5,
+                                fontSize: '0.7rem',
+                                borderRadius: 2,
+                                textTransform: 'none',
+                                fontWeight: 500
+                              }}
                             >
                               Collapse All
                             </Button>
@@ -1293,26 +1333,88 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               }}
                             >
                               <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'info.main' }}>
-                                  {cityGroup.cityName} ({cityGroup.cityCode})
-                                </Typography>
-                                <Chip
-                                  label={`${cityGroup.totalCityPhones.toLocaleString()} phones total`}
-                                  size="small"
-                                  color="info"
-                                  variant="filled"
-                                  sx={{ fontSize: '0.7rem', height: '24px', mr: 1 }}
-                                />
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <BusinessIcon sx={{ fontSize: '1rem', color: 'info.main' }} />
+                                  <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'info.main' }}>
+                                    {cityGroup.cityName} ({cityGroup.cityCode})
+                                  </Typography>
+                                </Box>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Chip
+                                    label={`${cityGroup.totalCityPhones.toLocaleString()} phones`}
+                                    size="small"
+                                    color="info"
+                                    variant="outlined"
+                                    sx={{
+                                      fontSize: '0.7rem',
+                                      height: '24px',
+                                      fontWeight: 600,
+                                      backgroundColor: (theme) => alpha(theme.palette.info.main, 0.1),
+                                      borderColor: (theme) => theme.palette.info.main,
+                                      color: (theme) => theme.palette.info.main
+                                    }}
+                                  />
+                                  <Chip
+                                    label={`${cityGroup.locations.length} locations`}
+                                    size="small"
+                                    variant="outlined"
+                                    color="info"
+                                    sx={{
+                                      fontSize: '0.7rem',
+                                      height: '24px',
+                                      fontWeight: 500,
+                                      mr: 1
+                                    }}
+                                  />
+                                </Box>
                               </Box>
                             </AccordionSummary>
                             <AccordionDetails sx={{ pt: 1, pb: 1 }}>
-                              <TableContainer>
-                                <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.5, px: 1, borderBottom: '1px solid', borderColor: 'divider' } }}>
+                              <TableContainer sx={{
+                                borderRadius: 2,
+                                overflow: 'hidden',
+                                border: '1px solid',
+                                borderColor: (theme) => alpha(theme.palette.info.main, 0.1)
+                              }}>
+                                <Table size="small" sx={{
+                                  '& .MuiTableCell-root': {
+                                    py: 0.8,
+                                    px: 1.5,
+                                    borderBottom: '1px solid',
+                                    borderColor: (theme) => alpha(theme.palette.info.main, 0.1)
+                                  }
+                                }}>
                                   <TableHead>
-                                    <TableRow sx={{ backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08) }}>
-                                      <TableCell sx={{ fontWeight: 600, color: 'info.main' }}>Location</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 600, color: 'info.main' }}>Total</TableCell>
-                                      <TableCell sx={{ fontWeight: 600, color: 'info.main' }}>Top Models</TableCell>
+                                    <TableRow sx={{
+                                      background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.info.main, 0.12)} 0%, ${alpha(theme.palette.info.main, 0.08)} 100%)`
+                                    }}>
+                                      <TableCell sx={{
+                                        fontWeight: 700,
+                                        color: 'info.main',
+                                        fontSize: '0.8rem',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                      }}>
+                                        Location
+                                      </TableCell>
+                                      <TableCell align="right" sx={{
+                                        fontWeight: 700,
+                                        color: 'info.main',
+                                        fontSize: '0.8rem',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                      }}>
+                                        Total Phones
+                                      </TableCell>
+                                      <TableCell sx={{
+                                        fontWeight: 700,
+                                        color: 'info.main',
+                                        fontSize: '0.8rem',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                      }}>
+                                        Top Models
+                                      </TableCell>
                                     </TableRow>
                                   </TableHead>
                                   <TableBody>
@@ -1320,9 +1422,21 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                       const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
                                       const topModels = filteredModels.slice(0, 3);
                                       return (
-                                        <TableRow key={`justiz-loc-${location.location}`} sx={{ '&:hover': { backgroundColor: (theme) => alpha(theme.palette.info.main, 0.02) } }}>
+                                        <TableRow
+                                          key={`justiz-loc-${location.location}`}
+                                          sx={{
+                                            '&:hover': {
+                                              backgroundColor: (theme) => alpha(theme.palette.info.main, 0.05),
+                                              transform: 'translateX(2px)',
+                                              transition: 'all 0.2s ease'
+                                            },
+                                            '&:nth-of-type(even)': {
+                                              backgroundColor: (theme) => alpha(theme.palette.info.main, 0.02)
+                                            }
+                                          }}
+                                        >
                                           <TableCell>
-                                            <Typography variant="body2" fontWeight={500} sx={{ color: 'text.primary' }}>
+                                            <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
                                               {location.location}
                                             </Typography>
                                           </TableCell>
@@ -1332,19 +1446,60 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                               size="small"
                                               color="primary"
                                               variant="outlined"
-                                              sx={{ fontSize: '0.7rem', height: '20px', minWidth: '50px' }}
+                                              sx={{
+                                                fontSize: '0.75rem',
+                                                height: '20px',
+                                                minWidth: '45px',
+                                                fontWeight: 500,
+                                                color: 'text.secondary',
+                                                backgroundColor: 'transparent',
+                                                border: '1px solid',
+                                                borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                                                '&:hover': {
+                                                  backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.04)
+                                                }
+                                              }}
                                             />
                                           </TableCell>
                                           <TableCell>
-                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
-                                              {topModels.map((modelData) => (
-                                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: (theme) => alpha(theme.palette.info.main, 0.05), borderRadius: 0.5, px: 0.8, py: 0.2 }}>
-                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                                              {topModels.map((modelData, index) => (
+                                                <Box
+                                                  key={`${location.location}-${modelData.model}`}
+                                                  sx={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    backgroundColor: (theme) => alpha(theme.palette.info.main, 0.06),
+                                                    borderRadius: 1,
+                                                    px: 1,
+                                                    py: 0.4,
+                                                    border: '1px solid',
+                                                    borderColor: (theme) => alpha(theme.palette.info.main, 0.15)
+                                                  }}
+                                                >
+                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 600, fontSize: '0.75rem' }}>
                                                     {modelData.model}
                                                   </Typography>
-                                                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                                                    {modelData.count.toLocaleString()}
-                                                  </Typography>
+                                                  <Chip
+                                                    label={modelData.count.toLocaleString()}
+                                                    size="small"
+                                                    color="info"
+                                                    variant="outlined"
+                                                    sx={{
+                                                      fontSize: '0.7rem',
+                                                      height: '16px',
+                                                      minWidth: '30px',
+                                                      fontWeight: 400,
+                                                      color: 'text.secondary',
+                                                      backgroundColor: 'transparent',
+                                                      border: '1px solid',
+                                                      borderColor: (theme) => alpha(theme.palette.divider, 0.2),
+                                                      '&:hover': {
+                                                        backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.03)
+                                                      }
+                                                    }}
+                                                  />
                                                 </Box>
                                               ))}
                                               {filteredModels.length > 3 && (
@@ -1385,6 +1540,25 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 </Typography>
                 <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                   <List dense sx={{ flex: 1 }}>
+                    {/* Total Phones für JVA */}
+                    <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
+                      <ListItemText
+                        primary={
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                            <Chip
+                              label="Total Phones"
+                              size="small"
+                              color="warning"
+                              variant="filled"
+                              sx={{ fontWeight: 600 }}
+                            />
+                            <Typography variant="body2" fontWeight={700} sx={{ color: 'warning.main', fontSize: '1rem' }}>
+                              {Number(data.totalJVAPhones || 0).toLocaleString()}
+                            </Typography>
+                          </Box>
+                        }
+                      />
+                    </ListItem>
                     {(data.phonesByModelJVA || [])
                       .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
                       .map(({ model, count }) => {
@@ -1418,15 +1592,26 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                     <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', mr: 1 }}>
-                          <Typography variant="caption" color="text.secondary">
-                            View by Location ({(data.phonesByModelJVADetails || []).length} locations)
-                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <PlaceIcon sx={{ fontSize: '1.1rem', color: 'warning.main' }} />
+                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                              View by Location ({(data.phonesByModelJVADetails || []).length} locations)
+                            </Typography>
+                          </Box>
                           <Box sx={{ display: 'flex', gap: 1 }}>
                             <Button
                               size="small"
                               variant="outlined"
                               onClick={(e) => { e.stopPropagation(); expandAllJvaCities(); }}
-                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                              sx={{
+                                minWidth: 'auto',
+                                px: 1.5,
+                                py: 0.5,
+                                fontSize: '0.7rem',
+                                borderRadius: 2,
+                                textTransform: 'none',
+                                fontWeight: 500
+                              }}
                             >
                               Expand All
                             </Button>
@@ -1434,7 +1619,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               size="small"
                               variant="outlined"
                               onClick={(e) => { e.stopPropagation(); collapseAllJvaCities(); }}
-                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                              sx={{
+                                minWidth: 'auto',
+                                px: 1.5,
+                                py: 0.5,
+                                fontSize: '0.7rem',
+                                borderRadius: 2,
+                                textTransform: 'none',
+                                fontWeight: 500
+                              }}
                             >
                               Collapse All
                             </Button>
@@ -1486,22 +1679,68 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                   {cityGroup.cityName} ({cityGroup.cityCode})
                                 </Typography>
                                 <Chip
-                                  label={`${cityGroup.totalCityPhones.toLocaleString()} phones total`}
+                                  label={`${cityGroup.totalCityPhones.toLocaleString()} phones`}
                                   size="small"
                                   color="warning"
-                                  variant="filled"
-                                  sx={{ fontSize: '0.7rem', height: '24px', mr: 1 }}
+                                  variant="outlined"
+                                  sx={{
+                                    fontSize: '0.7rem',
+                                    height: '24px',
+                                    fontWeight: 600,
+                                    backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.1),
+                                    borderColor: (theme) => theme.palette.warning.main,
+                                    color: (theme) => theme.palette.warning.main,
+                                    mr: 1
+                                  }}
                                 />
                               </Box>
                             </AccordionSummary>
                             <AccordionDetails sx={{ pt: 1, pb: 1 }}>
-                              <TableContainer>
-                                <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.5, px: 1, borderBottom: '1px solid', borderColor: 'divider' } }}>
+                              <TableContainer sx={{
+                                borderRadius: 2,
+                                overflow: 'hidden',
+                                border: '1px solid',
+                                borderColor: (theme) => alpha(theme.palette.warning.main, 0.1)
+                              }}>
+                                <Table size="small" sx={{
+                                  '& .MuiTableCell-root': {
+                                    py: 0.8,
+                                    px: 1.5,
+                                    borderBottom: '1px solid',
+                                    borderColor: (theme) => alpha(theme.palette.warning.main, 0.1)
+                                  }
+                                }}>
                                   <TableHead>
-                                    <TableRow sx={{ backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.08) }}>
-                                      <TableCell sx={{ fontWeight: 600, color: 'warning.main' }}>Location</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 600, color: 'warning.main' }}>Total</TableCell>
-                                      <TableCell sx={{ fontWeight: 600, color: 'warning.main' }}>Top Models</TableCell>
+                                    <TableRow sx={{
+                                      background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.warning.main, 0.12)} 0%, ${alpha(theme.palette.warning.main, 0.08)} 100%)`
+                                    }}>
+                                      <TableCell sx={{
+                                        fontWeight: 700,
+                                        color: 'warning.main',
+                                        fontSize: '0.8rem',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                      }}>
+                                        Location
+                                      </TableCell>
+                                      <TableCell align="right" sx={{
+                                        fontWeight: 700,
+                                        color: 'warning.main',
+                                        fontSize: '0.8rem',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                      }}>
+                                        Total Phones
+                                      </TableCell>
+                                      <TableCell sx={{
+                                        fontWeight: 700,
+                                        color: 'warning.main',
+                                        fontSize: '0.8rem',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                      }}>
+                                        Top Models
+                                      </TableCell>
                                     </TableRow>
                                   </TableHead>
                                   <TableBody>
@@ -1509,9 +1748,21 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                       const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
                                       const topModels = filteredModels.slice(0, 3);
                                       return (
-                                        <TableRow key={`jva-loc-${location.location}`} sx={{ '&:hover': { backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.02) } }}>
+                                        <TableRow
+                                          key={`jva-loc-${location.location}`}
+                                          sx={{
+                                            '&:hover': {
+                                              backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.05),
+                                              transform: 'translateX(2px)',
+                                              transition: 'all 0.2s ease'
+                                            },
+                                            '&:nth-of-type(even)': {
+                                              backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.02)
+                                            }
+                                          }}
+                                        >
                                           <TableCell>
-                                            <Typography variant="body2" fontWeight={500} sx={{ color: 'text.primary' }}>
+                                            <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
                                               {location.location}
                                             </Typography>
                                           </TableCell>
@@ -1521,19 +1772,60 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                               size="small"
                                               color="warning"
                                               variant="outlined"
-                                              sx={{ fontSize: '0.7rem', height: '20px', minWidth: '50px' }}
+                                              sx={{
+                                                fontSize: '0.75rem',
+                                                height: '20px',
+                                                minWidth: '45px',
+                                                fontWeight: 500,
+                                                color: 'text.secondary',
+                                                backgroundColor: 'transparent',
+                                                border: '1px solid',
+                                                borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                                                '&:hover': {
+                                                  backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.04)
+                                                }
+                                              }}
                                             />
                                           </TableCell>
                                           <TableCell>
-                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
+                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
                                               {topModels.map((modelData) => (
-                                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.05), borderRadius: 0.5, px: 0.8, py: 0.2 }}>
-                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                                                <Box
+                                                  key={`${location.location}-${modelData.model}`}
+                                                  sx={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.06),
+                                                    borderRadius: 1,
+                                                    px: 1,
+                                                    py: 0.4,
+                                                    border: '1px solid',
+                                                    borderColor: (theme) => alpha(theme.palette.warning.main, 0.15)
+                                                  }}
+                                                >
+                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 600, fontSize: '0.75rem' }}>
                                                     {modelData.model}
                                                   </Typography>
-                                                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                                                    {modelData.count.toLocaleString()}
-                                                  </Typography>
+                                                  <Chip
+                                                    label={modelData.count.toLocaleString()}
+                                                    size="small"
+                                                    color="warning"
+                                                    variant="outlined"
+                                                    sx={{
+                                                      fontSize: '0.7rem',
+                                                      height: '16px',
+                                                      minWidth: '30px',
+                                                      fontWeight: 400,
+                                                      color: 'text.secondary',
+                                                      backgroundColor: 'transparent',
+                                                      border: '1px solid',
+                                                      borderColor: (theme) => alpha(theme.palette.divider, 0.2),
+                                                      '&:hover': {
+                                                        backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.03)
+                                                      }
+                                                    }}
+                                                  />
                                                 </Box>
                                               ))}
                                               {filteredModels.length > 3 && (
