@@ -71,11 +71,15 @@ if [ $HEALTHY -ne 1 ]; then
   echo "Timed out waiting for OpenSearch to be healthy; proceeding anyway"
 fi
 
-# Index CSV files
-echo "Indexing CSV files..."
-sleep 5  # Additional wait to ensure all services are fully initialized
-curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null
-echo "Indexing task started"
+# Index CSV files (unless skipped)
+if [ "${SKIP_AUTO_REINDEX:-false}" = "true" ]; then
+  echo "Skipping automatic reindex (SKIP_AUTO_REINDEX=true)"
+else
+  echo "Indexing CSV files..."
+  sleep 5  # Additional wait to ensure all services are fully initialized
+  curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null
+  echo "Indexing task started"
+fi
 
 # Wait for both processes
 echo "All services started. Waiting for processes to finish..."

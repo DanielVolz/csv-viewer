@@ -35,6 +35,50 @@ function isJusticeLocation(locationCode) {
   return !isJVALocation(locationCode);
 }
 
+// Helper: extract city code from location code (e.g., MXX01 -> MXX, NXX02 -> NXX)
+function extractCityCode(locationCode) {
+  if (!locationCode) return 'Unknown';
+  const code = String(locationCode).trim();
+  // Extract first 3 characters as city code
+  return code.substring(0, 3).toUpperCase();
+}
+
+// Helper: group locations by city and sort within each city by totalPhones
+function groupLocationsByCity(locations) {
+  if (!locations || locations.length === 0) return [];
+
+  // Group by city code
+  const groupedByCity = locations.reduce((acc, location) => {
+    const cityCode = extractCityCode(location.location);
+    if (!acc[cityCode]) {
+      acc[cityCode] = [];
+    }
+    acc[cityCode].push(location);
+    return acc;
+  }, {});
+
+  // Sort locations within each city by totalPhones (descending)
+  Object.keys(groupedByCity).forEach(cityCode => {
+    groupedByCity[cityCode].sort((a, b) => (b.totalPhones || 0) - (a.totalPhones || 0));
+  });
+
+  // Convert to array format and sort cities by total phones across all locations in city
+  const cityGroups = Object.entries(groupedByCity).map(([cityCode, locations]) => {
+    const totalCityPhones = locations.reduce((sum, loc) => sum + (loc.totalPhones || 0), 0);
+    return {
+      cityCode,
+      cityName: locations[0]?.locationDisplay?.split(' - ')[1] || cityCode,
+      locations,
+      totalCityPhones
+    };
+  });
+
+  // Sort cities by total phones (descending)
+  cityGroups.sort((a, b) => b.totalCityPhones - a.totalCityPhones);
+
+  return cityGroups;
+}
+
 // Optimized StatCard with React.memo
 const StatCard = React.memo(function StatCard({ title, value, loading, tone = 'primary' }) {
   return (
@@ -115,6 +159,24 @@ const showCopyToast = (label, value, opts = {}) => {
 
 const StatisticsPage = React.memo(function StatisticsPage() {
   const { sshUsername, navigateToSettings, getStatisticsPrefs, saveStatisticsPrefs } = useSettings?.() || {};
+
+  // Color themes for Justice vs JVA differentiation
+  const justiceTheme = {
+    primary: '#1976d2',      // Blue - primary
+    light: '#bbdefb',        // Light blue
+    background: 'rgba(25, 118, 210, 0.08)',  // Light blue background
+    border: 'rgba(25, 118, 210, 0.2)',       // Blue border
+    accent: '#0d47a1'        // Dark blue accent
+  };
+
+  const jvaTheme = {
+    primary: '#f57c00',      // Orange - warning
+    light: '#ffe0b2',        // Light orange
+    background: 'rgba(245, 124, 0, 0.08)',   // Light orange background
+    border: 'rgba(245, 124, 0, 0.2)',        // Orange border
+    accent: '#e65100'        // Dark orange accent
+  };
+
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
   const [data, setData] = React.useState({
@@ -191,6 +253,35 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const toggleTopKey = (k) => setTopSelectedKeys((prev) => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
   const selectAllTopKeys = () => setTopSelectedKeys(Array.isArray(topTimeline.keys) ? [...topTimeline.keys] : []);
   const clearAllTopKeys = () => setTopSelectedKeys([]);
+
+  // Accordion expansion functions for View by Location
+  const expandAllJustizCities = () => {
+    const allCities = groupLocationsByCity(data.phonesByModelJustizDetails || []);
+    const expanded = {};
+    allCities.forEach(cityGroup => {
+      expanded[`justiz-city-${cityGroup.cityCode}`] = true;
+    });
+    setJustizCitiesExpanded(expanded);
+  };
+
+  const collapseAllJustizCities = () => setJustizCitiesExpanded({});
+
+  const expandAllJvaCities = () => {
+    const allCities = groupLocationsByCity(data.phonesByModelJVADetails || []);
+    const expanded = {};
+    allCities.forEach(cityGroup => {
+      expanded[`jva-city-${cityGroup.cityCode}`] = true;
+    });
+    setJvaCitiesExpanded(expanded);
+  };
+
+  const collapseAllJvaCities = () => setJvaCitiesExpanded({});
+
+  // Fast accordion transitions
+  const fastTransitionProps = {
+    timeout: 150,
+    style: { transitionDuration: '150ms' }
+  };
   // KPI selection for the timeline (controls which series are shown)
   const KPI_DEFS = React.useMemo(() => ([
     { id: 'totalPhones', label: 'Total Phones', color: '#1976d2' },
@@ -220,6 +311,11 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const [locOptions, setLocOptions] = React.useState([]);
   const [allLocOptions, setAllLocOptions] = React.useState([]); // Cache all locations
   const [locError, setLocError] = React.useState(null);
+
+  // Accordion expansion state for View by Location sections
+  const [justizCitiesExpanded, setJustizCitiesExpanded] = React.useState({});
+  const [jvaCitiesExpanded, setJvaCitiesExpanded] = React.useState({});
+
   const [locSelected, setLocSelected] = React.useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
@@ -929,17 +1025,69 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       )}
 
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>General Statistics</Typography>
-        <Grid container spacing={2}>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={data.totalPhones} loading={loading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Total Switches" value={data.totalSwitches} loading={loading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Locations" value={data.totalLocations} loading={loading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="secondary" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.phonesWithKEM} loading={loading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Justice institutions (Total Phones)" value={data.totalJustizPhones} loading={loading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Correctional Facility (Total Phones)" value={data.totalJVAPhones} loading={loading} /></Grid>
-        </Grid>
-        {/* Cities enumeration disabled (debug-only); keeping Total Cities stat above */}
+        <Typography variant="subtitle1" sx={{ mb: 3, fontWeight: 600 }}>General Statistics</Typography>
+
+        {/* Total Section */}
+        <Box sx={{
+          mb: 3,
+          p: 2,
+          borderRadius: 2,
+          backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.06),
+          border: '1px solid',
+          borderColor: (theme) => alpha(theme.palette.primary.main, 0.2)
+        }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: 'primary.main' }}>
+            Total Phones
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={data.totalPhones} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Total Switches" value={data.totalSwitches} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Locations" value={data.totalLocations} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="secondary" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.phonesWithKEM} loading={loading} /></Grid>
+          </Grid>
+        </Box>
+
+        {/* Justice Section */}
+        <Box sx={{
+          mb: 3,
+          p: 2,
+          borderRadius: 2,
+          backgroundColor: justiceTheme.background,
+          border: '1px solid',
+          borderColor: justiceTheme.border
+        }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: justiceTheme.primary }}>
+            Justice Institutions (Justiz)
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Phones" value={data.totalJustizPhones} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Switches" value={data.justizSwitches} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Locations" value={data.justizLocations} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Cities" value={data.justizCities} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.justizPhonesWithKEM} loading={loading} /></Grid>
+          </Grid>
+        </Box>
+
+        {/* JVA Section */}
+        <Box sx={{
+          p: 2,
+          borderRadius: 2,
+          backgroundColor: jvaTheme.background,
+          border: '1px solid',
+          borderColor: jvaTheme.border
+        }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: jvaTheme.primary }}>
+            Correctional Facilities (JVA)
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Phones" value={data.totalJVAPhones} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Switches" value={data.jvaSwitches} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Locations" value={data.jvaLocations} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Cities" value={data.jvaCities} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.jvaPhonesWithKEM} loading={loading} /></Grid>
+          </Grid>
+        </Box>
       </Paper>
 
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
@@ -954,171 +1102,379 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
             {/* Justice institutions Category - ALWAYS show for global stats */}
             <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
-              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: 'primary.main' }}>
-                Justice institutions (Justiz)
-              </Typography>
-              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <List dense sx={{ flex: 1 }}>
-                  {(data.phonesByModelJustiz || [])
-                    .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                    .map(({ model, count }) => {
-                      const label = String(model);
-                      const lower = label.toLowerCase();
-                      let color = 'default';
-                      if (lower.includes('kem')) color = 'success';
-                      else if (lower.includes('conference')) color = 'info';
-                      else if (lower.includes('wireless')) color = 'warning';
-                      else color = 'primary';
-                      return (
-                        <ListItem key={`justiz-${model}`} sx={{ py: 0.3, px: 0 }}>
-                          <ListItemText
-                            primary={
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                                <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      );
-                    })}
-                  {(data.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
-                    <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
-                  )}
-                </List>
-
-                {/* Expandable detailed breakdown by location */}
-                {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
-                  <Accordion sx={{ mt: 1 }}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography variant="caption" color="text.secondary">
-                        View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
-                      </Typography>
-                    </AccordionSummary>
-                    <AccordionDetails sx={{ pt: 0 }}>
-                      <List dense>
-                        {(data.phonesByModelJustizDetails || []).map((location) => (
-                          <ListItem key={`justiz-loc-${location.location}`} sx={{ py: 0.5, px: 0, flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', mb: 0.5, alignItems: 'center' }}>
-                              <Typography variant="body2" fontWeight={600} sx={{ color: 'primary.main' }}>
-                                {location.locationDisplay || location.location}
-                              </Typography>
-                              <Chip
-                                label={`${location.totalPhones.toLocaleString()} phones`}
-                                size="small"
-                                variant="outlined"
-                                color="primary"
-                                sx={{ fontSize: '0.7rem', height: '20px' }}
-                              />
-                            </Box>
-                            <Box sx={{ ml: 1, width: '100%' }}>
-                              {location.models.slice(0, 3).map((modelData) => (
-                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.1 }}>
-                                  <Typography variant="caption" color="text.secondary">
-                                    • {modelData.model}
-                                  </Typography>
-                                  <Typography variant="caption" fontWeight={500} sx={{ color: 'text.primary' }}>
-                                    {modelData.count.toLocaleString()} {modelData.count === 1 ? 'phone' : 'phones'}
-                                  </Typography>
+              <Box sx={{
+                p: 2,
+                borderRadius: 2,
+                backgroundColor: justiceTheme.background,
+                border: '1px solid',
+                borderColor: justiceTheme.border,
+                height: '100%'
+              }}>
+                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: justiceTheme.primary }}>
+                  Justice institutions (Justiz)
+                </Typography>
+                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <List dense sx={{ flex: 1 }}>
+                    {(data.phonesByModelJustiz || [])
+                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                      .map(({ model, count }) => {
+                        const label = String(model);
+                        const lower = label.toLowerCase();
+                        let color = 'default';
+                        if (lower.includes('kem')) color = 'success';
+                        else if (lower.includes('conference')) color = 'info';
+                        else if (lower.includes('wireless')) color = 'warning';
+                        else color = 'primary';
+                        return (
+                          <ListItem key={`justiz-${model}`} sx={{ py: 0.3, px: 0 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                  <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                  <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
                                 </Box>
-                              ))}
-                              {location.models.length > 3 && (
-                                <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic', pl: 1 }}>
-                                  +{location.models.length - 3} more models
-                                </Typography>
-                              )}
-                            </Box>
+                              }
+                            />
                           </ListItem>
+                        );
+                      })}
+                    {(data.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                      <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                    )}
+                  </List>
+
+                  {/* Expandable detailed breakdown by location - grouped by city */}
+                  {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
+                    <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
+                      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', mr: 1 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
+                          </Typography>
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={(e) => { e.stopPropagation(); expandAllJustizCities(); }}
+                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                            >
+                              Expand All
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={(e) => { e.stopPropagation(); collapseAllJustizCities(); }}
+                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                            >
+                              Collapse All
+                            </Button>
+                          </Box>
+                        </Box>
+                      </AccordionSummary>
+                      <AccordionDetails sx={{ pt: 0 }}>
+                        {groupLocationsByCity(data.phonesByModelJustizDetails || []).map((cityGroup) => (
+                          <Accordion
+                            key={`justiz-city-${cityGroup.cityCode}`}
+                            expanded={justizCitiesExpanded[`justiz-city-${cityGroup.cityCode}`] || false}
+                            onChange={(event, isExpanded) => {
+                              setJustizCitiesExpanded(prev => ({
+                                ...prev,
+                                [`justiz-city-${cityGroup.cityCode}`]: isExpanded
+                              }));
+                            }}
+                            TransitionProps={fastTransitionProps}
+                            sx={{
+                              mb: 1,
+                              border: '1px solid',
+                              borderColor: justiceTheme.border,
+                              borderRadius: 1,
+                              backgroundColor: justiceTheme.background,
+                              '&.MuiAccordion-root': {
+                                '&:before': { display: 'none' }
+                              },
+                              '& .MuiAccordionSummary-root': {
+                                transition: 'all 0.1s ease-in-out'
+                              },
+                              '& .MuiAccordionDetails-root': {
+                                transition: 'all 0.1s ease-in-out'
+                              }
+                            }}
+                          >
+                            <AccordionSummary
+                              expandIcon={<ExpandMoreIcon />}
+                              sx={{
+                                backgroundColor: justiceTheme.background,
+                                borderRadius: 1,
+                                minHeight: '40px !important',
+                                '& .MuiAccordionSummary-content': {
+                                  margin: '8px 0 !important'
+                                }
+                              }}
+                            >
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'info.main' }}>
+                                  {cityGroup.cityName} ({cityGroup.cityCode})
+                                </Typography>
+                                <Chip
+                                  label={`${cityGroup.totalCityPhones.toLocaleString()} phones total`}
+                                  size="small"
+                                  color="info"
+                                  variant="filled"
+                                  sx={{ fontSize: '0.7rem', height: '24px', mr: 1 }}
+                                />
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails sx={{ pt: 1, pb: 1 }}>
+                              <TableContainer>
+                                <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.5, px: 1, borderBottom: '1px solid', borderColor: 'divider' } }}>
+                                  <TableHead>
+                                    <TableRow sx={{ backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08) }}>
+                                      <TableCell sx={{ fontWeight: 600, color: 'info.main' }}>Location</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 600, color: 'info.main' }}>Total</TableCell>
+                                      <TableCell sx={{ fontWeight: 600, color: 'info.main' }}>Top Models</TableCell>
+                                    </TableRow>
+                                  </TableHead>
+                                  <TableBody>
+                                    {cityGroup.locations.map((location) => {
+                                      const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
+                                      const topModels = filteredModels.slice(0, 3);
+                                      return (
+                                        <TableRow key={`justiz-loc-${location.location}`} sx={{ '&:hover': { backgroundColor: (theme) => alpha(theme.palette.info.main, 0.02) } }}>
+                                          <TableCell>
+                                            <Typography variant="body2" fontWeight={500} sx={{ color: 'text.primary' }}>
+                                              {location.location}
+                                            </Typography>
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            <Chip
+                                              label={location.totalPhones.toLocaleString()}
+                                              size="small"
+                                              color="primary"
+                                              variant="outlined"
+                                              sx={{ fontSize: '0.7rem', height: '20px', minWidth: '50px' }}
+                                            />
+                                          </TableCell>
+                                          <TableCell>
+                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
+                                              {topModels.map((modelData) => (
+                                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: (theme) => alpha(theme.palette.info.main, 0.05), borderRadius: 0.5, px: 0.8, py: 0.2 }}>
+                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                                                    {modelData.model}
+                                                  </Typography>
+                                                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                                                    {modelData.count.toLocaleString()}
+                                                  </Typography>
+                                                </Box>
+                                              ))}
+                                              {filteredModels.length > 3 && (
+                                                <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>
+                                                  +{filteredModels.length - 3} more models
+                                                </Typography>
+                                              )}
+                                            </Box>
+                                          </TableCell>
+                                        </TableRow>
+                                      );
+                                    })}
+                                  </TableBody>
+                                </Table>
+                              </TableContainer>
+                            </AccordionDetails>
+                          </Accordion>
                         ))}
-                      </List>
-                    </AccordionDetails>
-                  </Accordion>
-                )}
+                      </AccordionDetails>
+                    </Accordion>
+                  )}
+                </Box>
               </Box>
             </Grid>
 
             {/* Correctional Facility Category - ALWAYS show for global stats */}
             <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
-              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: 'warning.main' }}>
-                Correctional Facility (JVA)
-              </Typography>
-              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <List dense sx={{ flex: 1 }}>
-                  {(data.phonesByModelJVA || [])
-                    .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                    .map(({ model, count }) => {
-                      const label = String(model);
-                      const lower = label.toLowerCase();
-                      let color = 'default';
-                      if (lower.includes('kem')) color = 'success';
-                      else if (lower.includes('conference')) color = 'info';
-                      else if (lower.includes('wireless')) color = 'error';
-                      else color = 'warning';
-                      return (
-                        <ListItem key={`jva-${model}`} sx={{ py: 0.3, px: 0 }}>
-                          <ListItemText
-                            primary={
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                                <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      );
-                    })}
-                  {(data.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
-                    <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
-                  )}
-                </List>
-
-                {/* Expandable detailed breakdown by location */}
-                {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
-                  <Accordion sx={{ mt: 1 }}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography variant="caption" color="text.secondary">
-                        View by Location ({(data.phonesByModelJVADetails || []).length} locations)
-                      </Typography>
-                    </AccordionSummary>
-                    <AccordionDetails sx={{ pt: 0 }}>
-                      <List dense>
-                        {(data.phonesByModelJVADetails || []).map((location) => (
-                          <ListItem key={`jva-loc-${location.location}`} sx={{ py: 0.5, px: 0, flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', mb: 0.5, alignItems: 'center' }}>
-                              <Typography variant="body2" fontWeight={600} sx={{ color: 'warning.main' }}>
-                                {location.locationDisplay || location.location}
-                              </Typography>
-                              <Chip
-                                label={`${location.totalPhones.toLocaleString()} phones`}
-                                size="small"
-                                variant="outlined"
-                                color="warning"
-                                sx={{ fontSize: '0.7rem', height: '20px' }}
-                              />
-                            </Box>
-                            <Box sx={{ ml: 1, width: '100%' }}>
-                              {location.models.slice(0, 3).map((modelData) => (
-                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.1 }}>
-                                  <Typography variant="caption" color="text.secondary">
-                                    • {modelData.model}
-                                  </Typography>
-                                  <Typography variant="caption" fontWeight={500} sx={{ color: 'text.primary' }}>
-                                    {modelData.count.toLocaleString()} {modelData.count === 1 ? 'phone' : 'phones'}
-                                  </Typography>
+              <Box sx={{
+                p: 2,
+                borderRadius: 2,
+                backgroundColor: jvaTheme.background,
+                border: '1px solid',
+                borderColor: jvaTheme.border,
+                height: '100%'
+              }}>
+                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: jvaTheme.primary }}>
+                  Correctional Facility (JVA)
+                </Typography>
+                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <List dense sx={{ flex: 1 }}>
+                    {(data.phonesByModelJVA || [])
+                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                      .map(({ model, count }) => {
+                        const label = String(model);
+                        const lower = label.toLowerCase();
+                        let color = 'default';
+                        if (lower.includes('kem')) color = 'success';
+                        else if (lower.includes('conference')) color = 'info';
+                        else if (lower.includes('wireless')) color = 'error';
+                        else color = 'warning';
+                        return (
+                          <ListItem key={`jva-${model}`} sx={{ py: 0.3, px: 0 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                  <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                  <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
                                 </Box>
-                              ))}
-                              {location.models.length > 3 && (
-                                <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic', pl: 1 }}>
-                                  +{location.models.length - 3} more models
-                                </Typography>
-                              )}
-                            </Box>
+                              }
+                            />
                           </ListItem>
+                        );
+                      })}
+                    {(data.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                      <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                    )}
+                  </List>
+
+                  {/* Expandable detailed breakdown by location - grouped by city */}
+                  {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
+                    <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
+                      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', mr: 1 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            View by Location ({(data.phonesByModelJVADetails || []).length} locations)
+                          </Typography>
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={(e) => { e.stopPropagation(); expandAllJvaCities(); }}
+                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                            >
+                              Expand All
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={(e) => { e.stopPropagation(); collapseAllJvaCities(); }}
+                              sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem' }}
+                            >
+                              Collapse All
+                            </Button>
+                          </Box>
+                        </Box>
+                      </AccordionSummary>
+                      <AccordionDetails sx={{ pt: 0 }}>
+                        {groupLocationsByCity(data.phonesByModelJVADetails || []).map((cityGroup) => (
+                          <Accordion
+                            key={`jva-city-${cityGroup.cityCode}`}
+                            expanded={jvaCitiesExpanded[`jva-city-${cityGroup.cityCode}`] || false}
+                            onChange={(event, isExpanded) => {
+                              setJvaCitiesExpanded(prev => ({
+                                ...prev,
+                                [`jva-city-${cityGroup.cityCode}`]: isExpanded
+                              }));
+                            }}
+                            TransitionProps={fastTransitionProps}
+                            sx={{
+                              mb: 1,
+                              border: '1px solid',
+                              borderColor: jvaTheme.border,
+                              borderRadius: 1,
+                              backgroundColor: jvaTheme.background,
+                              '&.MuiAccordion-root': {
+                                '&:before': { display: 'none' }
+                              },
+                              '& .MuiAccordionSummary-root': {
+                                transition: 'all 0.1s ease-in-out'
+                              },
+                              '& .MuiAccordionDetails-root': {
+                                transition: 'all 0.1s ease-in-out'
+                              }
+                            }}
+                          >
+                            <AccordionSummary
+                              expandIcon={<ExpandMoreIcon />}
+                              sx={{
+                                backgroundColor: jvaTheme.background,
+                                borderRadius: 1,
+                                minHeight: '40px !important',
+                                '& .MuiAccordionSummary-content': {
+                                  margin: '8px 0 !important'
+                                }
+                              }}
+                            >
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'warning.main' }}>
+                                  {cityGroup.cityName} ({cityGroup.cityCode})
+                                </Typography>
+                                <Chip
+                                  label={`${cityGroup.totalCityPhones.toLocaleString()} phones total`}
+                                  size="small"
+                                  color="warning"
+                                  variant="filled"
+                                  sx={{ fontSize: '0.7rem', height: '24px', mr: 1 }}
+                                />
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails sx={{ pt: 1, pb: 1 }}>
+                              <TableContainer>
+                                <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.5, px: 1, borderBottom: '1px solid', borderColor: 'divider' } }}>
+                                  <TableHead>
+                                    <TableRow sx={{ backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.08) }}>
+                                      <TableCell sx={{ fontWeight: 600, color: 'warning.main' }}>Location</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 600, color: 'warning.main' }}>Total</TableCell>
+                                      <TableCell sx={{ fontWeight: 600, color: 'warning.main' }}>Top Models</TableCell>
+                                    </TableRow>
+                                  </TableHead>
+                                  <TableBody>
+                                    {cityGroup.locations.map((location) => {
+                                      const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
+                                      const topModels = filteredModels.slice(0, 3);
+                                      return (
+                                        <TableRow key={`jva-loc-${location.location}`} sx={{ '&:hover': { backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.02) } }}>
+                                          <TableCell>
+                                            <Typography variant="body2" fontWeight={500} sx={{ color: 'text.primary' }}>
+                                              {location.location}
+                                            </Typography>
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            <Chip
+                                              label={location.totalPhones.toLocaleString()}
+                                              size="small"
+                                              color="warning"
+                                              variant="outlined"
+                                              sx={{ fontSize: '0.7rem', height: '20px', minWidth: '50px' }}
+                                            />
+                                          </TableCell>
+                                          <TableCell>
+                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
+                                              {topModels.map((modelData) => (
+                                                <Box key={`${location.location}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.05), borderRadius: 0.5, px: 0.8, py: 0.2 }}>
+                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                                                    {modelData.model}
+                                                  </Typography>
+                                                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                                                    {modelData.count.toLocaleString()}
+                                                  </Typography>
+                                                </Box>
+                                              ))}
+                                              {filteredModels.length > 3 && (
+                                                <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>
+                                                  +{filteredModels.length - 3} more models
+                                                </Typography>
+                                              )}
+                                            </Box>
+                                          </TableCell>
+                                        </TableRow>
+                                      );
+                                    })}
+                                  </TableBody>
+                                </Table>
+                              </TableContainer>
+                            </AccordionDetails>
+                          </Accordion>
                         ))}
-                      </List>
-                    </AccordionDetails>
-                  </Accordion>
-                )}
+                      </AccordionDetails>
+                    </Accordion>
+                  )}
+                </Box>
               </Box>
             </Grid>
           </Grid>
@@ -1474,11 +1830,18 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                   {/* Show both sections for city search (3-letter codes), or specific section for exact locations, but only if data exists */}
                   {(!locSelected || locSelected.length === 3 || isJusticeLocation(locSelected)) &&
                     (locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
-                      <>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
+                      <Box sx={{
+                        mb: 2,
+                        p: 1.5,
+                        borderRadius: 1,
+                        backgroundColor: justiceTheme.background,
+                        border: '1px solid',
+                        borderColor: justiceTheme.border
+                      }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: justiceTheme.primary, mb: 0.5 }}>
                           Justice institutions (Justiz)
                         </Typography>
-                        <List dense sx={{ mb: 1 }}>
+                        <List dense sx={{ mb: 0 }}>
                           {(locStats.phonesByModelJustiz || [])
                             .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
                             .slice(0, 5)
@@ -1495,13 +1858,20 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               </ListItem>
                             ))}
                         </List>
-                      </>
+                      </Box>
                     )}
 
                   {(!locSelected || locSelected.length === 3 || isJVALocation(locSelected)) &&
                     (locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
-                      <>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: 'warning.main', mb: 0.5 }}>
+                      <Box sx={{
+                        mb: 2,
+                        p: 1.5,
+                        borderRadius: 1,
+                        backgroundColor: jvaTheme.background,
+                        border: '1px solid',
+                        borderColor: jvaTheme.border
+                      }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: jvaTheme.primary, mb: 0.5 }}>
                           Correctional Facility (JVA)
                         </Typography>
                         <List dense>
@@ -1521,7 +1891,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               </ListItem>
                             ))}
                         </List>
-                      </>
+                      </Box>
                     )}
                 </Box>
               )}
@@ -1563,7 +1933,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               )}
             </Grid>
           </Grid>
-          <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 2, mb: 1, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}>
+          <Accordion
+            disableGutters
+            elevation={0}
+            TransitionProps={fastTransitionProps}
+            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 2, mb: 1, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
+          >
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="body2" fontWeight={700} color="primary.main">
                 Switches {(() => {
@@ -1760,7 +2135,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
             </AccordionDetails>
           </Accordion>
 
-          <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}>
+          <Accordion
+            disableGutters
+            elevation={0}
+            TransitionProps={fastTransitionProps}
+            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
+          >
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="body2" fontWeight={700} color="success.main">
                 Phones with KEM at this Location {locStats.phonesWithKEM?.toLocaleString?.() ?? locStats.phonesWithKEM}

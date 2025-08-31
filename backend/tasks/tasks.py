@@ -52,18 +52,54 @@ def index_csv(file_path: str) -> dict:
                 jva_model_counts: Dict[str, int] = {}
                 global_kem_phones: List[Dict] = []  # Global KEM phone list
 
+                # Separate collections for Justiz and JVA
+                justiz_switches = set()
+                justiz_locations = set()
+                justiz_city_codes = set()
+                justiz_phones_with_kem = 0
+
+                jva_switches = set()
+                jva_locations = set()
+                jva_city_codes = set()
+                jva_phones_with_kem = 0
+
                 for r in _rows:
                     sh = (r.get("Switch Hostname") or "").strip()
+                    is_jva = False
+
                     if sh:
                         switches.add(sh)
+
+                        # Determine if this is JVA or Justiz
+                        try:
+                            from api.stats import is_jva_switch
+                            is_jva = is_jva_switch(sh)
+                        except Exception:
+                            is_jva = False
+
+                        # Add to appropriate collections
+                        if is_jva:
+                            jva_switches.add(sh)
+                        else:
+                            justiz_switches.add(sh)
+
                         try:
                             from api.stats import extract_location
                             loc = extract_location(sh)
                             if loc:
                                 locations.add(loc)
                                 city_codes.add(loc[:3])
+
+                                # Add to appropriate location/city collections
+                                if is_jva:
+                                    jva_locations.add(loc)
+                                    jva_city_codes.add(loc[:3])
+                                else:
+                                    justiz_locations.add(loc)
+                                    justiz_city_codes.add(loc[:3])
                         except Exception:
                             pass
+
                     # Count individual KEM modules, not just phones with KEM
                     kem_count = 0
                     if (r.get("KEM") or "").strip():
@@ -73,6 +109,12 @@ def index_csv(file_path: str) -> dict:
 
                     if kem_count > 0:
                         phones_with_kem += kem_count  # This now counts KEM modules, not phones
+
+                        # Add to appropriate KEM collections
+                        if is_jva:
+                            jva_phones_with_kem += kem_count
+                        else:
+                            justiz_phones_with_kem += kem_count
 
                         # Add to global KEM phones list
                         kem_data = {
@@ -246,6 +288,19 @@ def index_csv(file_path: str) -> dict:
                     "phonesWithKEM": phones_with_kem,
                     "totalJustizPhones": total_justiz_phones,
                     "totalJVAPhones": total_jva_phones,
+
+                    # Justiz KPIs
+                    "justizSwitches": len(justiz_switches),
+                    "justizLocations": len(justiz_locations),
+                    "justizCities": len(justiz_city_codes),
+                    "justizPhonesWithKEM": justiz_phones_with_kem,
+
+                    # JVA KPIs
+                    "jvaSwitches": len(jva_switches),
+                    "jvaLocations": len(jva_locations),
+                    "jvaCities": len(jva_city_codes),
+                    "jvaPhonesWithKEM": jva_phones_with_kem,
+
                     "phonesByModel": phones_by_model,
                     "phonesByModelJustiz": phones_by_model_justiz,
                     "phonesByModelJVA": phones_by_model_jva,
@@ -884,10 +939,37 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                     justiz_model_counts: Dict[str, int] = {}
                     jva_model_counts: Dict[str, int] = {}
 
+                    # Separate collections for Justiz and JVA
+                    justiz_switches = set()
+                    justiz_locations = set()
+                    justiz_city_codes = set()
+                    justiz_phones_with_kem = 0
+
+                    jva_switches = set()
+                    jva_locations = set()
+                    jva_city_codes = set()
+                    jva_phones_with_kem = 0
+
                     for r in _rows:
                         sh = (r.get("Switch Hostname") or "").strip()
+                        is_jva = False
+
                         if sh:
                             switches.add(sh)
+
+                            # Determine if this is JVA or Justiz
+                            try:
+                                from api.stats import is_jva_switch
+                                is_jva = is_jva_switch(sh)
+                            except Exception:
+                                is_jva = False
+
+                            # Add to appropriate collections
+                            if is_jva:
+                                jva_switches.add(sh)
+                            else:
+                                justiz_switches.add(sh)
+
                             # Reuse extract_location from stats via a local import
                             try:
                                 from api.stats import extract_location
@@ -895,8 +977,17 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                 if loc:
                                     locations.add(loc)
                                     city_codes.add(loc[:3])
+
+                                    # Add to appropriate location/city collections
+                                    if is_jva:
+                                        jva_locations.add(loc)
+                                        jva_city_codes.add(loc[:3])
+                                    else:
+                                        justiz_locations.add(loc)
+                                        justiz_city_codes.add(loc[:3])
                             except Exception:
                                 pass
+
                         # Count individual KEM modules, not just phones with KEM
                         kem_count = 0
                         if (r.get("KEM") or "").strip():
@@ -906,6 +997,12 @@ def index_all_csv_files(self, directory_path: str) -> dict:
 
                         if kem_count > 0:
                             phones_with_kem += kem_count  # This now counts KEM modules, not phones
+
+                            # Add to appropriate KEM collections
+                            if is_jva:
+                                jva_phones_with_kem += kem_count
+                            else:
+                                justiz_phones_with_kem += kem_count
 
                         # Process model name
                         model = (r.get("Model Name") or "").strip() or "Unknown"
@@ -1055,6 +1152,19 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         "phonesWithKEM": phones_with_kem,
                         "totalJustizPhones": total_justiz_phones,
                         "totalJVAPhones": total_jva_phones,
+
+                        # Justiz KPIs
+                        "justizSwitches": len(justiz_switches),
+                        "justizLocations": len(justiz_locations),
+                        "justizCities": len(justiz_city_codes),
+                        "justizPhonesWithKEM": justiz_phones_with_kem,
+
+                        # JVA KPIs
+                        "jvaSwitches": len(jva_switches),
+                        "jvaLocations": len(jva_locations),
+                        "jvaCities": len(jva_city_codes),
+                        "jvaPhonesWithKEM": jva_phones_with_kem,
+
                         "phonesByModel": phones_by_model,
                         "phonesByModelJustiz": phones_by_model_justiz,
                         "phonesByModelJVA": phones_by_model_jva,
@@ -1334,18 +1444,57 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
         city_codes = set()
         phones_with_kem = 0
         model_counts: Dict[str, int] = {}
+        justiz_model_counts: Dict[str, int] = {}
+        jva_model_counts: Dict[str, int] = {}
+
+        # Separate collections for Justiz and JVA
+        justiz_switches = set()
+        justiz_locations = set()
+        justiz_city_codes = set()
+        justiz_phones_with_kem = 0
+
+        jva_switches = set()
+        jva_locations = set()
+        jva_city_codes = set()
+        jva_phones_with_kem = 0
+
         for r in rows:
             sh = (r.get("Switch Hostname") or "").strip()
+            is_jva = False
+
             if sh:
                 switches.add(sh)
+
+                # Determine if this is JVA or Justiz
+                try:
+                    from api.stats import is_jva_switch
+                    is_jva = is_jva_switch(sh)
+                except Exception:
+                    is_jva = False
+
+                # Add to appropriate collections
+                if is_jva:
+                    jva_switches.add(sh)
+                else:
+                    justiz_switches.add(sh)
+
                 try:
                     from api.stats import extract_location
                     loc = extract_location(sh)
                     if loc:
                         locations.add(loc)
                         city_codes.add(loc[:3])
+
+                        # Add to appropriate location/city collections
+                        if is_jva:
+                            jva_locations.add(loc)
+                            jva_city_codes.add(loc[:3])
+                        else:
+                            justiz_locations.add(loc)
+                            justiz_city_codes.add(loc[:3])
                 except Exception:
                     pass
+
             # Count individual KEM modules, not just phones with KEM
             kem_count = 0
             if (r.get("KEM") or "").strip():
@@ -1355,18 +1504,54 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
 
             if kem_count > 0:
                 phones_with_kem += kem_count  # This now counts KEM modules, not phones
+
+                # Add to appropriate KEM collections
+                if is_jva:
+                    jva_phones_with_kem += kem_count
+                else:
+                    justiz_phones_with_kem += kem_count
+
             model = (r.get("Model Name") or "").strip() or "Unknown"
             if model != "Unknown":
                 model_counts[model] = model_counts.get(model, 0) + 1
 
+                # Count by category
+                if is_jva:
+                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                else:
+                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
         phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+        phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
+        phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
+
+        total_justiz_phones = sum(justiz_model_counts.values())
+        total_jva_phones = sum(jva_model_counts.values())
+
         metrics = {
             "totalPhones": total_phones,
             "totalSwitches": len(switches),
             "totalLocations": len(locations),
             "totalCities": len(city_codes),
             "phonesWithKEM": phones_with_kem,
+            "totalJustizPhones": total_justiz_phones,
+            "totalJVAPhones": total_jva_phones,
+
+            # Justiz KPIs
+            "justizSwitches": len(justiz_switches),
+            "justizLocations": len(justiz_locations),
+            "justizCities": len(justiz_city_codes),
+            "justizPhonesWithKEM": justiz_phones_with_kem,
+
+            # JVA KPIs
+            "jvaSwitches": len(jva_switches),
+            "jvaLocations": len(jva_locations),
+            "jvaCities": len(jva_city_codes),
+            "jvaPhonesWithKEM": jva_phones_with_kem,
+
             "phonesByModel": phones_by_model,
+            "phonesByModelJustiz": phones_by_model_justiz,
+            "phonesByModelJVA": phones_by_model_jva,
             "cityCodes": sorted(list(city_codes)),
         }
         opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)

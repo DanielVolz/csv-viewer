@@ -232,6 +232,19 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                             "phonesWithKEM": int(src.get("phonesWithKEM", 0)),
                             "totalJustizPhones": int(src.get("totalJustizPhones", 0)),
                             "totalJVAPhones": int(src.get("totalJVAPhones", 0)),
+
+                            # Justiz KPIs
+                            "justizSwitches": int(src.get("justizSwitches", 0)),
+                            "justizLocations": int(src.get("justizLocations", 0)),
+                            "justizCities": int(src.get("justizCities", 0)),
+                            "justizPhonesWithKEM": int(src.get("justizPhonesWithKEM", 0)),
+
+                            # JVA KPIs
+                            "jvaSwitches": int(src.get("jvaSwitches", 0)),
+                            "jvaLocations": int(src.get("jvaLocations", 0)),
+                            "jvaCities": int(src.get("jvaCities", 0)),
+                            "jvaPhonesWithKEM": int(src.get("jvaPhonesWithKEM", 0)),
+
                             "phonesByModel": src.get("phonesByModel", []),
                             "phonesByModelJustiz": src.get("phonesByModelJustiz", []),
                             "phonesByModelJVA": src.get("phonesByModelJVA", []),
@@ -1158,6 +1171,16 @@ async def get_current_stats_fast() -> Dict:
                     "phonesWithKEM": 0,
                     "totalJustizPhones": 0,
                     "totalJVAPhones": 0,
+                    # New individual Justiz KPIs
+                    "justizSwitches": 0,
+                    "justizLocations": 0,
+                    "justizCities": 0,
+                    "justizPhonesWithKEM": 0,
+                    # New individual JVA KPIs
+                    "jvaSwitches": 0,
+                    "jvaLocations": 0,
+                    "jvaCities": 0,
+                    "jvaPhonesWithKEM": 0,
                     "phonesByModel": [],
                     "phonesByModelJustiz": [],
                     "phonesByModelJVA": [],
@@ -1189,6 +1212,16 @@ async def get_current_stats_fast() -> Dict:
                     "phonesWithKEM": 0,
                     "totalJustizPhones": 0,
                     "totalJVAPhones": 0,
+                    # New individual Justiz KPIs
+                    "justizSwitches": 0,
+                    "justizLocations": 0,
+                    "justizCities": 0,
+                    "justizPhonesWithKEM": 0,
+                    # New individual JVA KPIs
+                    "jvaSwitches": 0,
+                    "jvaLocations": 0,
+                    "jvaCities": 0,
+                    "jvaPhonesWithKEM": 0,
                     "phonesByModel": [],
                     "phonesByModelJustiz": [],
                     "phonesByModelJVA": [],
@@ -1229,6 +1262,16 @@ async def get_current_stats_fast() -> Dict:
                 "phonesWithKEM": latest_doc.get("phonesWithKEM", 0),
                 "totalJustizPhones": total_justiz,
                 "totalJVAPhones": total_jva,
+                # New individual Justiz KPIs
+                "justizSwitches": latest_doc.get("justizSwitches", 0),
+                "justizLocations": latest_doc.get("justizLocations", 0),
+                "justizCities": latest_doc.get("justizCities", 0),
+                "justizPhonesWithKEM": latest_doc.get("justizPhonesWithKEM", 0),
+                # New individual JVA KPIs
+                "jvaSwitches": latest_doc.get("jvaSwitches", 0),
+                "jvaLocations": latest_doc.get("jvaLocations", 0),
+                "jvaCities": latest_doc.get("jvaCities", 0),
+                "jvaPhonesWithKEM": latest_doc.get("jvaPhonesWithKEM", 0),
                 "phonesByModel": latest_doc.get("phonesByModel", []),
                 "phonesByModelJustiz": justiz_models,
                 "phonesByModelJVA": jva_models,
@@ -1255,6 +1298,16 @@ async def get_current_stats_fast() -> Dict:
                 "phonesWithKEM": 0,
                 "totalJustizPhones": 0,
                 "totalJVAPhones": 0,
+                # New individual Justiz KPIs
+                "justizSwitches": 0,
+                "justizLocations": 0,
+                "justizCities": 0,
+                "justizPhonesWithKEM": 0,
+                # New individual JVA KPIs
+                "jvaSwitches": 0,
+                "jvaLocations": 0,
+                "jvaCities": 0,
+                "jvaPhonesWithKEM": 0,
                 "phonesByModel": [],
                 "phonesByModelJustiz": [],
                 "phonesByModelJVA": [],
