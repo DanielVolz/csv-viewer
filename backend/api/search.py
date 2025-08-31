@@ -217,6 +217,21 @@ async def index_all_csv_files(
     from tasks.tasks import index_all_csv_files
 
     try:
+        # Invalidate in-process stats caches before starting a rebuild
+        try:
+            from api.stats import invalidate_caches as _invalidate
+            _invalidate("index/all requested")
+        except Exception:
+            pass
+        # Cleanup existing netspeed_* indices BEFORE starting a full rebuild to prevent duplicates
+        try:
+            from utils.opensearch import OpenSearchConfig as _OSC
+            _cfg = _OSC()
+            deleted = _cfg.cleanup_indices_by_pattern("netspeed_*")
+            logger.info(f"Pre-rebuild cleanup removed {deleted} netspeed_* indices")
+        except Exception as _e:
+            logger.warning(f"Pre-rebuild cleanup skipped/failed: {_e}")
+
         # Submit indexing task to Celery
         task = index_all_csv_files.delay("/app/data")
 

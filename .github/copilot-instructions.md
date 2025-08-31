@@ -31,6 +31,9 @@ This is a dockerized full-stack CSV search application designed for viewing, sea
 
 **Critical**: After `docker-compose up`, wait 30 seconds before running additional terminal commands to avoid canceling the startup process.
 
+Startup behavior update
+- The backend no longer blocks on OpenSearch cluster health at startup. Indexing is triggered best‑effort and will proceed once services are ready. Use the curl diagnostics below to check OpenSearch health, but backend startup won’t wait for green/yellow.
+
 ### Development Environment
 - Uses dockerized dev environment - no need to restart on code changes
 - Frontend: Volume mounts `/src` and `/public` for hot reload
@@ -70,6 +73,14 @@ curl -X GET "localhost:9200/_cat/indices"
 curl -X GET "localhost:9200/stats_netspeed_loc/_search" -H 'Content-Type: application/json' -d '{"query": {"term": {"key": "ABX01"}}, "size": 1}'
 ```
 
+Caching behavior and invalidation
+- Statistics endpoints (`/api/stats/*`) use small in‑memory caches (typically 30–60s TTL) for speed.
+- Caches are invalidated immediately when any reindex is triggered, so development changes are visible on the next request:
+  - Full rebuild: `GET /api/search/index/all`
+  - Fast dev reindex: `GET /api/files/reindex/current`
+  - File watcher detects netspeed file changes
+- You generally don’t need manual cache clears; waiting is unnecessary after a reindex.
+
 ## Project-Specific Patterns
 
 ### File Naming Convention
@@ -89,6 +100,7 @@ Handle both in `utils/csv_utils.py` with format detection logic.
 - Current file index: `netspeed_netspeed_csv`
 - Historical search queries across all `netspeed_*` indices
 - Auto-cleanup of old indices when files update
+- Pre-clean on full rebuild: calling `GET /api/search/index/all` deletes existing `netspeed_*` indices up-front to avoid duplicates and index bloat (file watcher performs the same cleanup).
 
 ### Celery Task Patterns
 Tasks are defined in `backend/tasks/tasks.py`:
@@ -127,11 +139,13 @@ The `utils/file_watcher.py` automatically triggers reindexing:
 - `GET /api/files/download/{filename}` - Download specific files
 - `GET /api/files/reindex` - Trigger manual reindexing of all CSV files (Celery-based, async)
 - `GET /api/files/reindex/current` - **Development**: Fast reindex of netspeed.csv only (direct, synchronous)
+  - Also invalidates stats caches immediately so the UI reflects changes on the very next request.
 
 **Search API** (`api/search.py`):
 - `GET /api/search/` - Search across CSV files using OpenSearch
 - `GET /api/search/index/all` - Trigger background indexing
 - `GET /api/search/index/status/{task_id}` - Check indexing status
+  - On `index/all`, caches are invalidated first and existing `netspeed_*` indices are cleaned before the rebuild begins.
 
 **Statistics API** (`api/stats.py`):
 - `GET /api/stats/current` - Get current file statistics from OpenSearch snapshots
@@ -151,7 +165,10 @@ OPENSEARCH_PORT=9200
 OPENSEARCH_TRANSPORT_PORT=9300
 OPENSEARCH_DASHBOARDS_PORT=5601
 OPENSEARCH_INITIAL_ADMIN_PASSWORD=your-secure-password
+ARCHIVE_RETENTION_YEARS=4   # OpenSearch archive retention (min 1, defaults to 4 if unset)
 ```
+Notes:
+- Archive retention applies to the `archive_netspeed` OpenSearch index and is enforced during archive indexing. Filesystem archives in `/app/data/archive/` are separate.
 
 ### Multi-Architecture Support
 - `docker-compose.yml` - AMD64 production
@@ -164,6 +181,7 @@ Backend uses Pydantic BaseSettings in `config.py`:
 class Settings(BaseSettings):
     CSV_FILES_DIR: str = "/app/data"
     OPENSEARCH_URL: str = "http://opensearch:{OPENSEARCH_PORT}"
+  ARCHIVE_RETENTION_YEARS: int = 4  # OpenSearch archive retention (min 1)
 ```
 
 ## Testing Strategy
@@ -207,6 +225,7 @@ Located in component `__tests__/` directories:
 - OpenSearch field mappings are critical - defined in `utils/opensearch.py`
 - Celery tasks must return structured dicts for proper error handling
 - Frontend pagination expects backend to return `totalItems` and `totalPages`
+- If stats/timelines look stale, remember they are cached briefly. Any reindex or a netspeed file change clears caches immediately; otherwise, caches expire automatically within ~30–60 seconds.
 
 ## Critical Debugging Patterns
 
@@ -253,6 +272,9 @@ When adding new fields to location statistics (like VLAN usage, switches, KEM ph
 3. **Persistence Fix**: **MUST** update `index_stats_location_snapshots()` in `utils/opensearch.py` to include new fields in `body` dictionary
 
 **Most Common Error**: Steps 1-2 completed but step 3 forgotten, causing data to be collected but never saved to OpenSearch.
+
+### Startup health checks
+- Backend startup no longer waits for OpenSearch to report green/yellow. Prefer using the provided curl checks to validate OpenSearch separately; the backend will trigger indexing without blocking.
 
 ### API Endpoint Patterns
 - Location statistics endpoints **require** `q` parameter (will return 422 if missing)

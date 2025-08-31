@@ -2296,15 +2296,19 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={locStats.phonesWithKEM} loading={locStatsLoading} /></Grid>
         </Grid>
 
+        {/* Subtle hint when city prefix is selected */}
         {locStats?.mode === 'prefix' && locStats?.query && (
-          <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              City-wide Statistics for {cityNameByCode3[locStats.query] || locStats.query}
+          <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="subtitle2" color="text.secondary">
+              Statistics by Location
             </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Showing aggregated data across all locations starting with {locStats.query} (e.g., {locStats.query}01, {locStats.query}02, {locStats.query}03, ...)
-            </Typography>
-          </Alert>
+            <Chip
+              size="small"
+              color="default"
+              variant="outlined"
+              label={`All locations matching ${locStats.query}*`}
+            />
+          </Box>
         )}
 
         {/* Additional per-location details */}

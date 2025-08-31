@@ -374,6 +374,12 @@ async def reindex_current_file():
         Dictionary with the status of the reindexing task
     """
     try:
+        # Invalidate stats caches so dev sees updates instantly
+        try:
+            from api.stats import invalidate_caches as _invalidate
+            _invalidate("reindex/current requested")
+        except Exception:
+            pass
         from utils.opensearch import OpenSearchConfig
 
         # Get path to current CSV file

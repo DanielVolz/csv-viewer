@@ -24,6 +24,30 @@ _TIMELINE_CACHE: Dict[int, Tuple[float, Dict]] = {}  # key: limit, value: (expir
 _TIMELINE_BY_LOC_CACHE: Dict[Tuple[str, int], Tuple[float, Dict]] = {}  # key: (q, limit)
 _TIMELINE_TOP_CACHE: Dict[Tuple[int, Tuple[str, ...], int], Tuple[float, Dict]] = {}
 
+def invalidate_caches(reason: str | None = None) -> None:
+    """Clear in-process stats caches so next calls recompute immediately.
+
+    This is meant to be called when a reindex starts or completes.
+    """
+    try:
+        _CURRENT_STATS_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        _TIMELINE_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        _TIMELINE_BY_LOC_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        _TIMELINE_TOP_CACHE.clear()
+    except Exception:
+        pass
+    if reason:
+        logger.info(f"Stats caches invalidated: {reason}")
+
 # Force cache invalidation for testing
 import time
 _CACHE_INVALIDATION_TIME = time.time() + 10

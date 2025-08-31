@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     SEARCH_TIMEOUT_SECONDS: int = 20
     SEARCH_MAX_RESULTS: int = 20000
 
+    # Archive retention (OpenSearch archive_netspeed)
+    ARCHIVE_RETENTION_YEARS: int = 4
+
     # SSH username (used for simple gating of rebuild UI). Leave empty to disable rebuild UI.
     # Explicitly set environment variable SSH_USERNAME=volzd to enable.
 
@@ -69,6 +72,15 @@ def get_settings() -> Settings:
 
     # Use value from Settings (no env override)
     # If left empty, UI will hide rebuild controls
+
+    # Clamp/archive retention to a sane range if misconfigured
+    try:
+        if s.ARCHIVE_RETENTION_YEARS is None:
+            s.ARCHIVE_RETENTION_YEARS = 4
+        else:
+            s.ARCHIVE_RETENTION_YEARS = max(1, int(s.ARCHIVE_RETENTION_YEARS))
+    except Exception:
+        s.ARCHIVE_RETENTION_YEARS = 4
 
     return s
 

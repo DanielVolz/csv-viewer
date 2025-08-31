@@ -125,6 +125,13 @@ class CSVFileHandler(FileSystemEventHandler):
             except Exception as e:
                 logger.debug(f"Failed to queue snapshot_current_stats: {e}")
 
+            # Invalidate in-process stats caches so UI sees changes immediately
+            try:
+                from api.stats import invalidate_caches as _invalidate
+                _invalidate(f"file watcher: {event_type}")
+            except Exception:
+                pass
+
             # Step 1: Clean up all existing netspeed indices
             logger.info("Cleaning up all existing netspeed indices...")
 

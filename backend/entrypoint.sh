@@ -43,30 +43,14 @@ for i in {1..30}; do
   fi
 done
 
-# Wait for OpenSearch to be healthy before indexing (green or yellow)
-PRIMARY_OS_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
-FALLBACK_OS_URL="http://opensearch:9200"
-HEALTHY=0
-for URL in "$PRIMARY_OS_URL" "$FALLBACK_OS_URL"; do
-  echo "Waiting for OpenSearch at $URL to be healthy..."
-  for i in {1..120}; do
-    if curl -sf "$URL/_cluster/health" | grep -q '"status":"green"\|"status":"yellow"'; then
-      echo "OpenSearch is healthy at $URL"
-      HEALTHY=1
-      break
-    fi
-    sleep 1
-  done
-  [ $HEALTHY -eq 1 ] && break
-done
-if [ $HEALTHY -ne 1 ]; then
-  echo "Timed out waiting for OpenSearch to be healthy; proceeding anyway"
-fi
+# Do not block on OpenSearch health; proceed and let indexing retry/fail fast
+echo "Skipping OpenSearch health wait (non-blocking startup)"
 
 # Index CSV files
 echo "Indexing CSV files..."
-sleep 5  # Additional wait to ensure all services are fully initialized
-curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null
+# Short grace period to let services settle, then trigger indexing (best-effort)
+sleep 5
+curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null || true
 echo "Indexing task started"
 
 # Wait for both processes

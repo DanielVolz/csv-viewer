@@ -529,7 +529,9 @@ class OpenSearchConfig:
                 return False, 0
             # Retention: keep only the last 4 years (approx). Best-effort cleanup.
             try:
-                self.purge_archive_older_than_years(4)
+                from config import settings as _settings
+                years = getattr(_settings, 'ARCHIVE_RETENTION_YEARS', 4)
+                self.purge_archive_older_than_years(years)
             except Exception:
                 pass
             snapshot_date = date or datetime.utcnow().strftime('%Y-%m-%d')

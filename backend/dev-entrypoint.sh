@@ -38,46 +38,16 @@ for i in {1..30}; do
   fi
 done
 
-# Wait for OpenSearch to be healthy before indexing (green or yellow)
-OS_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
-echo "Waiting for OpenSearch at $OS_URL to be healthy..."
-for i in {1..60}; do
-  if curl -s "$OS_URL/_cluster/health" | grep -q '"status":"green"\|"status":"yellow"'; then
-    echo "OpenSearch is healthy"
-    break
-  fi
-  sleep 1
-  if [ $i -eq 60 ]; then
-    echo "Timed out waiting for OpenSearch to be healthy; proceeding anyway"
-  fi
-done
-# Wait for OpenSearch to be healthy before indexing (green or yellow)
-PRIMARY_OS_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
-FALLBACK_OS_URL="http://opensearch:9200"
-HEALTHY=0
-for URL in "$PRIMARY_OS_URL" "$FALLBACK_OS_URL"; do
-  echo "Waiting for OpenSearch at $URL to be healthy..."
-  for i in {1..120}; do
-    if curl -sf "$URL/_cluster/health" | grep -q '"status":"green"\|"status":"yellow"'; then
-      echo "OpenSearch is healthy at $URL"
-      HEALTHY=1
-      break
-    fi
-    sleep 1
-  done
-  [ $HEALTHY -eq 1 ] && break
-done
-if [ $HEALTHY -ne 1 ]; then
-  echo "Timed out waiting for OpenSearch to be healthy; proceeding anyway"
-fi
+# Skip blocking OpenSearch health checks in dev; proceed immediately
+echo "Skipping OpenSearch health wait in dev"
 
 # Index CSV files (unless skipped)
 if [ "${SKIP_AUTO_REINDEX:-false}" = "true" ]; then
   echo "Skipping automatic reindex (SKIP_AUTO_REINDEX=true)"
 else
   echo "Indexing CSV files..."
-  sleep 5  # Additional wait to ensure all services are fully initialized
-  curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null
+  sleep 5  # Small grace period
+  curl -s -X GET "http://localhost:$PORT/api/search/index/all" > /dev/null || true
   echo "Indexing task started"
 fi
 

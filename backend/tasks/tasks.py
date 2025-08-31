@@ -19,6 +19,168 @@ app = Celery('csv_viewer')
 app.config_from_object('celeryconfig')
 
 
+@app.task(name='tasks.search_opensearch')
+def search_opensearch(query: str,
+                      field: Optional[str] = None,
+                      include_historical: bool = False,
+                      size: int = 20000) -> dict:
+    """Celery task to perform a search in OpenSearch.
+
+    Returns a structured dict compatible with the API layer.
+    """
+    try:
+        from time import perf_counter
+        t0 = perf_counter()
+        headers, documents = opensearch_config.search(
+            query=query,
+            field=field,
+            include_historical=include_historical,
+            size=size,
+        )
+
+        # Ensure consistent display columns (idempotent if already filtered)
+        try:
+            from utils.csv_utils import filter_display_columns
+            filtered_headers, filtered_documents = filter_display_columns(headers, documents)
+        except Exception:
+            filtered_headers, filtered_documents = headers, documents
+
+        took_ms = int((perf_counter() - t0) * 1000)
+        return {
+            "status": "success",
+            "message": f"Found {len(filtered_documents)} results for '{query}'",
+            "headers": filtered_headers or [],
+            "data": filtered_documents or [],
+            "took_ms": took_ms,
+        }
+    except Exception as e:
+        logger.error(f"Error in search_opensearch task: {e}")
+        return {
+            "status": "error",
+            "message": f"Search failed: {str(e)}",
+            "headers": [],
+            "data": [],
+        }
+
+
+@app.task(name='tasks.snapshot_current_stats')
+def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
+    """Compute and persist today's stats snapshot for netspeed.csv only.
+
+    phonesWithKEM counts unique phones with >=1 KEM; totalKEMs counts modules.
+    """
+    try:
+        from models.file import FileModel as _FM
+        data_dir = Path(directory_path)
+        file_path = data_dir / "netspeed.csv"
+        if not file_path.exists():
+            return {"status": "warning", "message": f"Current file not found: {file_path}"}
+
+        fm = _FM.from_path(str(file_path))
+        date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+        _, rows = read_csv_file_normalized(str(file_path))
+
+        total_phones = len(rows)
+        switches = set(); locations = set(); city_codes = set()
+        phones_with_kem_unique = 0; total_kem_modules = 0
+        model_counts: Dict[str, int] = {}
+        justiz_model_counts: Dict[str, int] = {}; jva_model_counts: Dict[str, int] = {}
+        justiz_switches = set(); justiz_locations = set(); justiz_city_codes = set(); justiz_phones_with_kem_unique = 0; justiz_total_kem_modules = 0
+        jva_switches = set(); jva_locations = set(); jva_city_codes = set(); jva_phones_with_kem_unique = 0; jva_total_kem_modules = 0
+
+        for r in rows:
+            sh = (r.get("Switch Hostname") or "").strip(); is_jva = False
+            if sh:
+                switches.add(sh)
+                try:
+                    from api.stats import is_jva_switch
+                    is_jva = is_jva_switch(sh)
+                except Exception:
+                    is_jva = False
+                if is_jva:
+                    jva_switches.add(sh)
+                else:
+                    justiz_switches.add(sh)
+                try:
+                    from api.stats import extract_location
+                    loc = extract_location(sh)
+                    if loc:
+                        locations.add(loc); city_codes.add(loc[:3])
+                        if is_jva:
+                            jva_locations.add(loc); jva_city_codes.add(loc[:3])
+                        else:
+                            justiz_locations.add(loc); justiz_city_codes.add(loc[:3])
+                except Exception:
+                    pass
+
+            kem_count = 0
+            if (r.get("KEM") or "").strip(): kem_count += 1
+            if (r.get("KEM 2") or "").strip(): kem_count += 1
+            if kem_count == 0:
+                ln = (r.get("Line Number") or "").strip()
+                if "KEM" in ln: kem_count = ln.count("KEM") or 1
+            if kem_count > 0:
+                phones_with_kem_unique += 1; total_kem_modules += kem_count
+                if is_jva:
+                    jva_phones_with_kem_unique += 1; jva_total_kem_modules += kem_count
+                else:
+                    justiz_phones_with_kem_unique += 1; justiz_total_kem_modules += kem_count
+
+            model = (r.get("Model Name") or "").strip() or "Unknown"
+            if model != "Unknown":
+                try:
+                    from api.stats import is_mac_like
+                    if len(model) < 4 or is_mac_like(model):
+                        model = "Unknown"
+                except Exception:
+                    pass
+            model_counts[model] = model_counts.get(model, 0) + 1
+            if sh:
+                try:
+                    from api.stats import is_jva_switch
+                    if is_jva_switch(sh):
+                        jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                    else:
+                        justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+                except Exception:
+                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
+        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]; phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+        phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+        phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+        total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
+
+        metrics = {
+            "totalPhones": total_phones,
+            "totalSwitches": len(switches),
+            "totalLocations": len(locations),
+            "totalCities": len(city_codes),
+            "phonesWithKEM": phones_with_kem_unique,
+            "totalKEMs": total_kem_modules,
+            "totalJustizPhones": total_justiz_phones,
+            "totalJVAPhones": total_jva_phones,
+            "justizSwitches": len(justiz_switches),
+            "justizLocations": len(justiz_locations),
+            "justizCities": len(justiz_city_codes),
+            "justizPhonesWithKEM": justiz_phones_with_kem_unique,
+            "totalJustizKEMs": justiz_total_kem_modules,
+            "jvaSwitches": len(jva_switches),
+            "jvaLocations": len(jva_locations),
+            "jvaCities": len(jva_city_codes),
+            "jvaPhonesWithKEM": jva_phones_with_kem_unique,
+            "totalJVAKEMs": jva_total_kem_modules,
+            "phonesByModel": phones_by_model,
+            "phonesByModelJustiz": phones_by_model_justiz,
+            "phonesByModelJVA": phones_by_model_jva,
+            "cityCodes": sorted(list(city_codes)),
+        }
+        ok = opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+        return {"status": "success" if ok else "error", "message": "Snapshot indexed" if ok else "Failed to index snapshot", "file": fm.name, "date": date_str}
+    except Exception as e:
+        logger.error(f"snapshot_current_stats failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.task(name='tasks.index_csv')
 def index_csv(file_path: str) -> dict:
     """
@@ -752,12 +914,12 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
 def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
     """Backfill global stats snapshots (stats_netspeed) for all netspeed files.
 
-    This computes metrics from CSV files only and does not touch netspeed_* search indices.
-    Useful when stats_netspeed is empty and you want fast timelines without full reindex.
+    Computes from CSV only; does not touch netspeed_* search indices.
+    phonesWithKEM = unique phones with >=1 KEM; totalKEMs = number of modules.
     """
     try:
         path = Path(directory_path)
-        files = []
+        files: List[Path] = []
         for p in sorted(path.glob("netspeed.csv*"), key=lambda x: x.name):
             name = p.name
             if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.replace("netspeed.csv.", "").isdigit()):
@@ -769,12 +931,15 @@ def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
                 fm = _FM.from_path(str(f))
                 date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
                 _, rows = read_csv_file_normalized(str(f))
+
                 total_phones = len(rows)
-                switches = set()
-                locations = set()
-                city_codes = set()
-                phones_with_kem = 0
+                switches: set[str] = set()
+                locations: set[str] = set()
+                city_codes: set[str] = set()
+                phones_with_kem_unique = 0
+                total_kem_modules = 0
                 model_counts: Dict[str, int] = {}
+
                 for r in rows:
                     sh = (r.get("Switch Hostname") or "").strip()
                     if sh:
@@ -787,25 +952,33 @@ def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
                                 city_codes.add(loc[:3])
                         except Exception:
                             pass
-                    # Count individual KEM modules, not just phones with KEM
+
                     kem_count = 0
                     if (r.get("KEM") or "").strip():
                         kem_count += 1
                     if (r.get("KEM 2") or "").strip():
                         kem_count += 1
-
+                    if kem_count == 0:
+                        ln = (r.get("Line Number") or "").strip()
+                        if "KEM" in ln:
+                            kem_count = ln.count("KEM") or 1
                     if kem_count > 0:
-                        phones_with_kem += kem_count  # This now counts KEM modules, not phones
+                        phones_with_kem_unique += 1
+                        total_kem_modules += kem_count
+
                     model = (r.get("Model Name") or "").strip() or "Unknown"
                     if model != "Unknown":
                         model_counts[model] = model_counts.get(model, 0) + 1
+
                 phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+
                 metrics = {
                     "totalPhones": total_phones,
                     "totalSwitches": len(switches),
                     "totalLocations": len(locations),
                     "totalCities": len(city_codes),
-                    "phonesWithKEM": phones_with_kem,
+                    "phonesWithKEM": phones_with_kem_unique,
+                    "totalKEMs": total_kem_modules,
                     "phonesByModel": phones_by_model,
                     "cityCodes": sorted(list(city_codes)),
                 }
@@ -818,17 +991,14 @@ def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
         logger.error(f"Backfill stats error: {e}")
         return {"status": "error", "message": str(e)}
 
+
 @app.task(bind=True, name='tasks.index_all_csv_files')
 def index_all_csv_files(self, directory_path: str) -> dict:
-    """
-    Task to index all CSV files in a directory.
-    Includes protection against concurrent execution.
+    """Index all CSV files and persist snapshots with correct KEM semantics.
 
-    Args:
-        directory_path: Path to the directory containing CSV files
-
-    Returns:
-        dict: A dictionary containing the indexing results
+    - Index historical first, then current file
+    - phonesWithKEM = unique phones; totalKEMs = modules
+    - Also writes per-location snapshots with unique KEM phone counting
     """
     logger.info(f"Indexing all CSV files in {directory_path}")
 
@@ -839,8 +1009,6 @@ def index_all_csv_files(self, directory_path: str) -> dict:
         if active_task.get("status") == "running":
             existing_task_id = active_task.get("task_id")
             current_task_id = getattr(self.request, 'id', 'unknown')
-
-            # If another task is already running, abort this one
             if existing_task_id and existing_task_id != current_task_id:
                 logger.warning(f"Another indexing task {existing_task_id} is already running. Aborting task {current_task_id}")
                 return {
@@ -858,67 +1026,39 @@ def index_all_csv_files(self, directory_path: str) -> dict:
         patterns = ["netspeed.csv", "netspeed.csv.*", "netspeed.csv_bak"]
         files: List[Path] = []
         for pattern in patterns:
-            glob_results = sorted(path.glob(pattern), key=lambda x: str(x))
-            files.extend(glob_results)
+            files.extend(sorted(path.glob(pattern), key=lambda x: str(x)))
 
-        # Only consider canonical netspeed files (no archives): netspeed.csv and netspeed.csv.N
-        netspeed_files = [
-            f for f in files
-            if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))
-        ]
-        # Separate backup files explicitly
+        netspeed_files = [f for f in files if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))]
         backup_files = [f for f in files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
-        # Always include all netspeed files (base + all historical), backups last
         base_files = [f for f in netspeed_files if f.name == "netspeed.csv"]
         historical_files_all = [f for f in netspeed_files if f.name != "netspeed.csv"]
         files = base_files + historical_files_all + backup_files
 
         logger.info(f"Found {len(files)} files matching patterns {patterns} and archive: {[str(f.relative_to(path)) for f in files]}")
-
         if not files:
-            return {
-                "status": "warning",
-                "message": f"No CSV files found in {directory_path}",
-                "directory": directory_path,
-                "files_processed": 0,
-                "total_documents": 0,
-            }
+            return {"status": "warning", "message": f"No CSV files found in {directory_path}", "directory": directory_path, "files_processed": 0, "total_documents": 0}
 
         current_files = [f for f in files if f.name == "netspeed.csv"]
         other_files = [f for f in files if f.name != "netspeed.csv"]
-        # Important: Index historical files FIRST, then current file for data repair to work
         ordered_files = sorted(other_files, key=lambda x: x.name) + current_files
-
-        logger.info(f"Indexing order (historical files first for data repair): {[f.name for f in ordered_files]}")
 
         results: List[Dict] = []
         total_documents = 0
         index_state = load_state()
 
-        # Send initial progress and persist an active record
+        # Start progress
         try:
             task_id = getattr(self.request, 'id', os.environ.get('CELERY_TASK_ID', 'manual'))
             start_active(index_state, task_id, len(ordered_files))
             save_state(index_state)
-            # Attach environment signature for isolation (dev vs prod): broker & opensearch URLs
             try:
                 from config import settings as _settings
-                update_active(index_state,
-                              broker=_settings.REDIS_URL,
-                              opensearch=_settings.OPENSEARCH_URL)
+                update_active(index_state, broker=_settings.REDIS_URL, opensearch=_settings.OPENSEARCH_URL)
                 save_state(index_state)
             except Exception:
                 pass
-            # Also expose Celery PROGRESS meta for /api/search/index/status/{task_id}
             try:
-                self.update_state(state='PROGRESS', meta={
-                    "task_id": task_id,
-                    "status": "running",
-                    "current_file": None,
-                    "index": 0,
-                    "total_files": len(ordered_files),
-                    "documents_indexed": 0,
-                })
+                self.update_state(state='PROGRESS', meta={"task_id": task_id, "status": "running", "current_file": None, "index": 0, "total_files": len(ordered_files), "documents_indexed": 0})
             except Exception:
                 pass
         except Exception as e:
@@ -928,25 +1068,16 @@ def index_all_csv_files(self, directory_path: str) -> dict:
 
         for i, file_path in enumerate(ordered_files):
             logger.info(f"Processing file {i+1}/{len(ordered_files)}: {file_path}")
-            # Emit a pre-index progress update so UI immediately shows the current file
             try:
-                update_active(index_state,
-                              current_file=file_path.name,
-                              index=i + 1)
+                update_active(index_state, current_file=file_path.name, index=i + 1)
                 save_state(index_state)
                 try:
-                    self.update_state(state='PROGRESS', meta={
-                        "task_id": getattr(self.request, 'id', None),
-                        "status": "running",
-                        "current_file": file_path.name,
-                        "index": i + 1,
-                        "total_files": len(ordered_files),
-                        "documents_indexed": total_documents,
-                    })
+                    self.update_state(state='PROGRESS', meta={"task_id": getattr(self.request, 'id', None), "status": "running", "current_file": file_path.name, "index": i + 1, "total_files": len(ordered_files), "documents_indexed": total_documents})
                 except Exception:
                     pass
             except Exception:
                 pass
+
             try:
                 success, count = opensearch_config.index_csv_file(str(file_path))
                 total_documents += count
@@ -966,99 +1097,62 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                 except Exception as e:
                     logger.warning(f"Failed to update index state for {file_path}: {e}")
 
-                results.append({
-                    "file": str(file_path),
-                    "success": success,
-                    "count": count,
-                    "line_count": line_count
-                })
+                results.append({"file": str(file_path), "success": success, "count": count, "line_count": line_count})
                 logger.info(f"Completed {file_path}: {count} documents indexed")
 
-                # Persist a stats snapshot for timeline (best-effort)
+                # Stats snapshot for timeline (best-effort) using correct semantics
                 try:
                     from models.file import FileModel as _FM
                     fm = _FM.from_path(str(file_path))
                     date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
-                    # Compute metrics from normalized CSV (local, no opensearch read)
                     _, _rows = read_csv_file_normalized(str(file_path))
-                    # Minimal recomputation to avoid duplicating logic
+
                     total_phones = len(_rows)
-                    switches = set()
-                    locations = set()
-                    city_codes = set()
-                    phones_with_kem = 0
-                    model_counts: Dict[str, int] = {}
-                    justiz_model_counts: Dict[str, int] = {}
-                    jva_model_counts: Dict[str, int] = {}
-
-                    # Separate collections for Justiz and JVA
-                    justiz_switches = set()
-                    justiz_locations = set()
-                    justiz_city_codes = set()
-                    justiz_phones_with_kem = 0
-
-                    jva_switches = set()
-                    jva_locations = set()
-                    jva_city_codes = set()
-                    jva_phones_with_kem = 0
+                    switches = set(); locations = set(); city_codes = set()
+                    phones_with_kem_unique = 0; total_kem_modules = 0
+                    model_counts: Dict[str, int] = {}; justiz_model_counts: Dict[str, int] = {}; jva_model_counts: Dict[str, int] = {}
+                    justiz_switches = set(); justiz_locations = set(); justiz_city_codes = set(); justiz_phones_with_kem_unique = 0; justiz_total_kem_modules = 0
+                    jva_switches = set(); jva_locations = set(); jva_city_codes = set(); jva_phones_with_kem_unique = 0; jva_total_kem_modules = 0
 
                     for r in _rows:
-                        sh = (r.get("Switch Hostname") or "").strip()
-                        is_jva = False
-
+                        sh = (r.get("Switch Hostname") or "").strip(); is_jva = False
                         if sh:
                             switches.add(sh)
-
-                            # Determine if this is JVA or Justiz
                             try:
                                 from api.stats import is_jva_switch
                                 is_jva = is_jva_switch(sh)
                             except Exception:
                                 is_jva = False
-
-                            # Add to appropriate collections
                             if is_jva:
                                 jva_switches.add(sh)
                             else:
                                 justiz_switches.add(sh)
-
-                            # Reuse extract_location from stats via a local import
                             try:
                                 from api.stats import extract_location
                                 loc = extract_location(sh)
                                 if loc:
-                                    locations.add(loc)
-                                    city_codes.add(loc[:3])
-
-                                    # Add to appropriate location/city collections
+                                    locations.add(loc); city_codes.add(loc[:3])
                                     if is_jva:
-                                        jva_locations.add(loc)
-                                        jva_city_codes.add(loc[:3])
+                                        jva_locations.add(loc); jva_city_codes.add(loc[:3])
                                     else:
-                                        justiz_locations.add(loc)
-                                        justiz_city_codes.add(loc[:3])
+                                        justiz_locations.add(loc); justiz_city_codes.add(loc[:3])
                             except Exception:
                                 pass
 
-                        # Count individual KEM modules, not just phones with KEM
                         kem_count = 0
-                        if (r.get("KEM") or "").strip():
-                            kem_count += 1
-                        if (r.get("KEM 2") or "").strip():
-                            kem_count += 1
-
+                        if (r.get("KEM") or "").strip(): kem_count += 1
+                        if (r.get("KEM 2") or "").strip(): kem_count += 1
+                        if kem_count == 0:
+                            ln = (r.get("Line Number") or "").strip()
+                            if "KEM" in ln: kem_count = ln.count("KEM") or 1
                         if kem_count > 0:
-                            phones_with_kem += kem_count  # This now counts KEM modules, not phones
-
-                            # Add to appropriate KEM collections
+                            phones_with_kem_unique += 1; total_kem_modules += kem_count
                             if is_jva:
-                                jva_phones_with_kem += kem_count
+                                jva_phones_with_kem_unique += 1; jva_total_kem_modules += kem_count
                             else:
-                                justiz_phones_with_kem += kem_count
+                                justiz_phones_with_kem_unique += 1; justiz_total_kem_modules += kem_count
 
-                        # Process model name
                         model = (r.get("Model Name") or "").strip() or "Unknown"
-                        # Skip invalid models (MAC-like strings)
                         if model != "Unknown":
                             try:
                                 from api.stats import is_mac_like
@@ -1066,11 +1160,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                     model = "Unknown"
                             except Exception:
                                 pass
-
-                        # Count overall models
                         model_counts[model] = model_counts.get(model, 0) + 1
-
-                        # Count Justiz/JVA breakdown
                         if sh:
                             try:
                                 from api.stats import is_jva_switch
@@ -1079,188 +1169,66 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                 else:
                                     justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
                             except Exception:
-                                # Default to Justiz if can't determine
                                 justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
 
-                    # Format results
-                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
-                    phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-
-                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
-                    phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
-
-                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
-                    phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
-
-                    total_justiz_phones = sum(justiz_model_counts.values())
-                    total_jva_phones = sum(jva_model_counts.values())
-
-                    # Calculate detailed breakdown by location for Justiz/JVA
-                    justiz_details_by_location: Dict[str, Dict[str, int]] = {}
-                    jva_details_by_location: Dict[str, Dict[str, int]] = {}
-
-                    for r in _rows:
-                        sh = (r.get("Switch Hostname") or "").strip()
-                        if not sh:
-                            continue
-
-                        # Extract location code
-                        try:
-                            from api.stats import extract_location
-                            location = extract_location(sh)
-                        except Exception:
-                            location = None
-
-                        if not location:
-                            continue
-
-                        # Process model name
-                        model = (r.get("Model Name") or "").strip() or "Unknown"
-                        if model != "Unknown":
-                            try:
-                                from api.stats import is_mac_like
-                                if len(model) < 4 or is_mac_like(model):
-                                    model = "Unknown"
-                            except Exception:
-                                pass
-
-                        # Determine if JVA or Justiz and count by location
-                        try:
-                            from api.stats import is_jva_switch
-                            if is_jva_switch(sh):
-                                # JVA location
-                                if location not in jva_details_by_location:
-                                    jva_details_by_location[location] = {}
-                                jva_details_by_location[location][model] = jva_details_by_location[location].get(model, 0) + 1
-                            else:
-                                # Justiz location
-                                if location not in justiz_details_by_location:
-                                    justiz_details_by_location[location] = {}
-                                justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
-                        except Exception:
-                            # Default to Justiz
-                            if location not in justiz_details_by_location:
-                                justiz_details_by_location[location] = {}
-                            justiz_details_by_location[location][model] = justiz_details_by_location[location].get(model, 0) + 1
-
-                    # Format details results
-                    phones_by_model_justiz_details = []
-                    for location, models in justiz_details_by_location.items():
-                        location_total = sum(models.values())
-                        model_list = [{"model": m, "count": c} for m, c in models.items()]
-                        model_list.sort(key=lambda x: (-x["count"], x["model"]))
-
-                        # Get city name for display
-                        city_code = location[:3] if location and len(location) >= 3 else ""
-                        city_name = ""
-                        if city_code:
-                            try:
-                                from api.stats import resolve_city_name
-                                city_name = resolve_city_name(city_code)
-                            except Exception:
-                                city_name = city_code
-
-                        display_name = f"{location} - {city_name}" if city_name and city_name != city_code else location
-
-                        phones_by_model_justiz_details.append({
-                            "location": location,
-                            "locationDisplay": display_name,
-                            "totalPhones": location_total,
-                            "models": model_list  # Frontend expects 'models' not 'phonesByModel'
-                        })
-                    phones_by_model_justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
-
-                    phones_by_model_jva_details = []
-                    for location, models in jva_details_by_location.items():
-                        location_total = sum(models.values())
-                        model_list = [{"model": m, "count": c} for m, c in models.items()]
-                        model_list.sort(key=lambda x: (-x["count"], x["model"]))
-
-                        # Get city name for display
-                        city_code = location[:3] if location and len(location) >= 3 else ""
-                        city_name = ""
-                        if city_code:
-                            try:
-                                from api.stats import resolve_city_name
-                                city_name = resolve_city_name(city_code)
-                            except Exception:
-                                city_name = city_code
-
-                        display_name = f"{location} - {city_name}" if city_name and city_name != city_code else location
-
-                        phones_by_model_jva_details.append({
-                            "location": location,
-                            "locationDisplay": display_name,
-                            "totalPhones": location_total,
-                            "models": model_list  # Frontend expects 'models' not 'phonesByModel'
-                        })
-                    phones_by_model_jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]; phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+                    total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
 
                     metrics = {
                         "totalPhones": total_phones,
                         "totalSwitches": len(switches),
                         "totalLocations": len(locations),
                         "totalCities": len(city_codes),
-                        "phonesWithKEM": phones_with_kem,
-                        "totalKEMs": phones_with_kem,  # For now, keep same as phones with KEM
+                        "phonesWithKEM": phones_with_kem_unique,
+                        "totalKEMs": total_kem_modules,
                         "totalJustizPhones": total_justiz_phones,
                         "totalJVAPhones": total_jva_phones,
-
-                        # Justiz KPIs
                         "justizSwitches": len(justiz_switches),
                         "justizLocations": len(justiz_locations),
                         "justizCities": len(justiz_city_codes),
-                        "justizPhonesWithKEM": justiz_phones_with_kem,
-                        "totalJustizKEMs": justiz_phones_with_kem,  # For now, keep same as phones with KEM
-
-                        # JVA KPIs
+                        "justizPhonesWithKEM": justiz_phones_with_kem_unique,
+                        "totalJustizKEMs": justiz_total_kem_modules,
                         "jvaSwitches": len(jva_switches),
                         "jvaLocations": len(jva_locations),
                         "jvaCities": len(jva_city_codes),
-                        "jvaPhonesWithKEM": jva_phones_with_kem,
-                        "totalJVAKEMs": jva_phones_with_kem,  # For now, keep same as phones with KEM
-
+                        "jvaPhonesWithKEM": jva_phones_with_kem_unique,
+                        "totalJVAKEMs": jva_total_kem_modules,
                         "phonesByModel": phones_by_model,
                         "phonesByModelJustiz": phones_by_model_justiz,
                         "phonesByModelJVA": phones_by_model_jva,
-                        "phonesByModelJustizDetails": phones_by_model_justiz_details,
-                        "phonesByModelJVADetails": phones_by_model_jva_details,
                         "cityCodes": sorted(list(city_codes)),
                     }
                     opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
-                    # Additionally: precompute per-location snapshots for fast location timelines
+
+                    # Basic per-location snapshots (unique KEM phones)
                     try:
-                        # Aggregate per 5-char location code
                         per_loc_counts: Dict[str, Dict[str, int]] = {}
                         per_loc_switches: Dict[str, set] = {}
                         for r in _rows:
                             sh2 = (r.get("Switch Hostname") or "").strip()
-                            if not sh2:
-                                continue
+                            if not sh2: continue
                             try:
                                 from api.stats import extract_location as _extract_location
                                 loc2 = _extract_location(sh2)
                             except Exception:
                                 loc2 = None
-                            if not loc2:
-                                continue
+                            if not loc2: continue
                             plc = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
                             plc["totalPhones"] += 1
                             sset = per_loc_switches.setdefault(loc2, set())
                             if sh2 not in sset:
-                                sset.add(sh2)
-                                plc["totalSwitches"] += 1
-                            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                                sset.add(sh2); plc["totalSwitches"] += 1
+                            kem1 = (r.get("KEM") or "").strip(); kem2 = (r.get("KEM 2") or "").strip()
+                            has_kem = bool(kem1) or bool(kem2)
+                            if not has_kem:
+                                ln = (r.get("Line Number") or "").strip()
+                                if "KEM" in ln:
+                                    has_kem = True
+                            if has_kem:
                                 plc["phonesWithKEM"] += 1
-                        loc_docs = []
-                        for k, agg in per_loc_counts.items():
-                            loc_docs.append({
-                                "key": k,
-                                "mode": "code",
-                                "totalPhones": agg["totalPhones"],
-                                "totalSwitches": agg["totalSwitches"],
-                                "phonesWithKEM": agg["phonesWithKEM"],
-                            })
+                        loc_docs = [{"key": k, "mode": "code", "totalPhones": agg["totalPhones"], "totalSwitches": agg["totalSwitches"], "phonesWithKEM": agg["phonesWithKEM"]} for k, agg in per_loc_counts.items()]
                         if loc_docs:
                             opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
                     except Exception as _e:
@@ -1268,7 +1236,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                 except Exception as _e:
                     logger.debug(f"Stats snapshot failed for {file_path}: {_e}")
 
-                # Persist a full archive snapshot of rows (best-effort, excludes external city names)
+                # Archive snapshot
                 try:
                     if '_rows' not in locals():
                         _, _rows = read_csv_file_normalized(str(file_path))
@@ -1276,35 +1244,19 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                 except Exception as _e:
                     logger.debug(f"Archive snapshot failed for {file_path}: {_e}")
 
-                # Progress update (persist)
+                # Progress update
                 try:
-                    update_active(index_state,
-                                  current_file=file_path.name,
-                                  index=i + 1,
-                                  documents_indexed=total_documents)
+                    update_active(index_state, current_file=file_path.name, index=i + 1, documents_indexed=total_documents)
                     save_state(index_state)
                 except Exception as e:
                     logger.debug(f"Progress update failed: {e}")
-                # Emit Celery PROGRESS meta for UI polling
                 try:
-                    self.update_state(state='PROGRESS', meta={
-                        "task_id": task_id,
-                        "status": "running",
-                        "current_file": file_path.name,
-                        "index": i + 1,
-                        "total_files": len(ordered_files),
-                        "documents_indexed": total_documents,
-                    })
+                    self.update_state(state='PROGRESS', meta={"task_id": task_id, "status": "running", "current_file": file_path.name, "index": i + 1, "total_files": len(ordered_files), "documents_indexed": total_documents})
                 except Exception:
                     pass
             except Exception as e:
                 logger.error(f"Error indexing {file_path}: {e}")
-                results.append({
-                    "file": str(file_path),
-                    "success": False,
-                    "error": str(e),
-                    "count": 0
-                })
+                results.append({"file": str(file_path), "success": False, "error": str(e), "count": 0})
 
         # Persist state
         last_success_ts = None
@@ -1317,8 +1269,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
         except Exception as e:
             logger.warning(f"Failed saving index state: {e}")
 
-        # IMPORTANT: Apply data repair AFTER all files are indexed
-        # This ensures historical indices are available for data lookup
+        # Post-index data repair for current file
         current_file_path = Path(directory_path) / "netspeed.csv"
         if current_file_path.exists():
             try:
@@ -1341,7 +1292,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             "total_documents": total_documents,
             "results": results,
             "started_at": start_time.isoformat() + 'Z',
-            "finished_at": last_success_ts
+            "finished_at": last_success_ts,
         }
     except Exception as e:
         logger.error(f"Error indexing directory {directory_path}: {e}")
@@ -1350,322 +1301,4 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             save_state(index_state)
         except Exception:
             pass
-        return {
-            "status": "error",
-            "message": f"Error processing directory: {str(e)}",
-            "directory": directory_path,
-            "files_processed": 0,
-            "total_documents": 0
-        }
-
-
-@app.task(name='tasks.search_opensearch')
-def search_opensearch(query: str, field: Optional[str] = None, include_historical: bool = False, size: int = 20000) -> dict:
-    """
-    Task to search OpenSearch.
-
-    Args:
-        query: Search query
-        field: Optional field to search in
-        include_historical: Whether to include historical indices
-
-    Returns:
-        dict: A dictionary containing the search results including file creation dates
-    """
-    logger.info(f"Searching OpenSearch for '{query}'")
-    from time import perf_counter
-    t0 = perf_counter()
-    try:
-        # Dev-friendly: reload OpenSearch module to pick up recent code changes without restarting Celery
-        try:
-            import sys, importlib
-            os_mod = sys.modules.get('utils.opensearch')
-            if os_mod is not None:
-                os_mod = importlib.reload(os_mod)
-            else:
-                import utils.opensearch as os_mod  # type: ignore
-            cfg = getattr(os_mod, 'opensearch_config', opensearch_config)
-        except Exception:
-            cfg = opensearch_config
-
-        headers, documents = cfg.search(
-            query=query,
-            field=field,
-            include_historical=include_historical,
-            size=size
-        )
-
-        # Process documents to ensure file creation dates and formats are included
-        # Avoid heavy per-row filesystem work by caching per file name within this search
-        meta_cache: dict[str, dict] = {}
-
-        def get_file_meta(_file_name: str) -> dict:
-            if _file_name in meta_cache:
-                return meta_cache[_file_name]
-            meta: dict = {"date": None, "format": None}
-            file_path = f"/app/data/{_file_name}"
-            try:
-                from models.file import FileModel as _FM
-                fm = _FM.from_path(file_path)
-                meta["date"] = fm.date.strftime('%Y-%m-%d') if fm.date else None
-                meta["format"] = fm.format or None
-            except Exception as _e:
-                logger.debug(f"File meta probe failed for {_file_name}: {_e}")
-            # Minimal fallbacks
-            if meta["date"] is None:
-                try:
-                    from pathlib import Path as _Path
-                    from datetime import datetime as _dt
-                    p = _Path(file_path)
-                    if p.exists():
-                        meta["date"] = _dt.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d')
-                except Exception:
-                    pass
-            if meta["format"] is None:
-                # Heuristic: current netspeed.csv likely "new", historical default to "old"
-                meta["format"] = "new" if _file_name == "netspeed.csv" else "old"
-            meta_cache[_file_name] = meta
-            return meta
-
-        for doc in documents:
-            file_name = doc.get('File Name')
-            if not file_name:
-                continue
-            meta = None
-            # Only fetch meta if any field is missing
-            need_date = ('Creation Date' not in doc) or (not doc.get('Creation Date'))
-            need_format = ('File Format' not in doc)
-            if need_date or need_format:
-                meta = get_file_meta(file_name)
-            if need_date and meta and meta.get('date'):
-                doc['Creation Date'] = meta['date']
-            if need_format and meta and meta.get('format'):
-                doc['File Format'] = meta['format']
-
-    # Note: CSV fallback used during testing has been removed. OpenSearch results are used exclusively.
-
-        # Apply same column filtering as Preview API for consistency
-        from utils.csv_utils import filter_display_columns
-
-        # Filter headers and data to match display preferences
-        filtered_headers, filtered_documents = filter_display_columns(headers, documents)
-
-        elapsed_ms = int((perf_counter() - t0) * 1000)
-        return {
-            "status": "success",
-            "message": f"Found {len(filtered_documents)} results for '{query}'",
-            "headers": filtered_headers,
-            "data": filtered_documents,
-            "took_ms": elapsed_ms
-        }
-    except Exception as e:
-        logger.error(f"Error searching for '{query}': {e}")
-        return {
-            "status": "error",
-            "message": f"Error searching: {str(e)}",
-            "headers": [],
-            "data": [],
-            "took_ms": None
-        }
-
-
-# Removed: morning_reindex task (scheduler deprecated; file watcher handles reindexing)
-
-
-@app.task(name='tasks.snapshot_current_stats')
-def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
-    """Snapshot today's global and per-location statistics from the current netspeed.csv.
-
-    This precaches timeline data in stats_netspeed and stats_netspeed_loc so the UI is fast.
-    CSV remains a fallback only.
-    """
-    try:
-        path = Path(directory_path)
-        file_path = (path / "netspeed.csv").resolve()
-        if not file_path.exists():
-            return {"status": "warning", "message": f"{file_path} not found"}
-
-        from models.file import FileModel as _FM
-        fm = _FM.from_path(str(file_path))
-        date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
-
-        # Read CSV once
-        _, rows = read_csv_file_normalized(str(file_path))
-
-        # Global metrics
-        total_phones = len(rows)
-        switches = set()
-        locations = set()
-        city_codes = set()
-        phones_with_kem = 0  # unique phones with >=1 KEM
-        total_kem_modules = 0  # total number of KEM modules
-        model_counts: Dict[str, int] = {}
-        justiz_model_counts: Dict[str, int] = {}
-        jva_model_counts: Dict[str, int] = {}
-
-        # Separate collections for Justiz and JVA
-        justiz_switches = set()
-        justiz_locations = set()
-        justiz_city_codes = set()
-        justiz_phones_with_kem = 0
-
-        jva_switches = set()
-        jva_locations = set()
-        jva_city_codes = set()
-        jva_phones_with_kem = 0
-
-        for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip()
-            is_jva = False
-
-            if sh:
-                switches.add(sh)
-
-                # Determine if this is JVA or Justiz
-                try:
-                    from api.stats import is_jva_switch
-                    is_jva = is_jva_switch(sh)
-                except Exception:
-                    is_jva = False
-
-                # Add to appropriate collections
-                if is_jva:
-                    jva_switches.add(sh)
-                else:
-                    justiz_switches.add(sh)
-
-                try:
-                    from api.stats import extract_location
-                    loc = extract_location(sh)
-                    if loc:
-                        locations.add(loc)
-                        city_codes.add(loc[:3])
-
-                        # Add to appropriate location/city collections
-                        if is_jva:
-                            jva_locations.add(loc)
-                            jva_city_codes.add(loc[:3])
-                        else:
-                            justiz_locations.add(loc)
-                            justiz_city_codes.add(loc[:3])
-                except Exception:
-                    pass
-
-            # Count KEMs: unique phones vs module count
-            kem_count = 0
-            if (r.get("KEM") or "").strip():
-                kem_count += 1
-            if (r.get("KEM 2") or "").strip():
-                kem_count += 1
-            if kem_count == 0:
-                ln = (r.get("Line Number") or "").strip()
-                if "KEM" in ln:
-                    kem_count = ln.count("KEM") or 1
-            if kem_count > 0:
-                phones_with_kem += 1
-                total_kem_modules += kem_count
-                if is_jva:
-                    jva_phones_with_kem += 1
-                else:
-                    justiz_phones_with_kem += 1
-
-            model = (r.get("Model Name") or "").strip() or "Unknown"
-            if model != "Unknown":
-                model_counts[model] = model_counts.get(model, 0) + 1
-
-                # Count by category
-                if is_jva:
-                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
-                else:
-                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
-
-        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
-        phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
-        phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
-
-        total_justiz_phones = sum(justiz_model_counts.values())
-        total_jva_phones = sum(jva_model_counts.values())
-
-        metrics = {
-            "totalPhones": total_phones,
-            "totalSwitches": len(switches),
-            "totalLocations": len(locations),
-            "totalCities": len(city_codes),
-            "phonesWithKEM": phones_with_kem,
-            "totalKEMs": total_kem_modules,
-            "totalJustizPhones": total_justiz_phones,
-            "totalJVAPhones": total_jva_phones,
-
-            # Justiz KPIs
-            "justizSwitches": len(justiz_switches),
-            "justizLocations": len(justiz_locations),
-            "justizCities": len(justiz_city_codes),
-            "justizPhonesWithKEM": justiz_phones_with_kem,
-            "totalJustizKEMs": total_kem_modules if total_kem_modules and justiz_phones_with_kem else justiz_phones_with_kem,
-
-            # JVA KPIs
-            "jvaSwitches": len(jva_switches),
-            "jvaLocations": len(jva_locations),
-            "jvaCities": len(jva_city_codes),
-            "jvaPhonesWithKEM": jva_phones_with_kem,
-            "totalJVAKEMs": total_kem_modules if total_kem_modules and jva_phones_with_kem else jva_phones_with_kem,
-
-            "phonesByModel": phones_by_model,
-            "phonesByModelJustiz": phones_by_model_justiz,
-            "phonesByModelJVA": phones_by_model_jva,
-            "cityCodes": sorted(list(city_codes)),
-        }
-        opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
-
-        # Per-location metrics (aggregate per 5-char code)
-        per_loc_counts: Dict[str, Dict[str, int]] = {}
-        per_loc_switches: Dict[str, set] = {}
-        for r in rows:
-            sh2 = (r.get("Switch Hostname") or "").strip()
-            if not sh2:
-                continue
-            try:
-                from api.stats import extract_location as _extract_location
-                loc2 = _extract_location(sh2)
-            except Exception:
-                loc2 = None
-            if not loc2:
-                continue
-            plc = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
-            plc["totalPhones"] += 1
-            sset = per_loc_switches.setdefault(loc2, set())
-            if sh2 not in sset:
-                sset.add(sh2)
-                plc["totalSwitches"] += 1
-            # Unique phones with >=1 KEM considering KEM/KEM 2 and Line Number fallback
-            k1 = (r.get("KEM") or "").strip()
-            k2 = (r.get("KEM 2") or "").strip()
-            has_kem = bool(k1) or bool(k2)
-            if not has_kem:
-                ln2 = (r.get("Line Number") or "").strip()
-                if "KEM" in ln2:
-                    has_kem = True
-            if has_kem:
-                plc["phonesWithKEM"] += 1
-        loc_docs = []
-        for k, agg in per_loc_counts.items():
-            loc_docs.append({
-                "key": k,
-                "mode": "code",
-                "totalPhones": agg["totalPhones"],
-                "totalSwitches": agg["totalSwitches"],
-                "phonesWithKEM": agg["phonesWithKEM"],
-            })
-        if loc_docs:
-            opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
-
-        # Optional: persist archive snapshot for the day
-        try:
-            opensearch_config.index_archive_snapshot(file=fm.name, date=date_str, rows=rows)
-        except Exception:
-            pass
-
-        return {"status": "success", "file": fm.name, "date": date_str, "loc_docs": len(loc_docs)}
-    except Exception as e:
-        logger.error(f"snapshot_current_stats error: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Error processing directory: {str(e)}", "directory": directory_path, "files_processed": 0, "total_documents": 0}
