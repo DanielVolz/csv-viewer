@@ -46,7 +46,8 @@ def index_csv(file_path: str) -> dict:
                 switches = set()
                 locations = set()
                 city_codes = set()
-                phones_with_kem = 0
+                phones_with_kem = 0  # Count of phones that have at least 1 KEM
+                total_kem_modules = 0  # Count of individual KEM modules
                 model_counts: Dict[str, int] = {}
                 justiz_model_counts: Dict[str, int] = {}
                 jva_model_counts: Dict[str, int] = {}
@@ -56,12 +57,14 @@ def index_csv(file_path: str) -> dict:
                 justiz_switches = set()
                 justiz_locations = set()
                 justiz_city_codes = set()
-                justiz_phones_with_kem = 0
+                justiz_phones_with_kem = 0  # Count of Justiz phones that have at least 1 KEM
+                justiz_total_kem_modules = 0  # Count of individual Justiz KEM modules
 
                 jva_switches = set()
                 jva_locations = set()
                 jva_city_codes = set()
-                jva_phones_with_kem = 0
+                jva_phones_with_kem = 0  # Count of JVA phones that have at least 1 KEM
+                jva_total_kem_modules = 0  # Count of individual JVA KEM modules
 
                 for r in _rows:
                     sh = (r.get("Switch Hostname") or "").strip()
@@ -100,21 +103,35 @@ def index_csv(file_path: str) -> dict:
                         except Exception:
                             pass
 
-                    # Count individual KEM modules, not just phones with KEM
+                    # Count individual KEM modules and phones with KEM separately
                     kem_count = 0
+
+                    # Check KEM and KEM 2 columns first
                     if (r.get("KEM") or "").strip():
                         kem_count += 1
                     if (r.get("KEM 2") or "").strip():
                         kem_count += 1
 
+                    # If no KEM in separate columns, check Line Number for KEM info
+                    if kem_count == 0:
+                        line_number = (r.get("Line Number") or "").strip()
+                        if "KEM" in line_number:
+                            # Count KEM occurrences in Line Number
+                            kem_count = line_number.count("KEM")
+
                     if kem_count > 0:
-                        phones_with_kem += kem_count  # This now counts KEM modules, not phones
+                        # Count phones with KEM (1 phone = 1 count, regardless of how many KEMs)
+                        phones_with_kem += 1
+                        # Count total KEM modules (1 phone with 2 KEMs = 2 count)
+                        total_kem_modules += kem_count
 
                         # Add to appropriate KEM collections
                         if is_jva:
-                            jva_phones_with_kem += kem_count
+                            jva_phones_with_kem += 1
+                            jva_total_kem_modules += kem_count
                         else:
-                            justiz_phones_with_kem += kem_count
+                            justiz_phones_with_kem += 1
+                            justiz_total_kem_modules += kem_count
 
                         # Add to global KEM phones list
                         kem_data = {
@@ -286,6 +303,7 @@ def index_csv(file_path: str) -> dict:
                     "totalLocations": len(locations),
                     "totalCities": len(city_codes),
                     "phonesWithKEM": phones_with_kem,
+                    "totalKEMs": total_kem_modules,  # Total count of individual KEM modules
                     "totalJustizPhones": total_justiz_phones,
                     "totalJVAPhones": total_jva_phones,
 
@@ -294,12 +312,14 @@ def index_csv(file_path: str) -> dict:
                     "justizLocations": len(justiz_locations),
                     "justizCities": len(justiz_city_codes),
                     "justizPhonesWithKEM": justiz_phones_with_kem,
+                    "totalJustizKEMs": justiz_total_kem_modules,  # Total count of Justiz KEM modules
 
                     # JVA KPIs
                     "jvaSwitches": len(jva_switches),
                     "jvaLocations": len(jva_locations),
                     "jvaCities": len(jva_city_codes),
                     "jvaPhonesWithKEM": jva_phones_with_kem,
+                    "totalJVAKEMs": jva_total_kem_modules,  # Total count of JVA KEM modules
 
                     "phonesByModel": phones_by_model,
                     "phonesByModelJustiz": phones_by_model_justiz,
@@ -1150,6 +1170,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         "totalLocations": len(locations),
                         "totalCities": len(city_codes),
                         "phonesWithKEM": phones_with_kem,
+                        "totalKEMs": phones_with_kem,  # For now, keep same as phones with KEM
                         "totalJustizPhones": total_justiz_phones,
                         "totalJVAPhones": total_jva_phones,
 
@@ -1158,12 +1179,14 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         "justizLocations": len(justiz_locations),
                         "justizCities": len(justiz_city_codes),
                         "justizPhonesWithKEM": justiz_phones_with_kem,
+                        "totalJustizKEMs": justiz_phones_with_kem,  # For now, keep same as phones with KEM
 
                         # JVA KPIs
                         "jvaSwitches": len(jva_switches),
                         "jvaLocations": len(jva_locations),
                         "jvaCities": len(jva_city_codes),
                         "jvaPhonesWithKEM": jva_phones_with_kem,
+                        "totalJVAKEMs": jva_phones_with_kem,  # For now, keep same as phones with KEM
 
                         "phonesByModel": phones_by_model,
                         "phonesByModelJustiz": phones_by_model_justiz,
@@ -1534,6 +1557,7 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             "totalLocations": len(locations),
             "totalCities": len(city_codes),
             "phonesWithKEM": phones_with_kem,
+            "totalKEMs": phones_with_kem,  # Will be corrected after reindex
             "totalJustizPhones": total_justiz_phones,
             "totalJVAPhones": total_jva_phones,
 
@@ -1542,12 +1566,14 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             "justizLocations": len(justiz_locations),
             "justizCities": len(justiz_city_codes),
             "justizPhonesWithKEM": justiz_phones_with_kem,
+            "totalJustizKEMs": justiz_phones_with_kem,  # Will be corrected after reindex
 
             # JVA KPIs
             "jvaSwitches": len(jva_switches),
             "jvaLocations": len(jva_locations),
             "jvaCities": len(jva_city_codes),
             "jvaPhonesWithKEM": jva_phones_with_kem,
+            "totalJVAKEMs": jva_phones_with_kem,  # Will be corrected after reindex
 
             "phonesByModel": phones_by_model,
             "phonesByModelJustiz": phones_by_model_justiz,

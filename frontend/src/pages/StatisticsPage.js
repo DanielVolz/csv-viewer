@@ -4,6 +4,15 @@ import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CloseIcon from '@mui/icons-material/Close';
+import PhoneIcon from '@mui/icons-material/Phone';
+import RouterIcon from '@mui/icons-material/Router';
+import LocationOnIcon from '@mui/icons-material/LocationOn';
+import LocationCityIcon from '@mui/icons-material/LocationCity';
+import ExtensionIcon from '@mui/icons-material/Extension';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import GavelIcon from '@mui/icons-material/Gavel';
+import SecurityIcon from '@mui/icons-material/Security';
+import PublicIcon from '@mui/icons-material/Public';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -79,26 +88,92 @@ function groupLocationsByCity(locations) {
   return cityGroups;
 }
 
-// Optimized StatCard with React.memo
+// Icon mapping for different KPI types
+const getKPIIcon = (title) => {
+  const titleLower = title.toLowerCase();
+  if (titleLower.includes('phone')) return PhoneIcon;
+  if (titleLower.includes('switch')) return RouterIcon;
+  if (titleLower.includes('location') && titleLower.includes('cities')) return LocationCityIcon;
+  if (titleLower.includes('location')) return LocationOnIcon;
+  if (titleLower.includes('kem')) return ExtensionIcon;
+  if (titleLower.includes('cities')) return LocationCityIcon;
+  return TrendingUpIcon; // default fallback
+};
+
+// Enhanced StatCard with React.memo, icons, and animations
 const StatCard = React.memo(function StatCard({ title, value, loading, tone = 'primary' }) {
+  const IconComponent = getKPIIcon(title);
+
   return (
     <Card
       elevation={0}
       sx={{
         border: '1px solid',
         borderColor: 'divider',
-        borderRadius: 2,
-        backgroundColor: (theme) => alpha(theme.palette[tone].main, theme.palette.mode === 'dark' ? 0.12 : 0.06),
+        borderRadius: 3,
+        background: (theme) =>
+          `linear-gradient(135deg, ${alpha(theme.palette[tone].main, theme.palette.mode === 'dark' ? 0.15 : 0.08)} 0%, ${alpha(theme.palette[tone].main, theme.palette.mode === 'dark' ? 0.08 : 0.04)} 100%)`,
         borderLeft: '4px solid',
         borderLeftColor: (theme) => theme.palette[tone].main,
+        position: 'relative',
+        overflow: 'hidden',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          width: '100px',
+          height: '100px',
+          background: (theme) =>
+            `radial-gradient(circle at center, ${alpha(theme.palette[tone].main, 0.1)} 0%, transparent 70%)`,
+          borderRadius: '50%',
+          transform: 'translate(30px, -30px)',
+        }
       }}
     >
-      <CardContent>
-        <Typography variant="overline" sx={{ color: (theme) => theme.palette[tone].main, fontWeight: 600 }}>{title}</Typography>
+      <CardContent sx={{ position: 'relative', zIndex: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Typography
+            variant="overline"
+            sx={{
+              color: (theme) => theme.palette[tone].main,
+              fontWeight: 600,
+              letterSpacing: '0.1em'
+            }}
+          >
+            {title}
+          </Typography>
+          <IconComponent
+            sx={{
+              color: (theme) => alpha(theme.palette[tone].main, 0.7),
+              fontSize: '1.5rem',
+            }}
+          />
+        </Box>
         {loading ? (
-          <Skeleton variant="text" sx={{ fontSize: '2rem', width: 120 }} />
+          <Skeleton
+            variant="text"
+            sx={{
+              fontSize: '2.5rem',
+              width: 140,
+              borderRadius: 1
+            }}
+          />
         ) : (
-          <Typography variant="h4" sx={{ fontWeight: 700 }}>{value?.toLocaleString?.() ?? value}</Typography>
+          <Typography
+            variant="h4"
+            sx={{
+              fontWeight: 700,
+              background: (theme) =>
+                `linear-gradient(45deg, ${theme.palette.text.primary} 30%, ${theme.palette[tone].main} 90%)`,
+              backgroundClip: 'text',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              transition: 'all 0.3s ease',
+            }}
+          >
+            {value?.toLocaleString?.() ?? value}
+          </Typography>
         )}
       </CardContent>
     </Card>
@@ -1036,15 +1111,17 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           border: '1px solid',
           borderColor: (theme) => alpha(theme.palette.primary.main, 0.2)
         }}>
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: 'primary.main' }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PublicIcon sx={{ fontSize: '1.3rem' }} />
             Total Phones
           </Typography>
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={data.totalPhones} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Total Switches" value={data.totalSwitches} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Switches" value={data.totalSwitches} loading={loading} /></Grid>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Locations" value={data.totalLocations} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="secondary" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.phonesWithKEM} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Total KEMs" value={data.totalKEMs} loading={loading} /></Grid>
           </Grid>
         </Box>
 
@@ -1057,15 +1134,17 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           border: '1px solid',
           borderColor: justiceTheme.border
         }}>
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: justiceTheme.primary }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: justiceTheme.primary, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <GavelIcon sx={{ fontSize: '1.3rem' }} />
             Justice Institutions (Justiz)
           </Typography>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Phones" value={data.totalJustizPhones} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Switches" value={data.justizSwitches} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Locations" value={data.justizLocations} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Cities" value={data.justizCities} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Phones" value={data.totalJustizPhones} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Switches" value={data.justizSwitches} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Locations" value={data.justizLocations} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Cities" value={data.justizCities} loading={loading} /></Grid>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.justizPhonesWithKEM} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Total KEMs" value={data.totalJustizKEMs} loading={loading} /></Grid>
           </Grid>
         </Box>
 
@@ -1077,15 +1156,17 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           border: '1px solid',
           borderColor: jvaTheme.border
         }}>
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: jvaTheme.primary }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: jvaTheme.primary, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SecurityIcon sx={{ fontSize: '1.3rem' }} />
             Correctional Facilities (JVA)
           </Typography>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Phones" value={data.totalJVAPhones} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Switches" value={data.jvaSwitches} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Phones" value={data.totalJVAPhones} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Switches" value={data.jvaSwitches} loading={loading} /></Grid>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Locations" value={data.jvaLocations} loading={loading} /></Grid>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Cities" value={data.jvaCities} loading={loading} /></Grid>
             <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.jvaPhonesWithKEM} loading={loading} /></Grid>
+            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Total KEMs" value={data.totalJVAKEMs} loading={loading} /></Grid>
           </Grid>
         </Box>
       </Paper>

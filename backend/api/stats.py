@@ -230,6 +230,7 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                             "totalLocations": int(src.get("totalLocations", 0)),
                             "totalCities": int(src.get("totalCities", 0)),
                             "phonesWithKEM": int(src.get("phonesWithKEM", 0)),
+                            "totalKEMs": int(src.get("totalKEMs", 0)),
                             "totalJustizPhones": int(src.get("totalJustizPhones", 0)),
                             "totalJVAPhones": int(src.get("totalJVAPhones", 0)),
 
@@ -238,12 +239,14 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                             "justizLocations": int(src.get("justizLocations", 0)),
                             "justizCities": int(src.get("justizCities", 0)),
                             "justizPhonesWithKEM": int(src.get("justizPhonesWithKEM", 0)),
+                            "totalJustizKEMs": int(src.get("totalJustizKEMs", 0)),
 
                             # JVA KPIs
                             "jvaSwitches": int(src.get("jvaSwitches", 0)),
                             "jvaLocations": int(src.get("jvaLocations", 0)),
                             "jvaCities": int(src.get("jvaCities", 0)),
                             "jvaPhonesWithKEM": int(src.get("jvaPhonesWithKEM", 0)),
+                            "totalJVAKEMs": int(src.get("totalJVAKEMs", 0)),
 
                             "phonesByModel": src.get("phonesByModel", []),
                             "phonesByModelJustiz": src.get("phonesByModelJustiz", []),
@@ -1169,6 +1172,7 @@ async def get_current_stats_fast() -> Dict:
                     "totalLocations": 0,
                     "totalCities": 0,
                     "phonesWithKEM": 0,
+                    "totalKEMs": 0,
                     "totalJustizPhones": 0,
                     "totalJVAPhones": 0,
                     # New individual Justiz KPIs
@@ -1176,11 +1180,13 @@ async def get_current_stats_fast() -> Dict:
                     "justizLocations": 0,
                     "justizCities": 0,
                     "justizPhonesWithKEM": 0,
+                    "totalJustizKEMs": 0,
                     # New individual JVA KPIs
                     "jvaSwitches": 0,
                     "jvaLocations": 0,
                     "jvaCities": 0,
                     "jvaPhonesWithKEM": 0,
+                    "totalJVAKEMs": 0,
                     "phonesByModel": [],
                     "phonesByModelJustiz": [],
                     "phonesByModelJVA": [],
@@ -1210,6 +1216,7 @@ async def get_current_stats_fast() -> Dict:
                     "totalLocations": 0,
                     "totalCities": 0,
                     "phonesWithKEM": 0,
+                    "totalKEMs": 0,
                     "totalJustizPhones": 0,
                     "totalJVAPhones": 0,
                     # New individual Justiz KPIs
@@ -1217,11 +1224,13 @@ async def get_current_stats_fast() -> Dict:
                     "justizLocations": 0,
                     "justizCities": 0,
                     "justizPhonesWithKEM": 0,
+                    "totalJustizKEMs": 0,
                     # New individual JVA KPIs
                     "jvaSwitches": 0,
                     "jvaLocations": 0,
                     "jvaCities": 0,
                     "jvaPhonesWithKEM": 0,
+                    "totalJVAKEMs": 0,
                     "phonesByModel": [],
                     "phonesByModelJustiz": [],
                     "phonesByModelJVA": [],
@@ -1260,6 +1269,7 @@ async def get_current_stats_fast() -> Dict:
                 "totalLocations": latest_doc.get("totalLocations", 0),
                 "totalCities": latest_doc.get("totalCities", 0),
                 "phonesWithKEM": latest_doc.get("phonesWithKEM", 0),
+                "totalKEMs": latest_doc.get("totalKEMs", 0),
                 "totalJustizPhones": total_justiz,
                 "totalJVAPhones": total_jva,
                 # New individual Justiz KPIs
@@ -1267,11 +1277,13 @@ async def get_current_stats_fast() -> Dict:
                 "justizLocations": latest_doc.get("justizLocations", 0),
                 "justizCities": latest_doc.get("justizCities", 0),
                 "justizPhonesWithKEM": latest_doc.get("justizPhonesWithKEM", 0),
+                "totalJustizKEMs": latest_doc.get("totalJustizKEMs", 0),
                 # New individual JVA KPIs
                 "jvaSwitches": latest_doc.get("jvaSwitches", 0),
                 "jvaLocations": latest_doc.get("jvaLocations", 0),
                 "jvaCities": latest_doc.get("jvaCities", 0),
                 "jvaPhonesWithKEM": latest_doc.get("jvaPhonesWithKEM", 0),
+                "totalJVAKEMs": latest_doc.get("totalJVAKEMs", 0),
                 "phonesByModel": latest_doc.get("phonesByModel", []),
                 "phonesByModelJustiz": justiz_models,
                 "phonesByModelJVA": jva_models,
@@ -1296,6 +1308,7 @@ async def get_current_stats_fast() -> Dict:
                 "totalLocations": 0,
                 "totalCities": 0,
                 "phonesWithKEM": 0,
+                "totalKEMs": 0,
                 "totalJustizPhones": 0,
                 "totalJVAPhones": 0,
                 # New individual Justiz KPIs
@@ -1303,11 +1316,13 @@ async def get_current_stats_fast() -> Dict:
                 "justizLocations": 0,
                 "justizCities": 0,
                 "justizPhonesWithKEM": 0,
+                "totalJustizKEMs": 0,
                 # New individual JVA KPIs
                 "jvaSwitches": 0,
                 "jvaLocations": 0,
                 "jvaCities": 0,
                 "jvaPhonesWithKEM": 0,
+                "totalJVAKEMs": 0,
                 "phonesByModel": [],
                 "phonesByModelJustiz": [],
                 "phonesByModelJVA": [],
