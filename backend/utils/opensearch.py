@@ -207,7 +207,8 @@ class OpenSearchConfig:
                             "model": {"type": "keyword"},
                             "mac": {"type": "keyword"},
                             "serial": {"type": "keyword"},
-                            "switch": {"type": "keyword"}
+                            "switch": {"type": "keyword"},
+                            "kemModules": {"type": "integer"}
                         }
                     }
                 }

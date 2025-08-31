@@ -400,22 +400,33 @@ def index_csv(file_path: str) -> dict:
                     # Collect switches
                     location_details[location]["switches"].add(sh)
 
-                    # Collect KEM phones
-                    kem = (r.get("KEM") or "").strip()
-                    if kem and kem.upper() == "KEM":
+                    # Collect KEM phones (>=1 KEM via KEM/KEM 2 or fallback in Line Number). Include even without IP.
+                    kem1 = (r.get("KEM") or "").strip()
+                    kem2 = (r.get("KEM 2") or "").strip()
+                    kem_modules = 0
+                    if kem1:
+                        kem_modules += 1
+                    if kem2:
+                        kem_modules += 1
+                    if kem_modules == 0:
+                        ln = (r.get("Line Number") or "").strip()
+                        if "KEM" in ln:
+                            kem_modules = ln.count("KEM") or 1
+                    if kem_modules > 0:
                         ip = (r.get("IP Address") or "").strip()
                         model = (r.get("Model Name") or "").strip() or "Unknown"
                         mac = (r.get("MAC Address") or "").strip()
                         serial = (r.get("Serial Number") or "").strip()
-
-                        if ip:  # Only add if we have an IP address
-                            location_details[location]["kem_phones"].append({
-                                "ip": ip,
-                                "model": model,
-                                "mac": mac,
-                                "serial": serial,
-                                "switch": sh
-                            })
+                        item = {
+                            "model": model,
+                            "mac": mac,
+                            "serial": serial,
+                            "switch": sh,
+                            "kemModules": int(kem_modules)
+                        }
+                        if ip:
+                            item["ip"] = ip
+                        location_details[location]["kem_phones"].append(item)
 
                 # Build loc_docs with model details from already calculated data
                 loc_docs = []
@@ -475,7 +486,8 @@ def index_csv(file_path: str) -> dict:
                         "mode": "code",
                         "totalPhones": agg["totalPhones"],
                         "totalSwitches": agg["totalSwitches"],
-                        "phonesWithKEM": agg["phonesWithKEM"],
+                        # Ensure consistency: count unique phones with >=1 KEM equals kem_phones length
+                        "phonesWithKEM": int(len(details["kem_phones"])) if isinstance(details.get("kem_phones"), list) else int(agg.get("phonesWithKEM", 0)),
                         "phonesByModel": loc_all_models_list,
                         "phonesByModelJustiz": loc_justiz_models,
                         "phonesByModelJVA": loc_jva_models,
@@ -596,7 +608,15 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
                     if sh not in sset:
                         sset.add(sh)
                         plc["totalSwitches"] += 1
-                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+                    # Unique phones with >=1 KEM considering KEM/KEM 2 and Line Number fallback
+                    kem1 = (r.get("KEM") or "").strip()
+                    kem2 = (r.get("KEM 2") or "").strip()
+                    has_kem = bool(kem1) or bool(kem2)
+                    if not has_kem:
+                        ln = (r.get("Line Number") or "").strip()
+                        if "KEM" in ln:
+                            has_kem = True
+                    if has_kem:
                         plc["phonesWithKEM"] += 1
 
                 # Collect additional details for each location (VLANs, switches, KEM phones)
@@ -631,22 +651,33 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
                     # Collect switches
                     location_details[location]["switches"].add(sh)
 
-                    # Collect KEM phones
-                    kem = (r.get("KEM") or "").strip()
-                    if kem and kem.upper() == "KEM":
+                    # Collect KEM phones (>=1 KEM via KEM/KEM 2 or Line Number). Include even without IP. Track kemModules
+                    kem1 = (r.get("KEM") or "").strip()
+                    kem2 = (r.get("KEM 2") or "").strip()
+                    kem_modules = 0
+                    if kem1:
+                        kem_modules += 1
+                    if kem2:
+                        kem_modules += 1
+                    if kem_modules == 0:
+                        ln = (r.get("Line Number") or "").strip()
+                        if "KEM" in ln:
+                            kem_modules = ln.count("KEM") or 1
+                    if kem_modules > 0:
                         ip = (r.get("IP Address") or "").strip()
                         model = (r.get("Model Name") or "").strip() or "Unknown"
                         mac = (r.get("MAC Address") or "").strip()
                         serial = (r.get("Serial Number") or "").strip()
-
-                        if ip:  # Only add if we have an IP address
-                            location_details[location]["kem_phones"].append({
-                                "ip": ip,
-                                "model": model,
-                                "mac": mac,
-                                "serial": serial,
-                                "switch": sh
-                            })
+                        item = {
+                            "model": model,
+                            "mac": mac,
+                            "serial": serial,
+                            "switch": sh,
+                            "kemModules": int(kem_modules)
+                        }
+                        if ip:
+                            item["ip"] = ip
+                        location_details[location]["kem_phones"].append(item)
 
                 # Build loc_docs with model details from calculated data
                 loc_docs = []
@@ -696,7 +727,8 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
                         "mode": "code",
                         "totalPhones": agg["totalPhones"],
                         "totalSwitches": agg["totalSwitches"],
-                        "phonesWithKEM": agg["phonesWithKEM"],
+                        # Consistency: set to kem_phones length when available
+                        "phonesWithKEM": int(len(details["kem_phones"])) if isinstance(details.get("kem_phones"), list) else int(agg.get("phonesWithKEM", 0)),
                         "phonesByModel": loc_all_models_list,
                         "phonesByModelJustiz": loc_justiz_models,
                         "phonesByModelJVA": loc_jva_models,
@@ -1465,7 +1497,8 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
         switches = set()
         locations = set()
         city_codes = set()
-        phones_with_kem = 0
+        phones_with_kem = 0  # unique phones with >=1 KEM
+        total_kem_modules = 0  # total number of KEM modules
         model_counts: Dict[str, int] = {}
         justiz_model_counts: Dict[str, int] = {}
         jva_model_counts: Dict[str, int] = {}
@@ -1518,21 +1551,23 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
                 except Exception:
                     pass
 
-            # Count individual KEM modules, not just phones with KEM
+            # Count KEMs: unique phones vs module count
             kem_count = 0
             if (r.get("KEM") or "").strip():
                 kem_count += 1
             if (r.get("KEM 2") or "").strip():
                 kem_count += 1
-
+            if kem_count == 0:
+                ln = (r.get("Line Number") or "").strip()
+                if "KEM" in ln:
+                    kem_count = ln.count("KEM") or 1
             if kem_count > 0:
-                phones_with_kem += kem_count  # This now counts KEM modules, not phones
-
-                # Add to appropriate KEM collections
+                phones_with_kem += 1
+                total_kem_modules += kem_count
                 if is_jva:
-                    jva_phones_with_kem += kem_count
+                    jva_phones_with_kem += 1
                 else:
-                    justiz_phones_with_kem += kem_count
+                    justiz_phones_with_kem += 1
 
             model = (r.get("Model Name") or "").strip() or "Unknown"
             if model != "Unknown":
@@ -1557,7 +1592,7 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             "totalLocations": len(locations),
             "totalCities": len(city_codes),
             "phonesWithKEM": phones_with_kem,
-            "totalKEMs": phones_with_kem,  # Will be corrected after reindex
+            "totalKEMs": total_kem_modules,
             "totalJustizPhones": total_justiz_phones,
             "totalJVAPhones": total_jva_phones,
 
@@ -1566,14 +1601,14 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             "justizLocations": len(justiz_locations),
             "justizCities": len(justiz_city_codes),
             "justizPhonesWithKEM": justiz_phones_with_kem,
-            "totalJustizKEMs": justiz_phones_with_kem,  # Will be corrected after reindex
+            "totalJustizKEMs": total_kem_modules if total_kem_modules and justiz_phones_with_kem else justiz_phones_with_kem,
 
             # JVA KPIs
             "jvaSwitches": len(jva_switches),
             "jvaLocations": len(jva_locations),
             "jvaCities": len(jva_city_codes),
             "jvaPhonesWithKEM": jva_phones_with_kem,
-            "totalJVAKEMs": jva_phones_with_kem,  # Will be corrected after reindex
+            "totalJVAKEMs": total_kem_modules if total_kem_modules and jva_phones_with_kem else jva_phones_with_kem,
 
             "phonesByModel": phones_by_model,
             "phonesByModelJustiz": phones_by_model_justiz,
@@ -1602,7 +1637,15 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             if sh2 not in sset:
                 sset.add(sh2)
                 plc["totalSwitches"] += 1
-            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
+            # Unique phones with >=1 KEM considering KEM/KEM 2 and Line Number fallback
+            k1 = (r.get("KEM") or "").strip()
+            k2 = (r.get("KEM 2") or "").strip()
+            has_kem = bool(k1) or bool(k2)
+            if not has_kem:
+                ln2 = (r.get("Line Number") or "").strip()
+                if "KEM" in ln2:
+                    has_kem = True
+            if has_kem:
                 plc["phonesWithKEM"] += 1
         loc_docs = []
         for k, agg in per_loc_counts.items():

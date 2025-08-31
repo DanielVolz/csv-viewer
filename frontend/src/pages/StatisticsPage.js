@@ -919,40 +919,43 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return map;
   }, [topSeriesPerKey]);
 
-  // Compute y-axis bounds with padding for Top 10 chart to make values less compressed
+  // Compute dynamic y-axis bounds for Top 10 chart with a "nice" step near the max
   const topYAxisBounds = React.useMemo(() => {
-    let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (const s of topSeriesPerKey) {
       for (const v of s.data) {
         if (v == null) continue; // ignore null placeholders
         const n = Number(v);
         if (!Number.isFinite(n)) continue;
-        if (n < min) min = n;
         if (n > max) max = n;
       }
     }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return null; // fallback to auto
-    // Ensure non-zero span
-    if (min === max) {
-      min = Math.max(0, min - 1);
-      max = max + 1;
-    }
-    // Round domain to 1000 grid for clean ticks and add a small buffer
-    const step = 1000;
-    let yMin = Math.max(0, Math.floor(min / step) * step);
-    let yMax = Math.ceil(max / step) * step;
-    if (yMax === yMin) yMax = yMin + step;
-    // Build tick array. Prefer midpoints (500) between thousands if it won't create too many ticks.
+    if (!Number.isFinite(max)) return null; // fallback to auto
+    if (max <= 0) return { yMin: 0, yMax: 1, ticks: [0, 1] };
+    const yMin = 0;
+    // Aim for ~6 ticks using a nice step (1,2,5 * 10^k)
+    const targetTicks = 6;
+    const rawStep = (max - yMin) / Math.max(1, targetTicks);
+    const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1e-6, rawStep))));
+    const steps = [1, 2, 5, 10];
+    let step = pow10;
+    for (const s of steps) { if (pow10 * s >= rawStep) { step = pow10 * s; break; } }
+    const yMax = Math.ceil(max / step) * step;
+    // Build ticks at 'step'; add optional half-steps if it doesn’t overflow
     const maxTicks = 24;
-    let tickStep = 500;
+    let tickStep = step;
     let tickCount = Math.floor((yMax - yMin) / tickStep) + 1;
-    if (tickCount > maxTicks) {
-      tickStep = 1000; // fall back to 1000 spacing if too many ticks
-      tickCount = Math.floor((yMax - yMin) / tickStep) + 1;
+    if (tickCount * 2 <= maxTicks) {
+      // add mid ticks for readability if we have room
+      tickStep = step / 2;
+      // Avoid too-dense ticks for very small steps
+      if (tickStep < 1) tickStep = step;
     }
     const ticks = [];
-    for (let t = yMin; t <= yMax; t += tickStep) ticks.push(t);
+    for (let t = yMin; t <= yMax + 1e-9; t += tickStep) {
+      const val = Math.round(tickStep >= 1 ? t : Math.round(t * 1000) / 1000);
+      ticks.push(val);
+    }
     return { yMin, yMax, ticks };
   }, [topSeriesPerKey]);
 
@@ -1218,6 +1221,61 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const locEmptySeries = React.useMemo(() => (
     [{ id: '__empty_loc', label: '', color: 'rgba(0,0,0,0)', data: new Array((locTimeline.series || []).length).fill(null) }]
   ), [locTimeline.series]);
+
+  // Compute dynamic y-axis for Global timeline based on selected KPIs
+  const globalYAxisBounds = React.useMemo(() => {
+    const items = timeline.series || [];
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const selected = KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id));
+    if (selected.length === 0) return null;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const k of selected) {
+      for (const p of items) {
+        const v = p?.metrics?.[k.id];
+        if (v == null) continue;
+        const n = Number(v);
+        if (Number.isFinite(n) && n > max) max = n;
+      }
+    }
+    if (!Number.isFinite(max)) return null;
+    const yMin = 0; // counts
+    // Nice ceiling with ~6 ticks heuristic
+    const targetTicks = 6;
+    const rawStep = (max - yMin) / Math.max(1, targetTicks);
+    const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1, rawStep))));
+    const steps = [1, 2, 5, 10];
+    let step = pow10;
+    for (const s of steps) { if (pow10 * s >= rawStep) { step = pow10 * s; break; } }
+    const yMax = Math.ceil(max / step) * step;
+    return { yMin, yMax };
+  }, [timeline.series, KPI_DEFS, selectedKpisGlobal]);
+
+  // Compute dynamic y-axis for Per-Location timeline based on selected KPIs
+  const locYAxisBounds = React.useMemo(() => {
+    const items = locTimeline.series || [];
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const selected = KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id));
+    if (selected.length === 0) return null;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const k of selected) {
+      for (const p of items) {
+        const v = p?.metrics?.[k.id];
+        if (v == null) continue;
+        const n = Number(v);
+        if (Number.isFinite(n) && n > max) max = n;
+      }
+    }
+    if (!Number.isFinite(max)) return null;
+    const yMin = 0;
+    const targetTicks = 6;
+    const rawStep = (max - yMin) / Math.max(1, targetTicks);
+    const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1, rawStep))));
+    const steps = [1, 2, 5, 10];
+    let step = pow10;
+    for (const s of steps) { if (pow10 * s >= rawStep) { step = pow10 * s; break; } }
+    const yMax = Math.ceil(max / step) * step;
+    return { yMin, yMax };
+  }, [locTimeline.series, KPI_DEFS_LOC, selectedKpisLoc]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -2744,16 +2802,28 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                   <TableBody>
                     {(locStats.kemPhones || []).map((p, idx) => {
                       // Handle both old format (CSV fields) and new format (backend objects)
-                      const key = (p.mac || p['MAC Address'] || p.ip || p['IP Address'] || String(idx));
                       const mac = p.mac || p['MAC Address'];
                       const ip = p.ip || p['IP Address'];
                       const model = p.model || p['Model Name'];
                       const serial = p.serial || p['Serial Number'];
                       const switchHostname = p.switch || p['Switch Hostname'];
-                      // For new format, assume 1 KEM (since they are in kemPhones array)
-                      const kem1 = p['KEM'] ? (p['KEM'] || '').trim() : 'KEM';
-                      const kem2 = (p['KEM 2'] || '').trim();
-                      const kemCount = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
+                      // Ensure a unique, stable key (avoid collapsing duplicates visually)
+                      const key = `${mac || 'nomac'}|${ip || 'noip'}|${serial || 'noserial'}|${switchHostname || 'nosw'}|${idx}`;
+                      // Prefer kemModules when present; else derive from CSV fields with fallback to Line Number
+                      const kemModulesVal = (typeof p.kemModules === 'number') ? p.kemModules
+                        : (p.kemModules ? parseInt(String(p.kemModules), 10) : NaN);
+                      let kemCount = Number.isFinite(kemModulesVal) ? kemModulesVal : undefined;
+                      if (!Number.isFinite(kemCount)) {
+                        const kem1 = (p['KEM'] || '').trim();
+                        const kem2 = (p['KEM 2'] || '').trim();
+                        const explicit = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
+                        if (explicit > 0) {
+                          kemCount = explicit;
+                        } else {
+                          const ln = (p['Line Number'] || '').trim();
+                          kemCount = ln.includes('KEM') ? Math.max(1, (ln.match(/KEM/g) || []).length) : 1;
+                        }
+                      }
                       return (
                         <TableRow key={key} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'action.hover' } }} hover>
                           <TableCell sx={{ whiteSpace: 'nowrap' }}>
@@ -2925,7 +2995,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               );
                             })() : 'n/a'}
                           </TableCell>
-                          <TableCell align="right">{kemCount}</TableCell>
+                          <TableCell align="right">{Number(kemCount) || 0}</TableCell>
                         </TableRow>
                       );
                     })}
@@ -3009,6 +3079,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                     }))
                   ) : locEmptySeries}
                   margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+                  yAxis={locYAxisBounds ? [{ min: locYAxisBounds.yMin, max: locYAxisBounds.yMax }] : undefined}
                   slotProps={{
                     legend: {
                       position: { vertical: 'top', horizontal: 'middle' },
@@ -3103,6 +3174,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 }))
               ) : globalEmptySeries}
               margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+              yAxis={globalYAxisBounds ? [{ min: globalYAxisBounds.yMin, max: globalYAxisBounds.yMax }] : undefined}
               slotProps={{
                 legend: {
                   position: { vertical: 'top', horizontal: 'middle' },

@@ -1501,6 +1501,14 @@ async def get_stats_by_location_fast(q: str) -> Dict:
             if res_today["hits"]["hits"]:
                 # Use today's data with model details
                 location_doc = res_today["hits"]["hits"][0]["_source"]
+                # Normalize: ensure phonesWithKEM equals kemPhones length when details exist
+                try:
+                    kem_list = location_doc.get("kemPhones")
+                    if isinstance(kem_list, list):
+                        location_doc["phonesWithKEM"] = len(kem_list)
+                        location_doc["kemPhonesCount"] = len(kem_list)
+                except Exception:
+                    pass
             else:
                 # Fallback: get latest available data but model details will be empty
                 body_latest = {
@@ -1542,6 +1550,14 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 location_doc["phonesByModel"] = []
                 location_doc["phonesByModelJustiz"] = []
                 location_doc["phonesByModelJVA"] = []
+                # Normalize: if kemPhones exists, align phonesWithKEM and add kemPhonesCount
+                try:
+                    kem_list = location_doc.get("kemPhones")
+                    if isinstance(kem_list, list):
+                        location_doc["phonesWithKEM"] = len(kem_list)
+                        location_doc["kemPhonesCount"] = len(kem_list)
+                except Exception:
+                    pass
 
         else:  # prefix mode - aggregate all locations starting with this prefix
             # Optimized: Only fetch necessary fields and use smaller payloads
@@ -1674,13 +1690,15 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 "mode": "prefix",
                 "totalPhones": total_phones,
                 "totalSwitches": total_switches,
-                "phonesWithKEM": phones_with_kem,
+                # Align semantics: phonesWithKEM equals kemPhones length (unique phones)
+                "phonesWithKEM": len(kem_phones),
                 "phonesByModel": [{"model": m, "count": c} for m, c in phones_by_model.items()],
                 "phonesByModelJustiz": [{"model": m, "count": c} for m, c in phones_by_model_justiz.items()],
                 "phonesByModelJVA": [{"model": m, "count": c} for m, c in phones_by_model_jva.items()],
                 "vlanUsage": [{"vlan": v, "count": c} for v, c in vlan_usage.items()],
                 "switches": [],
                 "kemPhones": kem_phones,
+                "kemPhonesCount": len(kem_phones),
             }
 
             # Sort phone models by count (descending)
