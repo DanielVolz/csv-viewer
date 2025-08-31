@@ -64,8 +64,15 @@ def index_csv(file_path: str) -> dict:
                                 city_codes.add(loc[:3])
                         except Exception:
                             pass
-                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                        phones_with_kem += 1
+                    # Count individual KEM modules, not just phones with KEM
+                    kem_count = 0
+                    if (r.get("KEM") or "").strip():
+                        kem_count += 1
+                    if (r.get("KEM 2") or "").strip():
+                        kem_count += 1
+
+                    if kem_count > 0:
+                        phones_with_kem += kem_count  # This now counts KEM modules, not phones
 
                         # Add to global KEM phones list
                         kem_data = {
@@ -271,8 +278,14 @@ def index_csv(file_path: str) -> dict:
                     if sh not in sset:
                         sset.add(sh)
                         plc["totalSwitches"] += 1
-                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                        plc["phonesWithKEM"] += 1
+
+                    # Count individual KEM modules instead of phones with KEM
+                    kem_count = 0
+                    if (r.get("KEM") or "").strip():
+                        kem_count += 1
+                    if (r.get("KEM 2") or "").strip():
+                        kem_count += 1
+                    plc["phonesWithKEM"] += kem_count
 
                 # Collect additional details for each location (VLANs, switches, KEM phones)
                 location_details = {}
@@ -667,8 +680,15 @@ def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
                                 city_codes.add(loc[:3])
                         except Exception:
                             pass
-                    if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                        phones_with_kem += 1
+                    # Count individual KEM modules, not just phones with KEM
+                    kem_count = 0
+                    if (r.get("KEM") or "").strip():
+                        kem_count += 1
+                    if (r.get("KEM 2") or "").strip():
+                        kem_count += 1
+
+                    if kem_count > 0:
+                        phones_with_kem += kem_count  # This now counts KEM modules, not phones
                     model = (r.get("Model Name") or "").strip() or "Unknown"
                     if model != "Unknown":
                         model_counts[model] = model_counts.get(model, 0) + 1
@@ -877,8 +897,15 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                     city_codes.add(loc[:3])
                             except Exception:
                                 pass
-                        if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                            phones_with_kem += 1
+                        # Count individual KEM modules, not just phones with KEM
+                        kem_count = 0
+                        if (r.get("KEM") or "").strip():
+                            kem_count += 1
+                        if (r.get("KEM 2") or "").strip():
+                            kem_count += 1
+
+                        if kem_count > 0:
+                            phones_with_kem += kem_count  # This now counts KEM modules, not phones
 
                         # Process model name
                         model = (r.get("Model Name") or "").strip() or "Unknown"
@@ -1319,8 +1346,15 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
                         city_codes.add(loc[:3])
                 except Exception:
                     pass
-            if (r.get("KEM") or "").strip() or (r.get("KEM 2") or "").strip():
-                phones_with_kem += 1
+            # Count individual KEM modules, not just phones with KEM
+            kem_count = 0
+            if (r.get("KEM") or "").strip():
+                kem_count += 1
+            if (r.get("KEM 2") or "").strip():
+                kem_count += 1
+
+            if kem_count > 0:
+                phones_with_kem += kem_count  # This now counts KEM modules, not phones
             model = (r.get("Model Name") or "").strip() or "Unknown"
             if model != "Unknown":
                 model_counts[model] = model_counts.get(model, 0) + 1

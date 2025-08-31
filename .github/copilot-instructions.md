@@ -56,6 +56,12 @@ curl "http://localhost:8000/api/search/?query=test&include_historical=true"
 # Location statistics (requires query parameter)
 curl "http://localhost:8000/api/stats/fast/by_location?q=ABX01"
 
+# Reindex netspeed.csv only (fast, for development testing)
+curl http://localhost:8000/api/files/reindex/current
+
+# Reindex all CSV files (slower, comprehensive)
+curl http://localhost:8000/api/files/reindex
+
 # OpenSearch debugging
 curl -X GET "localhost:9200/_cluster/health"
 curl -X GET "localhost:9200/_cat/indices"
@@ -119,7 +125,8 @@ The `utils/file_watcher.py` automatically triggers reindexing:
 - `GET /api/files/netspeed_info` - Get current file information
 - `GET /api/files/preview` - Preview CSV data with pagination
 - `GET /api/files/download/{filename}` - Download specific files
-- `POST /api/files/reindex` - Trigger manual reindexing
+- `GET /api/files/reindex` - Trigger manual reindexing of all CSV files (Celery-based, async)
+- `GET /api/files/reindex/current` - **Development**: Fast reindex of netspeed.csv only (direct, synchronous)
 
 **Search API** (`api/search.py`):
 - `GET /api/search/` - Search across CSV files using OpenSearch
@@ -258,6 +265,32 @@ When adding new fields to location statistics (like VLAN usage, switches, KEM ph
 2. **Check OpenSearch document structure** with direct curl queries
 3. **Test API endpoint** with curl using query parameters
 4. **Validate volume mounts** and environment variables when data seems wrong
+
+### Development Reindex Capabilities
+**Critical for Testing Changes**: The system provides dedicated development reindex functionality:
+
+- **Fast Development Reindex**: `GET /api/files/reindex/current`
+  - **Purpose**: Quick testing of code changes affecting netspeed.csv only
+  - **Behavior**: Synchronous, direct execution (no Celery task)
+  - **Index Management**: Deletes existing `netspeed_netspeed_csv` index before recreation
+  - **Performance**: Fast execution suitable for iterative development
+  - **Use Case**: Testing statistics calculations, counting logic fixes, field additions
+
+- **Full Production Reindex**: `GET /api/files/reindex`
+  - **Purpose**: Complete reindexing of all CSV files
+  - **Behavior**: Asynchronous Celery task with progress tracking
+  - **Index Management**: Deletes all existing indices before recreation
+  - **Performance**: Slower, comprehensive processing
+  - **Use Case**: Production deployments, major schema changes
+
+**Development Workflow**: Use `/reindex/current` for rapid iteration when testing:
+```bash
+# 1. Make code changes to statistics/counting logic
+# 2. Quick reindex for testing
+curl http://localhost:8000/api/files/reindex/current
+# 3. Verify results
+curl "http://localhost:8000/api/stats/fast/by_location?q=ABX01"
+```
 
 ## Useful Debugging Commands
 
