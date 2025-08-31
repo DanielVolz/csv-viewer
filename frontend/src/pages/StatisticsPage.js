@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar } from '@mui/material';
+import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider } from '@mui/material';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -15,6 +15,8 @@ import SecurityIcon from '@mui/icons-material/Security';
 import PublicIcon from '@mui/icons-material/Public';
 import PlaceIcon from '@mui/icons-material/Place';
 import BusinessIcon from '@mui/icons-material/Business';
+import DoneAllIcon from '@mui/icons-material/DoneAll';
+import ClearAllIcon from '@mui/icons-material/ClearAll';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -385,6 +387,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const toggleKpiGlobal = (id) => {
     setSelectedKpisGlobal((prev) => prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]);
   };
+
+  const selectAllGlobalKpis = () => setSelectedKpisGlobal(KPI_DEFS.map(k => k.id));
+  const clearAllGlobalKpis = () => setSelectedKpisGlobal([]);
   // Per-location timeline KPI selection (independent)
   const [selectedKpisLoc, setSelectedKpisLoc] = React.useState(() => {
     try {
@@ -398,6 +403,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const toggleKpiLoc = (id) => {
     setSelectedKpisLoc((prev) => prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]);
   };
+
+  const selectAllLocKpis = () => setSelectedKpisLoc(KPI_DEFS_LOC.map(k => k.id));
+  const clearAllLocKpis = () => setSelectedKpisLoc([]);
 
   // Location-specific state
   const [locInput, setLocInput] = React.useState('');
@@ -875,19 +883,34 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     const dates = topTimeline.dates || [];
     const byKey = topTimeline.seriesByKey || {};
     const palette = ['#1976d2', '#2e7d32', '#0288d1', '#f57c00', '#6a1b9a', '#d32f2f', '#455a64', '#7b1fa2', '#00796b', '#c2185b'];
-    const lastIdx = Math.max(0, dates.length - 1);
     const sortedKeys = [...(topSelectedKeys || [])].sort((a, b) => {
-      const av = Number(byKey[a]?.[topKpi]?.[lastIdx] ?? 0);
-      const bv = Number(byKey[b]?.[topKpi]?.[lastIdx] ?? 0);
-      return bv - av; // desc
+      const asrc = byKey[a]?.[topKpi] || [];
+      const bsrc = byKey[b]?.[topKpi] || [];
+      const av = Number(asrc.length ? asrc[asrc.length - 1] : 0);
+      const bv = Number(bsrc.length ? bsrc[bsrc.length - 1] : 0);
+      return bv - av; // desc by latest available value
     });
-    return sortedKeys.map((k, idx) => ({
-      id: k,
-      label: (topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k,
-      color: palette[idx % palette.length],
-      data: (byKey[k]?.[topKpi] || new Array(dates.length).fill(0)),
-    }));
+    return sortedKeys.map((k, idx) => {
+      const src = byKey[k]?.[topKpi] || [];
+      const aligned = new Array(dates.length).fill(null);
+      // Right-align the series so it ends at the latest date
+      const copyLen = Math.min(src.length, dates.length);
+      for (let i = 0; i < copyLen; i++) {
+        aligned[dates.length - 1 - i] = src[src.length - 1 - i];
+      }
+      return {
+        id: k,
+        label: (topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k,
+        color: palette[idx % palette.length],
+        data: aligned,
+      };
+    });
   }, [topTimeline, topSelectedKeys, topKpi]);
+
+  // Placeholder transparent series to keep chart layout stable when nothing is selected
+  const topEmptySeries = React.useMemo(() => (
+    [{ id: '__empty', label: '', color: 'rgba(0,0,0,0)', data: new Array((topTimeline.dates || []).length).fill(null) }]
+  ), [topTimeline.dates]);
 
   // Map currently displayed series colors to their keys for chip styling
   const topKeyColorMap = React.useMemo(() => {
@@ -896,14 +919,53 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return map;
   }, [topSeriesPerKey]);
 
+  // Compute y-axis bounds with padding for Top 10 chart to make values less compressed
+  const topYAxisBounds = React.useMemo(() => {
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const s of topSeriesPerKey) {
+      for (const v of s.data) {
+        if (v == null) continue; // ignore null placeholders
+        const n = Number(v);
+        if (!Number.isFinite(n)) continue;
+        if (n < min) min = n;
+        if (n > max) max = n;
+      }
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null; // fallback to auto
+    // Ensure non-zero span
+    if (min === max) {
+      min = Math.max(0, min - 1);
+      max = max + 1;
+    }
+    // Round domain to 1000 grid for clean ticks and add a small buffer
+    const step = 1000;
+    let yMin = Math.max(0, Math.floor(min / step) * step);
+    let yMax = Math.ceil(max / step) * step;
+    if (yMax === yMin) yMax = yMin + step;
+    // Build tick array. Prefer midpoints (500) between thousands if it won't create too many ticks.
+    const maxTicks = 24;
+    let tickStep = 500;
+    let tickCount = Math.floor((yMax - yMin) / tickStep) + 1;
+    if (tickCount > maxTicks) {
+      tickStep = 1000; // fall back to 1000 spacing if too many ticks
+      tickCount = Math.floor((yMax - yMin) / tickStep) + 1;
+    }
+    const ticks = [];
+    for (let t = yMin; t <= yMax; t += tickStep) ticks.push(t);
+    return { yMin, yMax, ticks };
+  }, [topSeriesPerKey]);
+
   // Sorted list of location keys for chips: selected first, then by latest KPI value desc, then label asc
   const sortedTopKeysForChips = React.useMemo(() => {
     const keys = topTimeline.keys || [];
     const labels = topTimeline.labels || {};
     const byKey = topTimeline.seriesByKey || {};
     const dates = topTimeline.dates || [];
-    const lastIdx = Math.max(0, dates.length - 1);
-    const getVal = (k) => Number(byKey[k]?.[topKpi]?.[lastIdx] ?? 0);
+    const getVal = (k) => {
+      const arr = byKey[k]?.[topKpi] || [];
+      return Number(arr.length ? arr[arr.length - 1] : 0);
+    };
     const getLabel = (k) => (labels && labels[k]) ? labels[k] : k;
     const selectedSet = new Set(topSelectedKeys || []);
     const arr = [...keys];
@@ -1147,6 +1209,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return () => { abort = true; controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedLocSelected]);
+
+  // Placeholder series to keep charts stable when no KPI is selected (Global/Per-location)
+  const globalEmptySeries = React.useMemo(() => (
+    [{ id: '__empty_global', label: '', color: 'rgba(0,0,0,0)', data: new Array((timeline.series || []).length).fill(null) }]
+  ), [timeline.series]);
+
+  const locEmptySeries = React.useMemo(() => (
+    [{ id: '__empty_loc', label: '', color: 'rgba(0,0,0,0)', data: new Array((locTimeline.series || []).length).fill(null) }]
+  ), [locTimeline.series]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -2330,17 +2401,86 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           disableGutters
           elevation={0}
           TransitionProps={fastTransitionProps}
-          sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 2, mb: 1, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
+          sx={{
+            border: '1px solid',
+            borderColor: (t) => alpha(t.palette.primary.main, 0.2),
+            borderRadius: 1,
+            '&:before': { display: 'none' },
+            mt: 2,
+            mb: 1,
+            backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
+            '& .MuiAccordionSummary-root': { transition: 'all 0.1s ease-in-out' },
+            '& .MuiAccordionDetails-root': { transition: 'all 0.1s ease-in-out' }
+          }}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography variant="body2" fontWeight={700} color="primary.main">
-              Switches {(() => {
-                if (locStats?.mode === 'prefix' && cityNameByCode3[locStats?.query]) {
-                  return `in ${cityNameByCode3[locStats.query]} (${locStats.query})`;
-                }
-                return 'at this Location';
-              })()} ({locStats.totalSwitches?.toLocaleString?.() ?? locStats.totalSwitches})
-            </Typography>
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <RouterIcon sx={{ fontSize: '1.1rem', color: 'primary.main' }} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                  Switches {(() => {
+                    if (locStats?.mode === 'prefix' && cityNameByCode3[locStats?.query]) {
+                      return `in ${cityNameByCode3[locStats.query]} (${locStats.query})`;
+                    }
+                    return 'at this Location';
+                  })()}
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {(() => {
+                  const total = Number(
+                    (locStats.totalSwitches ?? ((locStats.switchDetails && locStats.switchDetails.length)
+                      ? locStats.switchDetails.length
+                      : (locStats.switches || []).length)) || 0
+                  );
+                  return (
+                    <Chip
+                      label={`${total.toLocaleString()} switches`}
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                      sx={{
+                        fontSize: '0.7rem',
+                        height: '24px',
+                        fontWeight: 600,
+                        backgroundColor: (t) => alpha(t.palette.primary.main, 0.08),
+                        borderColor: (t) => t.palette.primary.main,
+                        color: (t) => t.palette.primary.main
+                      }}
+                    />
+                  );
+                })()}
+                {(() => {
+                  const vlanSet = new Set();
+                  const src = (locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || []);
+                  (src || []).forEach(sw => (sw.vlans || []).forEach(v => {
+                    const label = v?.vlan;
+                    if (label !== undefined && label !== null && String(label).trim() !== '') vlanSet.add(String(label).trim());
+                  }));
+                  const cnt = vlanSet.size;
+                  if (!cnt) return null;
+                  return (
+                    <Chip
+                      label={`${cnt} VLANs`}
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                      sx={{
+                        fontSize: '0.7rem',
+                        height: '24px',
+                        fontWeight: 600,
+                        backgroundColor: (t) => alpha(t.palette.primary.main, 0.08),
+                        borderColor: (t) => t.palette.primary.main,
+                        color: (t) => t.palette.primary.main
+                      }}
+                    />
+                  );
+                })()}
+              </Box>
+            </Box>
           </AccordionSummary>
           <AccordionDetails>
             {locStatsLoading ? (
@@ -2350,8 +2490,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 ))}
               </Box>
             ) : (
-              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
-                <Table size="small">
+              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, border: '1px solid', borderColor: (t) => alpha(t.palette.primary.main, 0.1) }}>
+                <Table size="small" sx={{
+                  '& .MuiTableCell-root': {
+                    py: 0.8,
+                    px: 1.5,
+                    borderBottom: '1px solid',
+                    borderColor: (t) => alpha(t.palette.primary.main, 0.1)
+                  }
+                }}>
                   <TableHead>
                     <TableRow>
                       <TableCell>Switch</TableCell>
@@ -2532,12 +2679,42 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           disableGutters
           elevation={0}
           TransitionProps={fastTransitionProps}
-          sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03) }}
+          sx={{
+            border: '1px solid',
+            borderColor: (t) => alpha(t.palette.success.main, 0.2),
+            borderRadius: 1,
+            '&:before': { display: 'none' },
+            backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
+            '& .MuiAccordionSummary-root': { transition: 'all 0.1s ease-in-out' },
+            '& .MuiAccordionDetails-root': { transition: 'all 0.1s ease-in-out' }
+          }}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography variant="body2" fontWeight={700} color="success.main">
-              Phones with KEM at this Location {locStats.phonesWithKEM?.toLocaleString?.() ?? locStats.phonesWithKEM}
-            </Typography>
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <ExtensionIcon sx={{ fontSize: '1.1rem', color: 'success.main' }} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'success.main' }}>
+                  Phones with KEM at this Location
+                </Typography>
+              </Box>
+              <Chip
+                label={`${Number(locStats.phonesWithKEM || (locStats.kemPhones || []).length || 0).toLocaleString()} phones`}
+                size="small"
+                color="success"
+                variant="outlined"
+                sx={{
+                  fontSize: '0.7rem',
+                  height: '24px',
+                  fontWeight: 600,
+                  backgroundColor: (t) => alpha(t.palette.success.main, 0.08),
+                  borderColor: (t) => t.palette.success.main,
+                  color: (t) => t.palette.success.main
+                }}
+              />
+            </Box>
           </AccordionSummary>
           <AccordionDetails>
             {locStatsLoading ? (
@@ -2547,8 +2724,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 ))}
               </Box>
             ) : (
-              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
-                <Table size="small">
+              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, border: '1px solid', borderColor: (t) => alpha(t.palette.success.main, 0.1) }}>
+                <Table size="small" sx={{
+                  '& .MuiTableCell-root': {
+                    py: 0.8,
+                    px: 1.5,
+                    borderBottom: '1px solid',
+                    borderColor: (t) => alpha(t.palette.success.main, 0.1)
+                  }
+                }}>
                   <TableHead>
                     <TableRow>
                       <TableCell>IP Address</TableCell>
@@ -2772,7 +2956,26 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               })()} ({(locTimeline.series || []).length} days)
             </Typography>
             {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+              <Chip
+                label="Select All"
+                size="small"
+                color="success"
+                variant="filled"
+                onClick={selectAllLocKpis}
+                icon={<DoneAllIcon fontSize="small" />}
+                sx={{ fontWeight: 700 }}
+              />
+              <Chip
+                label="Clear"
+                size="small"
+                color="error"
+                variant="filled"
+                onClick={clearAllLocKpis}
+                icon={<ClearAllIcon fontSize="small" />}
+                sx={{ fontWeight: 700 }}
+              />
+              <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
               {KPI_DEFS_LOC.map((k) => {
                 const selected = selectedKpisLoc.includes(k.id);
                 return (
@@ -2794,29 +2997,27 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
             ) : (
               <Box sx={{ width: '100%', overflowX: 'auto' }}>
-                {selectedKpisLoc.length === 0 ? (
-                  <Alert severity="info" variant="outlined">Select at least one KPI to display.</Alert>
-                ) : (
-                  <LineChart
-                    height={240}
-                    xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-                    series={KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
+                <LineChart
+                  height={240}
+                  xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
+                  series={selectedKpisLoc.length ? (
+                    KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
                       id: k.id,
                       label: k.label,
                       color: k.color,
                       data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
-                    }))}
-                    margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
-                    slotProps={{
-                      legend: {
-                        position: { vertical: 'top', horizontal: 'middle' },
-                        direction: 'row',
-                        itemGap: 16,
-                      },
-                    }}
-                    sx={{ minWidth: 520 }}
-                  />
-                )}
+                    }))
+                  ) : locEmptySeries}
+                  margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+                  slotProps={{
+                    legend: {
+                      position: { vertical: 'top', horizontal: 'middle' },
+                      direction: 'row',
+                      itemGap: 16,
+                    },
+                  }}
+                  sx={{ minWidth: 520 }}
+                />
               </Box>
             )}
           </Box>
@@ -2833,7 +3034,26 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
         {/* Controls row: KPI chips left, days input right */}
         <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+            <Chip
+              label="Select All"
+              size="small"
+              color="success"
+              variant="filled"
+              onClick={selectAllGlobalKpis}
+              icon={<DoneAllIcon fontSize="small" />}
+              sx={{ fontWeight: 700 }}
+            />
+            <Chip
+              label="Clear"
+              size="small"
+              color="error"
+              variant="filled"
+              onClick={clearAllGlobalKpis}
+              icon={<ClearAllIcon fontSize="small" />}
+              sx={{ fontWeight: 700 }}
+            />
+            <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
             {KPI_DEFS.map((k) => {
               const selected = selectedKpisGlobal.includes(k.id);
               return (
@@ -2871,29 +3091,27 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           <Alert severity="info" variant="outlined">{timeline.error}</Alert>
         ) : (
           <Box sx={{ width: '100%', overflowX: 'auto' }}>
-            {selectedKpisGlobal.length === 0 ? (
-              <Alert severity="info" variant="outlined">Select at least one KPI to display.</Alert>
-            ) : (
-              <LineChart
-                height={260}
-                xAxis={[{ data: (timeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-                series={KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id)).map((k) => ({
+            <LineChart
+              height={260}
+              xAxis={[{ data: (timeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
+              series={selectedKpisGlobal.length ? (
+                KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id)).map((k) => ({
                   id: k.id,
                   label: k.label,
                   color: k.color,
                   data: (timeline.series || []).map((p) => p.metrics?.[k.id] || 0),
-                }))}
-                margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
-                slotProps={{
-                  legend: {
-                    position: { vertical: 'top', horizontal: 'middle' },
-                    direction: 'row',
-                    itemGap: 16,
-                  },
-                }}
-                sx={{ minWidth: 520 }}
-              />
-            )}
+                }))
+              ) : globalEmptySeries}
+              margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+              slotProps={{
+                legend: {
+                  position: { vertical: 'top', horizontal: 'middle' },
+                  direction: 'row',
+                  itemGap: 16,
+                },
+              }}
+              sx={{ minWidth: 520 }}
+            />
           </Box>
         )}
       </Paper>
@@ -2904,8 +3122,30 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           Top 10 Locations Timeline ({(topTimeline.dates || []).length} days)
         </Typography>
 
-        {/* Controls row: KPI chips left, count chips center, days input right */}
+        {/* Controls row: actions (locations) left, KPI next, days input right */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+          {/* Actions for locations selection */}
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+            <Chip
+              label="Select All"
+              size="small"
+              color="success"
+              variant="filled"
+              onClick={selectAllTopKeys}
+              icon={<DoneAllIcon fontSize="small" />}
+              sx={{ fontWeight: 700 }}
+            />
+            <Chip
+              label="Clear"
+              size="small"
+              color="error"
+              variant="filled"
+              onClick={clearAllTopKeys}
+              icon={<ClearAllIcon fontSize="small" />}
+              sx={{ fontWeight: 700 }}
+            />
+            <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+          </Box>
           {/* KPI */}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             {TOP_KPI_DEFS.map((k) => (
@@ -2940,24 +3180,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           </Box>
         </Box>
 
-        {/* Keys selection */}
+        {/* Keys selection (locations) */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-          <Chip
-            label="Select All"
-            size="small"
-            color="success"
-            variant="filled"
-            onClick={selectAllTopKeys}
-            sx={{ fontWeight: 700 }}
-          />
-          <Chip
-            label="Clear"
-            size="small"
-            color="error"
-            variant="filled"
-            onClick={clearAllTopKeys}
-            sx={{ fontWeight: 700 }}
-          />
           {sortedTopKeysForChips.map((k) => {
             const selected = topSelectedKeys.includes(k);
             const chipColor = topKeyColorMap[k];
@@ -2976,29 +3200,26 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         </Box>
 
         {topTimeline.loading ? (
-          <Skeleton variant="rectangular" height={240} />
+          <Skeleton variant="rectangular" height={520} />
         ) : topTimeline.error ? (
           <Alert severity="info" variant="outlined">{topTimeline.error}</Alert>
         ) : (
           <Box sx={{ width: '100%', overflowX: 'auto' }}>
-            {topSelectedKeys.length === 0 ? (
-              <Alert severity="info" variant="outlined">Select at least one location to display.</Alert>
-            ) : (
-              <LineChart
-                height={300}
-                xAxis={[{ data: (topTimeline.dates || []).map((d) => (d ? String(d).slice(5) : d)), scaleType: 'point' }]}
-                series={topSeriesPerKey}
-                margin={{ left: 52, right: 20, top: 120, bottom: 28 }}
-                slotProps={{
-                  legend: {
-                    position: { vertical: 'top', horizontal: 'middle' },
-                    direction: 'row',
-                    itemGap: 20,
-                  },
-                }}
-                sx={{ minWidth: 520 }}
-              />
-            )}
+            <LineChart
+              height={520}
+              xAxis={[{ data: (topTimeline.dates || []).map((d) => (d ? String(d).slice(5) : d)), scaleType: 'point' }]}
+              series={topSeriesPerKey.length ? topSeriesPerKey : topEmptySeries}
+              margin={{ left: 52, right: 20, top: 120, bottom: 28 }}
+              yAxis={topYAxisBounds ? [{ min: topYAxisBounds.yMin, max: topYAxisBounds.yMax, ticks: topYAxisBounds.ticks }] : undefined}
+              slotProps={{
+                legend: {
+                  position: { vertical: 'top', horizontal: 'middle' },
+                  direction: 'row',
+                  itemGap: 20,
+                },
+              }}
+              sx={{ minWidth: 520 }}
+            />
           </Box>
         )}
       </Paper>
