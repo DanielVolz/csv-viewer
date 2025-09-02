@@ -435,6 +435,38 @@ class OpenSearchConfig:
             logger.error(f"Error indexing stats snapshot for {file}@{date}: {e}")
             return False
 
+    def get_stats_snapshot(self, *, file: str, date: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Fetch an existing stats snapshot document by file and date.
+
+        Returns the document _source or None if not found.
+        """
+        try:
+            self.create_stats_index()
+            doc_id = f"{file}:{date}" if date else None
+            if doc_id:
+                try:
+                    res = self.client.get(index=self.stats_index, id=doc_id)
+                    return res.get("_source") if isinstance(res, dict) else None
+                except Exception:
+                    return None
+            # If no date provided, attempt to find latest by searching
+            try:
+                q = {
+                    "query": {"term": {"file": file}},
+                    "sort": [{"date": {"order": "desc"}}],
+                    "size": 1
+                }
+                res = self.client.search(index=self.stats_index, body=q)
+                hits = res.get("hits", {}).get("hits", [])
+                if hits:
+                    return hits[0].get("_source")
+                return None
+            except Exception:
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching stats snapshot for {file}@{date}: {e}")
+            return None
+
     def index_stats_location_snapshots(self, *, file: str, date: str | None, loc_docs: List[Dict[str, Any]]) -> bool:
         """Bulk index per-location snapshot docs for a given file/date.
 

@@ -174,10 +174,269 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             "phonesByModelJVA": phones_by_model_jva,
             "cityCodes": sorted(list(city_codes)),
         }
+        # Preserve detail arrays if an existing snapshot for the same day already has them
+        try:
+            existing = opensearch_config.get_stats_snapshot(file=fm.name, date=date_str)
+            if isinstance(existing, dict):
+                for key in ("phonesByModelJustizDetails", "phonesByModelJVADetails"):
+                    if key in existing and isinstance(existing[key], list) and existing[key]:
+                        metrics[key] = existing[key]
+        except Exception as _e:
+            logger.debug(f"Preserve details failed: {_e}")
         ok = opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
         return {"status": "success" if ok else "error", "message": "Snapshot indexed" if ok else "Failed to index snapshot", "file": fm.name, "date": date_str}
     except Exception as e:
         logger.error(f"snapshot_current_stats failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.task(name='tasks.snapshot_current_with_details')
+def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv") -> dict:
+    """Compute and persist today's stats snapshot WITH detail arrays and per-location docs, no netspeed_* indexing.
+
+    - Writes stats_netspeed with phonesByModelJustizDetails/phonesByModelJVADetails
+    - Writes stats_netspeed_loc per-location docs (with vlanUsage, switches, kemPhones)
+    """
+    try:
+        p = Path(file_path)
+        if not p.exists():
+            return {"status": "warning", "message": f"File not found: {file_path}"}
+        from models.file import FileModel as _FM
+        fm = _FM.from_path(str(p))
+        date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+        _, rows = read_csv_file_normalized(str(p))
+
+        total_phones = len(rows)
+        switches = set(); locations = set(); city_codes = set()
+        phones_with_kem_unique = 0; total_kem_modules = 0
+        model_counts: Dict[str, int] = {}; justiz_model_counts: Dict[str, int] = {}; jva_model_counts: Dict[str, int] = {}
+        justiz_switches = set(); justiz_locations = set(); justiz_city_codes = set(); justiz_phones_with_kem_unique = 0; justiz_total_kem_modules = 0
+        jva_switches = set(); jva_locations = set(); jva_city_codes = set(); jva_phones_with_kem_unique = 0; jva_total_kem_modules = 0
+
+        # For location details and KEM phones
+        justiz_details_by_location: Dict[str, Dict[str, int]] = {}
+        jva_details_by_location: Dict[str, Dict[str, int]] = {}
+        per_loc_counts: Dict[str, Dict[str, int]] = {}
+        per_loc_switches: Dict[str, set] = {}
+        location_details: Dict[str, Dict] = {}
+
+        for r in rows:
+            sh = (r.get("Switch Hostname") or "").strip(); is_jva = False
+            if sh:
+                switches.add(sh)
+                try:
+                    from api.stats import is_jva_switch, extract_location, is_mac_like
+                    is_jva = is_jva_switch(sh)
+                    loc = extract_location(sh)
+                except Exception:
+                    loc = None; is_jva = False
+                if is_jva:
+                    jva_switches.add(sh)
+                else:
+                    justiz_switches.add(sh)
+                if loc:
+                    locations.add(loc); city_codes.add(loc[:3])
+                    if is_jva:
+                        jva_locations.add(loc); jva_city_codes.add(loc[:3])
+                    else:
+                        justiz_locations.add(loc); justiz_city_codes.add(loc[:3])
+                    # Initialize per-location aggregators
+                    plc = per_loc_counts.setdefault(loc, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+                    plc["totalPhones"] += 1
+                    sset = per_loc_switches.setdefault(loc, set())
+                    if sh not in sset:
+                        sset.add(sh); plc["totalSwitches"] += 1
+                    # Init detail holder
+                    if loc not in location_details:
+                        location_details[loc] = {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []}
+                    location_details[loc]["switches"].add(sh)
+
+            # KEM module counting (modules + unique phones)
+            kem_count = 0
+            if (r.get("KEM") or "").strip(): kem_count += 1
+            if (r.get("KEM 2") or "").strip(): kem_count += 1
+            if kem_count == 0:
+                ln = (r.get("Line Number") or "").strip()
+                if "KEM" in ln: kem_count = ln.count("KEM") or 1
+            if kem_count > 0:
+                phones_with_kem_unique += 1; total_kem_modules += kem_count
+                if is_jva:
+                    jva_phones_with_kem_unique += 1; jva_total_kem_modules += kem_count
+                else:
+                    justiz_phones_with_kem_unique += 1; justiz_total_kem_modules += kem_count
+                # Per-location KEM phones
+                if sh:
+                    try:
+                        from api.stats import extract_location as _el
+                        loc2 = _el(sh)
+                    except Exception:
+                        loc2 = None
+                    if loc2:
+                        item = {
+                            "model": (r.get("Model Name") or "").strip() or "Unknown",
+                            "mac": (r.get("MAC Address") or "").strip(),
+                            "serial": (r.get("Serial Number") or "").strip(),
+                            "switch": sh,
+                            "kemModules": int(kem_count)
+                        }
+                        ip = (r.get("IP Address") or "").strip()
+                        if ip: item["ip"] = ip
+                        location_details.setdefault(loc2, {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []})["kem_phones"].append(item)
+                        plc2 = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+                        plc2["phonesWithKEM"] += 1
+
+            # Model processing
+            model = (r.get("Model Name") or "").strip() or "Unknown"
+            if model != "Unknown":
+                try:
+                    from api.stats import is_mac_like
+                    if len(model) < 4 or is_mac_like(model):
+                        model = "Unknown"
+                except Exception:
+                    pass
+            model_counts[model] = model_counts.get(model, 0) + 1
+            if sh:
+                try:
+                    from api.stats import is_jva_switch, extract_location
+                    if is_jva_switch(sh):
+                        jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                    else:
+                        justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+                    loc3 = extract_location(sh)
+                except Exception:
+                    loc3 = None
+                if loc3:
+                    # Build detailed per-location model counts
+                    if is_jva:
+                        jva_details_by_location.setdefault(loc3, {})
+                        jva_details_by_location[loc3][model] = jva_details_by_location[loc3].get(model, 0) + 1
+                    else:
+                        justiz_details_by_location.setdefault(loc3, {})
+                        justiz_details_by_location[loc3][model] = justiz_details_by_location[loc3].get(model, 0) + 1
+
+            # VLAN usage per location and per switch
+            vlan = (r.get("Voice VLAN") or "").strip()
+            if vlan and sh:
+                try:
+                    from api.stats import extract_location as _ex
+                    loc4 = _ex(sh)
+                except Exception:
+                    loc4 = None
+                if loc4:
+                    details = location_details.setdefault(loc4, {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []})
+                    details["vlans"][vlan] = details["vlans"].get(vlan, 0) + 1
+                    if sh not in details["switch_vlans"]:
+                        details["switch_vlans"][sh] = {}
+                    details["switch_vlans"][sh][vlan] = details["switch_vlans"][sh].get(vlan, 0) + 1
+
+        # Format arrays
+        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]; phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+        phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+        phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+        total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
+
+        # Detail arrays for UI
+        def _city_name(code3: str) -> str:
+            try:
+                from api.stats import resolve_city_name
+                return resolve_city_name(code3)
+            except Exception:
+                return code3
+        phones_by_model_justiz_details = []
+        for location, models in justiz_details_by_location.items():
+            location_total = sum(models.values())
+            ml = [{"model": m, "count": c} for m, c in models.items()]; ml.sort(key=lambda x: (-x["count"], x["model"]))
+            code3 = location[:3] if location and len(location) >= 3 else ""
+            cname = _city_name(code3) if code3 else ""
+            disp = f"{location} - {cname}" if cname and cname != code3 else location
+            phones_by_model_justiz_details.append({"location": location, "locationDisplay": disp, "totalPhones": location_total, "models": ml})
+        phones_by_model_justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
+        phones_by_model_jva_details = []
+        for location, models in jva_details_by_location.items():
+            location_total = sum(models.values())
+            ml = [{"model": m, "count": c} for m, c in models.items()]; ml.sort(key=lambda x: (-x["count"], x["model"]))
+            code3 = location[:3] if location and len(location) >= 3 else ""
+            cname = _city_name(code3) if code3 else ""
+            disp = f"{location} - {cname}" if cname and cname != code3 else location
+            phones_by_model_jva_details.append({"location": location, "locationDisplay": disp, "totalPhones": location_total, "models": ml})
+        phones_by_model_jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+
+        metrics = {
+            "totalPhones": total_phones,
+            "totalSwitches": len(switches),
+            "totalLocations": len(locations),
+            "totalCities": len(city_codes),
+            "phonesWithKEM": phones_with_kem_unique,
+            "totalKEMs": total_kem_modules,
+            "totalJustizPhones": total_justiz_phones,
+            "totalJVAPhones": total_jva_phones,
+            "justizSwitches": len(justiz_switches),
+            "justizLocations": len(justiz_locations),
+            "justizCities": len(justiz_city_codes),
+            "justizPhonesWithKEM": justiz_phones_with_kem_unique,
+            "totalJustizKEMs": justiz_total_kem_modules,
+            "jvaSwitches": len(jva_switches),
+            "jvaLocations": len(jva_locations),
+            "jvaCities": len(jva_city_codes),
+            "jvaPhonesWithKEM": jva_phones_with_kem_unique,
+            "totalJVAKEMs": jva_total_kem_modules,
+            "phonesByModel": phones_by_model,
+            "phonesByModelJustiz": phones_by_model_justiz,
+            "phonesByModelJVA": phones_by_model_jva,
+            "phonesByModelJustizDetails": phones_by_model_justiz_details,
+            "phonesByModelJVADetails": phones_by_model_jva_details,
+            "cityCodes": sorted(list(city_codes)),
+        }
+
+        # Persist global stats snapshot
+        ok = opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
+
+        # Build per-location docs
+        def vlan_key(item):
+            v = item["vlan"]
+            try:
+                return (0, int(v))
+            except:
+                return (1, v)
+        loc_docs = []
+        for k, agg in per_loc_counts.items():
+            details = location_details.get(k, {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []})
+            vlan_usage = [{"vlan": v, "count": c} for v, c in details["vlans"].items()]
+            vlan_usage.sort(key=vlan_key)
+            switches_fmt = []
+            sw_vlans = details.get("switch_vlans", {})
+            for sw in sorted(details["switches"]):
+                vl = [{"vlan": v, "count": c} for v, c in sw_vlans.get(sw, {}).items()]
+                vl.sort(key=vlan_key)
+                switches_fmt.append({"hostname": sw, "vlans": vl})
+            # Prepare model lists for this location from details dicts
+            jm = justiz_details_by_location.get(k, {})
+            jvm = jva_details_by_location.get(k, {})
+            allm: Dict[str, int] = {}
+            for m, c in jm.items(): allm[m] = allm.get(m, 0) + c
+            for m, c in jvm.items(): allm[m] = allm.get(m, 0) + c
+            tolist = lambda d: sorted(([{"model": m, "count": c} for m, c in d.items()]), key=lambda x: (-x["count"], x["model"]))
+            loc_docs.append({
+                "key": k,
+                "mode": "code",
+                "totalPhones": agg["totalPhones"],
+                "totalSwitches": agg["totalSwitches"],
+                # Align to unique KEM phones count based on kem_phones list when available
+                "phonesWithKEM": int(len(details.get("kem_phones", []))),
+                "phonesByModel": tolist(allm),
+                "phonesByModelJustiz": tolist(jm),
+                "phonesByModelJVA": tolist(jvm),
+                "vlanUsage": vlan_usage,
+                "switches": switches_fmt,
+                "kemPhones": details.get("kem_phones", []),
+            })
+        if loc_docs:
+            opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
+
+        return {"status": "success" if ok else "error", "message": "Snapshot with details indexed" if ok else "Failed to index snapshot with details", "file": fm.name, "date": date_str, "loc_docs": len(loc_docs)}
+    except Exception as e:
+        logger.error(f"snapshot_current_with_details failed: {e}")
         return {"status": "error", "message": str(e)}
 
 

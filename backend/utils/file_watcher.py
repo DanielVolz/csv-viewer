@@ -125,6 +125,15 @@ class CSVFileHandler(FileSystemEventHandler):
             except Exception as e:
                 logger.debug(f"Failed to queue snapshot_current_stats: {e}")
 
+            # Also queue a richer snapshot that computes detail arrays and per-location details
+            try:
+                logger.info("Queuing detailed current stats snapshot (models by location, KEM phones, VLANs)...")
+                from tasks.tasks import snapshot_current_with_details
+                csv_file = str(self.current_csv_path)
+                snapshot_current_with_details.delay(csv_file)
+            except Exception as e:
+                logger.debug(f"Failed to queue snapshot_current_with_details: {e}")
+
             # Invalidate in-process stats caches so UI sees changes immediately
             try:
                 from api.stats import invalidate_caches as _invalidate

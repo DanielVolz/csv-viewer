@@ -421,6 +421,14 @@ async def reindex_current_file():
                 logger.error(f"Post-indexing data repair failed: {e}")
                 repair_message = f" (data repair error: {e})"
 
+            # Trigger a fresh snapshot WITH details (global & per-location) so Statistics has up-to-date details
+            try:
+                from tasks.tasks import snapshot_current_with_details as _snap
+                _snap.delay(csv_file)
+                logger.info("Queued snapshot_current_with_details after fast reindex")
+            except Exception as e:
+                logger.debug(f"Could not queue snapshot_current_with_details: {e}")
+
             return {
                 "success": True,
                 "message": f"Successfully reindexed netspeed.csv with {count} documents{repair_message}",
