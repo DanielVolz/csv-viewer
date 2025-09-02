@@ -1221,14 +1221,29 @@ async def get_current_stats_fast() -> Dict:
                 "file": {"name": "netspeed.csv", "date": ""},
             }
 
-        # Get latest stats snapshot
-        body = {
+        # Try to get the latest snapshot for the current file first (netspeed.csv)
+        body_current = {
             "size": 1,
             "sort": [{"date": {"order": "desc"}}],
-            "query": {"match_all": {}}
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"file": "netspeed.csv"}}
+                    ]
+                }
+            }
         }
 
-        res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body)
+        res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_current)
+
+        # Fallback: any latest snapshot if netspeed.csv-specific one is missing
+        if not res["hits"]["hits"]:
+            body_any = {
+                "size": 1,
+                "sort": [{"date": {"order": "desc"}}],
+                "query": {"match_all": {}}
+            }
+            res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_any)
 
         if not res["hits"]["hits"]:
             return {
@@ -1267,6 +1282,8 @@ async def get_current_stats_fast() -> Dict:
 
         # Extract latest snapshot data - all pre-computed during reindexing
         latest_doc = res["hits"]["hits"][0]["_source"]
+        file_name = latest_doc.get("file", "netspeed.csv")
+        date_str = latest_doc.get("date", "")
 
         # All data is already computed during reindexing - just use snapshot values directly
         justiz_models = latest_doc.get("phonesByModelJustiz", [])
@@ -1278,11 +1295,49 @@ async def get_current_stats_fast() -> Dict:
         city_codes = latest_doc.get("cityCodes", [])
         cities = []
         for code in city_codes:
-            cities.append({
-                "code": code,
-                "name": resolve_city_name(code)
-            })
+            cities.append({"code": code, "name": resolve_city_name(code)})
         cities.sort(key=lambda x: x["name"])
+
+        # Optional consistency correction: if per-location kemPhones exist for the same date,
+        # recompute phonesWithKEM (unique phones) and totalKEMs (sum of modules) from details.
+        corrected_phones_with_kem = None
+        corrected_total_kems = None
+        try:
+            if date_str:
+                body_loc = {
+                    "size": 1000,
+                    "_source": ["kemPhones"],
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"term": {"file": file_name}},
+                                {"term": {"date": date_str}}
+                            ]
+                        }
+                    }
+                }
+                res_loc = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body_loc)
+                if res_loc.get("hits", {}).get("hits"):
+                    kem_total = 0
+                    phone_total = 0
+                    for h in res_loc["hits"]["hits"]:
+                        src = h.get("_source", {})
+                        kem_list = src.get("kemPhones", [])
+                        if isinstance(kem_list, list):
+                            phone_total += len(kem_list)
+                            for item in kem_list:
+                                try:
+                                    km = int(item.get("kemModules", 1) or 1)
+                                except Exception:
+                                    km = 1
+                                kem_total += km
+                    # Only apply if we actually found any phones
+                    if phone_total > 0:
+                        corrected_phones_with_kem = phone_total
+                        corrected_total_kems = kem_total
+        except Exception:
+            # Best-effort correction; ignore failures silently
+            pass
 
         return {
             "success": True,
@@ -1292,8 +1347,8 @@ async def get_current_stats_fast() -> Dict:
                 "totalSwitches": latest_doc.get("totalSwitches", 0),
                 "totalLocations": latest_doc.get("totalLocations", 0),
                 "totalCities": latest_doc.get("totalCities", 0),
-                "phonesWithKEM": latest_doc.get("phonesWithKEM", 0),
-                "totalKEMs": latest_doc.get("totalKEMs", 0),
+                "phonesWithKEM": int(corrected_phones_with_kem if corrected_phones_with_kem is not None else latest_doc.get("phonesWithKEM", 0)),
+                "totalKEMs": int(corrected_total_kems if corrected_total_kems is not None else latest_doc.get("totalKEMs", 0)),
                 "totalJustizPhones": total_justiz,
                 "totalJVAPhones": total_jva,
                 # New individual Justiz KPIs
@@ -1316,8 +1371,8 @@ async def get_current_stats_fast() -> Dict:
                 "cities": cities,
             },
             "file": {
-                "name": latest_doc.get("file", "netspeed.csv"),
-                "date": latest_doc.get("date", ""),
+                "name": file_name,
+                "date": date_str,
             }
         }
 

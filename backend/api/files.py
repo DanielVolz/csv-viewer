@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request
+import os
 from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
 from typing import List, Optional
@@ -424,8 +425,28 @@ async def reindex_current_file():
             # Trigger a fresh snapshot WITH details (global & per-location) so Statistics has up-to-date details
             try:
                 from tasks.tasks import snapshot_current_with_details as _snap
-                _snap.delay(csv_file)
-                logger.info("Queued snapshot_current_with_details after fast reindex")
+                # Try Celery first
+                queued = False
+                try:
+                    _snap.delay(csv_file)
+                    queued = True
+                    logger.info("Queued snapshot_current_with_details after fast reindex")
+                except Exception as e:
+                    logger.debug(f"Could not queue snapshot_current_with_details (will run inline): {e}")
+                # Fallback: run inline to guarantee details in dev even if Celery lacks the task
+                if not queued:
+                    try:
+                        logger.info("Running snapshot_current_with_details inline (dev fallback)")
+                        _ = _snap(csv_file)
+                    except Exception as e:
+                        logger.warning(f"Inline snapshot_current_with_details failed: {e}")
+                # Additionally, in development always run inline to avoid stale worker task registry
+                if os.environ.get("NODE_ENV") == "development":
+                    try:
+                        logger.info("Development mode: also executing snapshot_current_with_details inline for determinism")
+                        _ = _snap(csv_file)
+                    except Exception as e:
+                        logger.warning(f"Dev inline snapshot_current_with_details failed: {e}")
             except Exception as e:
                 logger.debug(f"Could not queue snapshot_current_with_details: {e}")
 

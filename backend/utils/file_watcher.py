@@ -130,7 +130,25 @@ class CSVFileHandler(FileSystemEventHandler):
                 logger.info("Queuing detailed current stats snapshot (models by location, KEM phones, VLANs)...")
                 from tasks.tasks import snapshot_current_with_details
                 csv_file = str(self.current_csv_path)
-                snapshot_current_with_details.delay(csv_file)
+                queued = False
+                try:
+                    snapshot_current_with_details.delay(csv_file)
+                    queued = True
+                except Exception as e:
+                    logger.debug(f"Could not queue snapshot_current_with_details (will run inline): {e}")
+                if not queued:
+                    try:
+                        logger.info("Running detailed snapshot inline (dev fallback)")
+                        _ = snapshot_current_with_details(csv_file)
+                    except Exception as e:
+                        logger.warning(f"Inline detailed snapshot failed: {e}")
+                # In development, also run inline every time for determinism
+                if os.environ.get("NODE_ENV") == "development":
+                    try:
+                        logger.info("Development mode: executing detailed snapshot inline for determinism")
+                        _ = snapshot_current_with_details(csv_file)
+                    except Exception as e:
+                        logger.warning(f"Dev inline detailed snapshot failed: {e}")
             except Exception as e:
                 logger.debug(f"Failed to queue snapshot_current_with_details: {e}")
 

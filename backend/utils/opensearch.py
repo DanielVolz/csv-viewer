@@ -1126,7 +1126,7 @@ class OpenSearchConfig:
         """
         logger.debug(f"Building query body for query: {query}, field: {field}, size: {size}")
 
-        # Special handling for KEM searches - search in KEM and KEM 2 fields
+        # Special handling for KEM searches - return all phones that have at least 1 KEM module
         if not field and isinstance(query, str) and query.upper().strip() == "KEM":
             # Use all columns including KEM fields for KEM searches
             all_columns = [
@@ -1134,28 +1134,37 @@ class OpenSearchConfig:
                 "KEM", "KEM 2", "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
                 "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
             ]
-            return {
+            # Semantics: phone has ≥1 KEM if KEM or KEM 2 is non-empty OR Line Number contains 'KEM'
+            kem_query = {
                 "query": {
                     "bool": {
                         "should": [
-                            {"term": {"KEM.keyword": "KEM"}},
-                            {"term": {"KEM 2.keyword": "KEM"}},
+                            {"exists": {"field": "KEM"}},
+                            {"exists": {"field": "KEM.keyword"}},
+                            {"exists": {"field": "KEM 2"}},
+                            {"exists": {"field": "KEM 2.keyword"}},
+                            {"wildcard": {"KEM.keyword": "*KEM*"}},
+                            {"wildcard": {"KEM 2.keyword": "*KEM*"}},
                             {"match": {"KEM": "KEM"}},
-                            {"match": {"KEM 2": "KEM"}}
+                            {"match": {"KEM 2": "KEM"}},
+                            {"wildcard": {"Line Number.keyword": "*KEM*"}}
                         ],
                         "minimum_should_match": 1
                     }
                 },
                 "_source": all_columns,
                 "size": size,
-                "sort": [{"Creation Date": {"order": "desc"}}, {
-                    "_script": {"type": "number", "order": "asc", "script": {
+                "sort": [
+                    {"Creation Date": {"order": "desc"}},
+                    {"_script": {"type": "number", "order": "asc", "script": {
                         "lang": "painless",
                         "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
                         "params": {"f": "netspeed.csv"}
-                    }}
-                }, {"_score": {"order": "desc"}}]
+                    }}},
+                    {"_score": {"order": "desc"}}
+                ]
             }
+            return kem_query
 
         if field:
             from utils.csv_utils import DESIRED_ORDER
