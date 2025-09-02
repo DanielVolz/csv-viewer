@@ -919,43 +919,40 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return map;
   }, [topSeriesPerKey]);
 
-  // Compute dynamic y-axis bounds for Top 10 chart with a "nice" step near the max
+  // Compute dynamic y-axis bounds for Top 10 chart: zoom to data range
   const topYAxisBounds = React.useMemo(() => {
+    let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (const s of topSeriesPerKey) {
       for (const v of s.data) {
         if (v == null) continue; // ignore null placeholders
         const n = Number(v);
         if (!Number.isFinite(n)) continue;
+        if (n < min) min = n;
         if (n > max) max = n;
       }
     }
-    if (!Number.isFinite(max)) return null; // fallback to auto
-    if (max <= 0) return { yMin: 0, yMax: 1, ticks: [0, 1] };
-    const yMin = 0;
-    // Aim for ~6 ticks using a nice step (1,2,5 * 10^k)
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null; // fallback to auto
+    if (min === max) {
+      if (max <= 0) return { yMin: 0, yMax: 1, ticks: [0, 1] };
+      const pad = Math.max(1, Math.round(max * 0.05));
+      return { yMin: Math.max(0, max - pad), yMax: max + pad };
+    }
+    const range = max - min;
+    const pad = Math.max(1, Math.round(range * 0.05));
+    const yMin = Math.max(0, Math.floor(min - pad));
+    const yMax = Math.ceil(max + pad);
+    // Build ticks at a nice step
     const targetTicks = 6;
-    const rawStep = (max - yMin) / Math.max(1, targetTicks);
-    const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1e-6, rawStep))));
+    const rawStep = (yMax - yMin) / Math.max(1, targetTicks);
+    const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1, rawStep))));
     const steps = [1, 2, 5, 10];
     let step = pow10;
     for (const s of steps) { if (pow10 * s >= rawStep) { step = pow10 * s; break; } }
-    const yMax = Math.ceil(max / step) * step;
-    // Build ticks at 'step'; add optional half-steps if it doesn’t overflow
-    const maxTicks = 24;
-    let tickStep = step;
-    let tickCount = Math.floor((yMax - yMin) / tickStep) + 1;
-    if (tickCount * 2 <= maxTicks) {
-      // add mid ticks for readability if we have room
-      tickStep = step / 2;
-      // Avoid too-dense ticks for very small steps
-      if (tickStep < 1) tickStep = step;
-    }
     const ticks = [];
-    for (let t = yMin; t <= yMax + 1e-9; t += tickStep) {
-      const val = Math.round(tickStep >= 1 ? t : Math.round(t * 1000) / 1000);
-      ticks.push(val);
-    }
+    const start = Math.ceil(yMin / step) * step;
+    const end = Math.floor(yMax / step) * step;
+    for (let t = start; t <= end + 1e-9; t += step) ticks.push(Math.round(t));
     return { yMin, yMax, ticks };
   }, [topSeriesPerKey]);
 
@@ -1222,12 +1219,32 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     [{ id: '__empty_loc', label: '', color: 'rgba(0,0,0,0)', data: new Array((locTimeline.series || []).length).fill(null) }]
   ), [locTimeline.series]);
 
-  // Compute dynamic y-axis for Global timeline based on selected KPIs
+  // Compute dynamic y-axis for Global timeline; zoom when only one KPI is selected
   const globalYAxisBounds = React.useMemo(() => {
     const items = timeline.series || [];
     if (!Array.isArray(items) || items.length === 0) return null;
     const selected = KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id));
     if (selected.length === 0) return null;
+    if (selected.length === 1) {
+      const id = selected[0].id;
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      for (const p of items) {
+        const n = Number(p?.metrics?.[id]);
+        if (!Number.isFinite(n)) continue;
+        if (n < min) min = n;
+        if (n > max) max = n;
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+      if (min === max) {
+        const pad = Math.max(1, Math.round(max * 0.05));
+        return { yMin: Math.max(0, max - pad), yMax: max + pad };
+      }
+      const range = max - min;
+      const pad = Math.max(1, Math.round(range * 0.05));
+      return { yMin: Math.max(0, Math.floor(min - pad)), yMax: Math.ceil(max + pad) };
+    }
+    // Multi-KPI: anchor at 0 for comparability
     let max = Number.NEGATIVE_INFINITY;
     for (const k of selected) {
       for (const p of items) {
@@ -1238,8 +1255,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       }
     }
     if (!Number.isFinite(max)) return null;
-    const yMin = 0; // counts
-    // Nice ceiling with ~6 ticks heuristic
+    const yMin = 0;
     const targetTicks = 6;
     const rawStep = (max - yMin) / Math.max(1, targetTicks);
     const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1, rawStep))));
@@ -1250,12 +1266,31 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return { yMin, yMax };
   }, [timeline.series, KPI_DEFS, selectedKpisGlobal]);
 
-  // Compute dynamic y-axis for Per-Location timeline based on selected KPIs
+  // Compute dynamic y-axis for Per-Location timeline; zoom when only one KPI is selected
   const locYAxisBounds = React.useMemo(() => {
     const items = locTimeline.series || [];
     if (!Array.isArray(items) || items.length === 0) return null;
     const selected = KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id));
     if (selected.length === 0) return null;
+    if (selected.length === 1) {
+      const id = selected[0].id;
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      for (const p of items) {
+        const n = Number(p?.metrics?.[id]);
+        if (!Number.isFinite(n)) continue;
+        if (n < min) min = n;
+        if (n > max) max = n;
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+      if (min === max) {
+        const pad = Math.max(1, Math.round(max * 0.05));
+        return { yMin: Math.max(0, max - pad), yMax: max + pad };
+      }
+      const range = max - min;
+      const pad = Math.max(1, Math.round(range * 0.05));
+      return { yMin: Math.max(0, Math.floor(min - pad)), yMax: Math.ceil(max + pad) };
+    }
     let max = Number.NEGATIVE_INFINITY;
     for (const k of selected) {
       for (const p of items) {
