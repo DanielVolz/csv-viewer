@@ -95,80 +95,58 @@ def intelligent_column_mapping(row: List[str]) -> Dict[str, str]:
     Returns:
         Dictionary mapping column names to values
     """
-    result = {}
-    used_indices = set()
 
-    # Define matching order priority (higher priority items are matched first)
-    priority_order = [
-        "Switch Hostname",     # Very specific pattern
-        "Switch Port",         # Very specific pattern
-        "Model Name",          # Very specific pattern
-        "MAC Address 2",       # SEP prefix is very specific
-        "IP Address",          # Specific IP ranges
-        "Line Number",         # Phone number pattern
-        "Subnet Mask",         # 255.x.x.x pattern
-        "Voice VLAN",          # Numeric VLAN
-        "MAC Address",         # Pure MAC pattern
-        "Serial Number",       # More general alphanumeric
-        "Speed 1",             # Speed patterns
-        "Speed 2",
-        "Speed Switch-Port",
-        "Speed PC-Port",
-        "KEM",                 # KEM patterns
-        "KEM 2"
-    ]
+    # Robuste Normalisierung auf 16 Spalten.
+    # Unterstützte Eingangsvarianten:
+    #  - 16 Spalten (vollständig: IP, Line, Serial, Model, KEM, KEM 2, MAC, MAC2, Subnet, VLAN, Speed1, Speed2, SwitchHost, SwitchPort, SpeedSw, SpeedPC)
+    #  - 15 Spalten (nur 1 KEM Spalte vorhanden -> legt KEM 2 = "")
+    #  - 14 Spalten (keine KEM-Spalten -> KEM und KEM 2 = "")
+    #  - <14: wird aufgefüllt, Rest leer
+    # Wir verlassen uns dabei auf die bekannte Reihenfolge der ursprünglichen Export-Dateien.
 
-    # First pass: identify columns with high-confidence patterns in priority order
-    for column_type in priority_order:
-        if column_type in result:
-            continue  # Already assigned
+    full_headers = KNOWN_HEADERS[16]
+    out: Dict[str, str] = {h: "" for h in full_headers}
 
-        pattern = COLUMN_PATTERNS.get(column_type)
-        if not pattern:
-            continue
+    col_count = len(row)
+    cells = [c.strip() for c in row]
 
-        for i, cell in enumerate(row):
-            if i in used_indices or not cell or not cell.strip():
-                continue
-
-            cell_value = cell.strip()
-            if pattern.match(cell_value):
-                result[column_type] = cell_value
-                used_indices.add(i)
-                logger.debug(f"Priority match: '{column_type}' at index {i}: {cell_value}")
-                break
-
-    # Second pass: assign remaining cells to missing fields using positional logic
-    remaining_cells = [(i, cell) for i, cell in enumerate(row) if i not in used_indices and cell.strip()]
-
-    # List of all expected fields in order
-    expected_fields = KNOWN_HEADERS[16]  # Use 16-column format as reference
-    missing_fields = [field for field in expected_fields if field not in result]
-
-    # For remaining cells, try to assign based on typical order
-    for i, (cell_idx, cell_value) in enumerate(remaining_cells):
-        if i < len(missing_fields):
-            field_name = missing_fields[i]
-            cell_val = cell_value.strip()
-
-            # Skip obviously wrong assignments
-            if field_name == "IP Address" and cell_val.startswith("255."):
-                continue
-            elif field_name == "Subnet Mask" and not cell_val.startswith("255."):
-                continue
-            elif field_name == "Voice VLAN" and not cell_val.isdigit():
-                continue
-
-            result[field_name] = cell_val
-            used_indices.add(cell_idx)
-            logger.debug(f"Assigned remaining field '{field_name}': {cell_val}")
-
-    # Ensure all required fields exist with empty values if not found
-    for header in expected_fields:
-        if header not in result:
-            result[header] = ""
-
-    return result
+    if col_count >= 16:
+        # Direkt abbilden (überschüssige ignorieren)
+        for i, h in enumerate(full_headers):
+            if i < col_count:
+                out[h] = cells[i]
+        return out
+    elif col_count == 15:
+        # Annahme: Reihenfolge wie KNOWN_HEADERS[15] (eine KEM Spalte, danach MAC Address)
+        base15 = KNOWN_HEADERS[15]
+        for i, h in enumerate(base15):
+            if i < col_count:
+                out[h] = cells[i]
+        # Sicherstellen, dass KEM 2 leer existiert
+        if not out.get("KEM 2"):
+            out["KEM 2"] = ""
+        return out
+    elif col_count == 14:
+        # Annahme: Format ohne KEM: KNOWN_HEADERS[14]
+        base14 = KNOWN_HEADERS[14]
+        for i, h in enumerate(base14):
+            if i < col_count:
+                out[h] = cells[i]
+        # KEM Felder leeren
+        out["KEM"] = ""
+        out["KEM 2"] = ""
+        return out
+    else:
+        # Weniger als 14 Spalten -> best effort: einfach in Reihenfolge füllen
+        for i, val in enumerate(cells):
+            if i < len(full_headers):
+                out[full_headers[i]] = val
+        # Fehlende KEM Felder absichern
+        if "KEM" not in out:
+            out["KEM"] = ""
+        if "KEM 2" not in out:
+            out["KEM 2"] = ""
+        return out
 
 
 def generate_headers(column_count: int) -> List[str]:
