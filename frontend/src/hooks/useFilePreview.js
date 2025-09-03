@@ -7,12 +7,20 @@ import { toast } from 'react-toastify';
  * @param {number} limit - Maximum number of entries to fetch
  * @returns {Object} { previewData, loading, error }
  */
-function useFilePreview() { // Removed limit parameter to prevent re-renders
+function useFilePreview(options = {}) { // Optional: { enabled: boolean }
+  const { enabled = true } = options;
   const [previewData, setPreviewData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (!enabled) {
+      // Skip fetching preview entirely when disabled (e.g., when arriving with a query)
+      setLoading(false);
+      setPreviewData(null);
+      setError(null);
+      return; // do not set up effect
+    }
     const abortController = new AbortController();
     const timeoutRef = { current: null };
     let timedOut = false;
@@ -93,7 +101,7 @@ function useFilePreview() { // Removed limit parameter to prevent re-renders
       abortController.abort();
       console.debug('[useFilePreview] cleanup');
     };
-  }, []);
+  }, [enabled]);
 
   return { previewData, loading, error };
 }

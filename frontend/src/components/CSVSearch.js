@@ -101,7 +101,18 @@ function CSVSearch() {
   // Declare MAC history early to avoid TDZ when used in effects below
   const { list: macHistory, record: recordMac, remove: removeMac, update: updateMac } = useMacHistory();
 
-  const { previewData, loading: previewLoading, error: previewError } = useFilePreview();
+  // Disable preview fetching when landing with a query (?q=...), to avoid extra load and race
+  const [previewEnabled, setPreviewEnabled] = React.useState(true);
+  React.useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const q = params.get('q');
+      if (q && typeof q === 'string' && q.trim() !== '') {
+        setPreviewEnabled(false);
+      }
+    } catch {}
+  }, []);
+  const { previewData, loading: previewLoading, error: previewError } = useFilePreview({ enabled: previewEnabled });
   const missingPreview = !previewLoading && previewData && previewData.success === false && (previewData.message || '').toLowerCase().includes('not found');
   // Block only while actively loading initial preview OR when file definitely missing
   const searchBlocked = previewLoading || missingPreview; // rename conceptually: execution blocked, not input

@@ -484,18 +484,50 @@ function DataTable({
             </Tooltip>
           )}
 
-          {/* SSH Icon */}
-          <Terminal
-            className="ssh-icon"
-            sx={{
-              color: theme => sshUsername
-                ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
-                : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
-              fontSize: '14px',
-              ml: 0.5,
-              verticalAlign: 'middle'
-            }}
-          />
+          {/* SSH Icon - click opens SSH, no switch port copy */}
+          <Tooltip arrow placement="top" title={sshTitle}>
+            <Terminal
+              className="ssh-icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (sshUsername && sshUsername.trim() !== '') {
+                  const sshUrl = `ssh://${sshUsername}@${content}`;
+                  toast.success(`🔗 SSH: ${sshUsername}@${content}`, { autoClose: 1000, pauseOnHover: false });
+                  setTimeout(() => { window.location.href = sshUrl; }, 150);
+                } else {
+                  const ToastContent = () => (
+                    <div>
+                      ⚠️ SSH username not configured!{' '}
+                      <span
+                        onClick={() => {
+                          navigateToSettings();
+                          toast.dismiss();
+                        }}
+                        style={{
+                          color: '#4f46e5',
+                          textDecoration: 'underline',
+                          cursor: 'pointer',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        Go to Settings
+                      </span> to set your SSH username.
+                    </div>
+                  );
+                  toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
+                }
+              }}
+              sx={{
+                color: theme => sshUsername
+                  ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                  : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                fontSize: '14px',
+                ml: 0.5,
+                verticalAlign: 'middle',
+                cursor: 'pointer'
+              }}
+            />
+          </Tooltip>
         </Box>
       );
     }

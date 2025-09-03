@@ -17,6 +17,7 @@ import PlaceIcon from '@mui/icons-material/Place';
 import BusinessIcon from '@mui/icons-material/Business';
 import DoneAllIcon from '@mui/icons-material/DoneAll';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
+import TerminalIcon from '@mui/icons-material/Terminal';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -2519,8 +2520,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 <RouterIcon sx={{ fontSize: '1.1rem', color: 'primary.main' }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'primary.main' }}>
                   Switches {(() => {
-                    if (locStats?.mode === 'prefix' && cityNameByCode3[locStats?.query]) {
-                      return `in ${cityNameByCode3[locStats.query]} (${locStats.query})`;
+                    const q = String(locStats?.query || '').toUpperCase();
+                    // Prefix mode (e.g., ABX) -> show city name with code
+                    if (locStats?.mode === 'prefix' && q.length === 3 && cityNameByCode3[q]) {
+                      return `in ${cityNameByCode3[q]} (${q})`;
+                    }
+                    // Exact location (e.g., ABX01) -> show code with city name if available
+                    if (q && q.length === 5) {
+                      const cityName = cityNameByCode3[q.slice(0, 3)] || '';
+                      return cityName ? `${q} (${cityName})` : q;
                     }
                     return 'at this Location';
                   })()}
@@ -2664,25 +2672,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                       component="span"
                                       onClick={async (e) => {
                                         e.stopPropagation();
-
-                                        // First: Try to get switch port data and copy Cisco format
-                                        try {
-                                          const switchPort = await getSwitchPortForHostname(hostname);
-                                          if (switchPort) {
-                                            const ciscoFormat = convertToCiscoFormat(switchPort);
-                                            if (ciscoFormat && ciscoFormat.trim() !== '') {
-                                              await copyToClipboard(ciscoFormat);
-                                              showCopyToast('Copied Cisco port', ciscoFormat);
-                                            } else {
-                                              showCopyToast('Copied switch port', switchPort);
-                                              await copyToClipboard(switchPort);
-                                            }
-                                          }
-                                        } catch (error) {
-                                          console.warn('Failed to copy switch port:', error);
-                                        }
-
-                                        // Second: SSH link functionality
+                                        // SSH link functionality (no switch port copying for Statistics switches)
                                         if (sshUsername && sshUsername.trim() !== '') {
                                           const sshUrl = `ssh://${sshUsername}@${hostname}`;
                                           toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
@@ -2729,6 +2719,51 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                     </Typography>
                                   </Tooltip>
                                 )}
+
+                                {/* SSH Icon - click opens SSH, no switch port copy */}
+                                <Tooltip arrow placement="top" title={sshTitle}>
+                                  <TerminalIcon
+                                    className="ssh-icon"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (sshUsername && sshUsername.trim() !== '') {
+                                        const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                        toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                        setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                      } else {
+                                        const ToastContent = () => (
+                                          <div>
+                                            ⚠️ SSH username not configured!{' '}
+                                            <span
+                                              onClick={() => {
+                                                try { navigateToSettings?.(); } catch { }
+                                                try { toast.dismiss(); } catch { }
+                                              }}
+                                              style={{
+                                                color: '#4f46e5',
+                                                textDecoration: 'underline',
+                                                cursor: 'pointer',
+                                                fontWeight: 'bold'
+                                              }}
+                                            >
+                                              Go to Settings
+                                            </span> to set your SSH username.
+                                          </div>
+                                        );
+                                        toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
+                                      }
+                                    }}
+                                    sx={{
+                                      color: (theme) => sshUsername
+                                        ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                                        : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                                      fontSize: '14px',
+                                      ml: 0.5,
+                                      verticalAlign: 'middle',
+                                      cursor: 'pointer'
+                                    }}
+                                  />
+                                </Tooltip>
                               </Box>
                             );
                           })()}
@@ -2794,7 +2829,17 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <ExtensionIcon sx={{ fontSize: '1.1rem', color: 'success.main' }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'success.main' }}>
-                  Phones with KEM at this Location
+                  {(() => {
+                    const q = String(locStats?.query || '').toUpperCase();
+                    if (locStats?.mode === 'prefix' && q.length === 3 && cityNameByCode3[q]) {
+                      return `Phones with KEM in ${cityNameByCode3[q]} (${q})`;
+                    }
+                    if (q && q.length === 5) {
+                      const cityName = cityNameByCode3[q.slice(0, 3)] || '';
+                      return `Phones with KEM in ${cityName ? `${q} (${cityName})` : q}`;
+                    }
+                    return 'Phones with KEM at this Location';
+                  })()}
                 </Typography>
               </Box>
               <Chip
@@ -2894,7 +2939,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               <Typography
                                 variant="body2"
                                 component="a"
-                                href={`/?q=${encodeURIComponent(mac)}`}
+                                href={`/search?q=${encodeURIComponent(mac)}`}
                                 sx={{
                                   textDecoration: 'underline',
                                   color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
@@ -3030,6 +3075,51 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                       </Typography>
                                     </Tooltip>
                                   )}
+
+                                  {/* SSH Icon - click opens SSH, no switch port copy */}
+                                  <Tooltip arrow placement="top" title={sshTitle}>
+                                    <TerminalIcon
+                                      className="ssh-icon"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (sshUsername && sshUsername.trim() !== '') {
+                                          const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                          toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                          setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                        } else {
+                                          const ToastContent = () => (
+                                            <div>
+                                              ⚠️ SSH username not configured!{' '}
+                                              <span
+                                                onClick={() => {
+                                                  try { navigateToSettings?.(); } catch { }
+                                                  try { toast.dismiss(); } catch { }
+                                                }}
+                                                style={{
+                                                  color: '#4f46e5',
+                                                  textDecoration: 'underline',
+                                                  cursor: 'pointer',
+                                                  fontWeight: 'bold'
+                                                }}
+                                              >
+                                                Go to Settings
+                                              </span> to set your SSH username.
+                                            </div>
+                                          );
+                                          toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
+                                        }
+                                      }}
+                                      sx={{
+                                        color: (theme) => sshUsername
+                                          ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                                          : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                                        fontSize: '14px',
+                                        ml: 0.5,
+                                        verticalAlign: 'middle',
+                                        cursor: 'pointer'
+                                      }}
+                                    />
+                                  </Tooltip>
                                 </Box>
                               );
                             })() : 'n/a'}
