@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Generator, Optional, Tuple
 from .csv_utils import read_csv_file
+import os
 
 
 # Configure logging
@@ -26,8 +27,14 @@ class OpenSearchConfig:
     """
 
     def __init__(self):
-        """Initialize OpenSearch configuration."""
-        self.hosts = [settings.OPENSEARCH_URL]
+        """Initialize OpenSearch configuration.
+
+        Adds multi-host fallback support: OPENSEARCH_URL may contain a comma-separated
+        list of host URLs (e.g. "http://opensearch:9200,http://localhost:9200"). We
+        also auto-append sensible localhost fallbacks if only a single unresolvable
+        DNS name is provided. The first host that responds to ping() is used.
+        """
+        self.hosts = self._build_host_list(settings.OPENSEARCH_URL)
         self._client = None
     # NOTE: After changing field mappings (e.g. IP Address from ip->text) existing indices
     # must be deleted & rebuilt (reindex) for the new mapping to apply.
@@ -143,6 +150,64 @@ class OpenSearchConfig:
                             "count": {"type": "long"}
                         }
                     },
+                    # Extended model breakdowns
+                    "phonesByModelJustiz": {
+                        "type": "nested",
+                        "properties": {
+                            "model": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "phonesByModelJVA": {
+                        "type": "nested",
+                        "properties": {
+                            "model": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    # Per-location model detail arrays (global snapshot perspective)
+                    "phonesByModelJustizDetails": {
+                        "type": "nested",
+                        "properties": {
+                            "location": {"type": "keyword"},
+                            "locationDisplay": {"type": "keyword"},
+                            "totalPhones": {"type": "long"},
+                            "models": {
+                                "type": "nested",
+                                "properties": {
+                                    "model": {"type": "keyword"},
+                                    "count": {"type": "long"}
+                                }
+                            }
+                        }
+                    },
+                    "phonesByModelJVADetails": {
+                        "type": "nested",
+                        "properties": {
+                            "location": {"type": "keyword"},
+                            "locationDisplay": {"type": "keyword"},
+                            "totalPhones": {"type": "long"},
+                            "models": {
+                                "type": "nested",
+                                "properties": {
+                                    "model": {"type": "keyword"},
+                                    "count": {"type": "long"}
+                                }
+                            }
+                        }
+                    },
+                    "totalJustizPhones": {"type": "long"},
+                    "totalJVAPhones": {"type": "long"},
+                    "justizSwitches": {"type": "long"},
+                    "justizLocations": {"type": "long"},
+                    "justizCities": {"type": "long"},
+                    "justizPhonesWithKEM": {"type": "long"},
+                    "totalJustizKEMs": {"type": "long"},
+                    "jvaSwitches": {"type": "long"},
+                    "jvaLocations": {"type": "long"},
+                    "jvaCities": {"type": "long"},
+                    "jvaPhonesWithKEM": {"type": "long"},
+                    "totalJVAKEMs": {"type": "long"},
                     "cityCodes": {"type": "keyword"}
                 }
             },
@@ -259,27 +324,86 @@ class OpenSearchConfig:
             OpenSearch: Configured OpenSearch client
         """
         if self._client is None:
-            # Create client with connection parameters
-            opensearch_params = {
-                'hosts': self.hosts,
-                'http_auth': ('admin', settings.OPENSEARCH_PASSWORD),  # Use from settings
-                'verify_certs': False,
-                'ssl_show_warn': False,
-                'request_timeout': 30,
-                'retry_on_timeout': True,
-                'max_retries': 3
-            }
-            self._client = OpenSearch(**opensearch_params)
-            # Test connection
-            try:
-                if self._client.ping():
-                    logger.info("Successfully connected to OpenSearch")
-                else:
-                    logger.warning("Could not connect to OpenSearch")
-            except Exception as e:
-                logger.error(f"Error connecting to OpenSearch: {e}")
+            pwd = getattr(settings, 'OPENSEARCH_PASSWORD', None)
+            last_err: Optional[Exception] = None
+            for host in self.hosts:
+                opensearch_params = {
+                    'hosts': [host],  # single host attempt
+                    'verify_certs': False,
+                    'ssl_show_warn': False,
+                    'request_timeout': 30,
+                    'retry_on_timeout': True,
+                    'max_retries': 2
+                }
+                if pwd:
+                    opensearch_params['http_auth'] = ('admin', pwd)
+                try:
+                    candidate = OpenSearch(**opensearch_params)
+                    if candidate.ping():
+                        logger.info(f"Connected to OpenSearch host: {host}")
+                        self._client = candidate
+                        break
+                    else:
+                        logger.warning(f"Ping failed for OpenSearch host: {host}")
+                except Exception as e:  # noqa: BLE001 broad to keep trying fallbacks
+                    last_err = e
+                    logger.warning(f"OpenSearch connection attempt failed for {host}: {e}")
+            if self._client is None:
+                # As a last resort construct a client with the original host list (may still fail later)
+                logger.error("All OpenSearch host attempts failed; creating client with original host list for deferred errors")
+                try:
+                    params = {
+                        'hosts': self.hosts,
+                        'verify_certs': False,
+                        'ssl_show_warn': False,
+                        'request_timeout': 30,
+                        'retry_on_timeout': True,
+                        'max_retries': 1
+                    }
+                    if pwd:
+                        params['http_auth'] = ('admin', pwd)
+                    self._client = OpenSearch(**params)
+                except Exception as e2:  # noqa: BLE001
+                    logger.error(f"Failed to create fallback OpenSearch client: {e2}")
+                    if last_err:
+                        raise last_err
+                    raise
 
         return self._client
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _build_host_list(self, raw: str) -> List[str]:
+        """Parse OPENSEARCH_URL env (possibly comma-separated) and append fallbacks.
+
+        Args:
+            raw: Raw OPENSEARCH_URL string (e.g. 'http://opensearch:9200')
+
+        Returns:
+            Ordered list of hosts to attempt.
+        """
+        hosts: List[str] = []
+        if raw:
+            parts = [p.strip() for p in raw.split(',') if p.strip()]
+            hosts.extend(parts)
+        # If only one host and it's a bare docker service name, add localhost fallbacks
+        if len(hosts) == 1:
+            h = hosts[0]
+            # Simple heuristic: contains 'opensearch' and no localhost/127.0.0.1 already
+            if 'opensearch' in h and 'localhost' not in h and '127.0.0.1' not in h:
+                # Derive port (default 9200 if not parseable)
+                port_match = re.search(r':(\d+)', h)
+                port = port_match.group(1) if port_match else '9200'
+                localhost_variants = [
+                    f"http://localhost:{port}",
+                    f"http://127.0.0.1:{port}"
+                ]
+                for v in localhost_variants:
+                    if v not in hosts:
+                        hosts.append(v)
+        logger.info(f"OpenSearch host attempt order: {hosts}")
+        return hosts
 
     def get_index_name(self, file_path: str) -> str:
         """

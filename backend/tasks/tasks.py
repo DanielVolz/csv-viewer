@@ -2,7 +2,7 @@ import os
 from celery import Celery
 import logging
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from utils.opensearch import opensearch_config
 from datetime import datetime
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
@@ -71,8 +71,17 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
     """
     try:
         from models.file import FileModel as _FM
+        # Allow override via ENV NETSPEED_DATA_DIR
+        env_dir = os.environ.get("NETSPEED_DATA_DIR")
+        if env_dir:
+            directory_path = env_dir
         data_dir = Path(directory_path)
         file_path = data_dir / "netspeed.csv"
+        if not file_path.exists():
+            # Fallback real path
+            alt = Path("/usr/scripts/netspeed/netspeed.csv")
+            if alt.exists():
+                file_path = alt
         if not file_path.exists():
             return {"status": "warning", "message": f"Current file not found: {file_path}"}
 
@@ -191,37 +200,50 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
 
 
 @app.task(name='tasks.snapshot_current_with_details')
-def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv") -> dict:
-    """Compute and persist today's stats snapshot WITH detail arrays and per-location docs, no netspeed_* indexing.
+def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv", force_date: Optional[str] = None) -> dict:
+    """Compute and persist stats snapshot with detailed per-location documents.
 
-    - Writes stats_netspeed with phonesByModelJustizDetails/phonesByModelJVADetails
-    - Writes stats_netspeed_loc per-location docs (with vlanUsage, switches, kemPhones)
+    - Writes stats_netspeed (global) incl. Justiz/JVA model breakdown + details arrays
+    - Writes stats_netspeed_loc with per-location model lists, VLAN usage, switch VLAN mapping, KEM phones
+    - force_date allows overriding the file date (UI expects today's date for details)
     """
     try:
+        # ENV override
+        if file_path.endswith("netspeed.csv") and not Path(file_path).exists():
+            env_dir = os.environ.get("NETSPEED_DATA_DIR")
+            if env_dir:
+                candidate = Path(env_dir) / "netspeed.csv"
+                if candidate.exists():
+                    file_path = str(candidate)
         p = Path(file_path)
+        if not p.exists():
+            # Fallback to real prod path
+            alt = Path("/usr/scripts/netspeed/netspeed.csv")
+            if alt.exists():
+                p = alt
+                file_path = str(alt)
         if not p.exists():
             return {"status": "warning", "message": f"File not found: {file_path}"}
         from models.file import FileModel as _FM
         fm = _FM.from_path(str(p))
-        date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
+        date_str = force_date or (fm.date.strftime('%Y-%m-%d') if fm.date else None)
         _, rows = read_csv_file_normalized(str(p))
 
-        total_phones = len(rows)
-        switches = set(); locations = set(); city_codes = set()
-        phones_with_kem_unique = 0; total_kem_modules = 0
+        # Aggregators
+        switches: set = set(); locations: set = set(); city_codes: set = set()
         model_counts: Dict[str, int] = {}; justiz_model_counts: Dict[str, int] = {}; jva_model_counts: Dict[str, int] = {}
-        justiz_switches = set(); justiz_locations = set(); justiz_city_codes = set(); justiz_phones_with_kem_unique = 0; justiz_total_kem_modules = 0
-        jva_switches = set(); jva_locations = set(); jva_city_codes = set(); jva_phones_with_kem_unique = 0; jva_total_kem_modules = 0
+        phones_with_kem_unique = 0; total_kem_modules = 0
+        justiz_phones_with_kem_unique = 0; jva_phones_with_kem_unique = 0
+        justiz_total_kem_modules = 0; jva_total_kem_modules = 0
+        justiz_switches = set(); jva_switches = set(); justiz_locations=set(); jva_locations=set(); justiz_city_codes=set(); jva_city_codes=set()
 
-        # For location details and KEM phones
+        per_loc_counts: Dict[str, Dict[str, int]] = {}
+        location_details: Dict[str, Dict[str, Any]] = {}
         justiz_details_by_location: Dict[str, Dict[str, int]] = {}
         jva_details_by_location: Dict[str, Dict[str, int]] = {}
-        per_loc_counts: Dict[str, Dict[str, int]] = {}
-        per_loc_switches: Dict[str, set] = {}
-        location_details: Dict[str, Dict] = {}
 
         for r in rows:
-            sh = (r.get("Switch Hostname") or "").strip(); is_jva = False
+            sh = (r.get("Switch Hostname") or "").strip(); loc=None; is_jva=False
             if sh:
                 switches.add(sh)
                 try:
@@ -229,141 +251,94 @@ def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv") -> 
                     is_jva = is_jva_switch(sh)
                     loc = extract_location(sh)
                 except Exception:
-                    loc = None; is_jva = False
-                if is_jva:
-                    jva_switches.add(sh)
-                else:
-                    justiz_switches.add(sh)
+                    pass
+                (jva_switches if is_jva else justiz_switches).add(sh)
                 if loc:
                     locations.add(loc); city_codes.add(loc[:3])
-                    if is_jva:
-                        jva_locations.add(loc); jva_city_codes.add(loc[:3])
-                    else:
-                        justiz_locations.add(loc); justiz_city_codes.add(loc[:3])
-                    # Initialize per-location aggregators
-                    plc = per_loc_counts.setdefault(loc, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
+                    (jva_locations if is_jva else justiz_locations).add(loc)
+                    (jva_city_codes if is_jva else justiz_city_codes).add(loc[:3])
+                    plc = per_loc_counts.setdefault(loc,{"totalPhones":0,"phonesWithKEM":0,"totalSwitches":0})
                     plc["totalPhones"] += 1
-                    sset = per_loc_switches.setdefault(loc, set())
-                    if sh not in sset:
-                        sset.add(sh); plc["totalSwitches"] += 1
-                    # Init detail holder
-                    if loc not in location_details:
-                        location_details[loc] = {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []}
-                    location_details[loc]["switches"].add(sh)
+                    det = location_details.setdefault(loc,{"vlans":{},"switches":set(),"switch_vlans":{},"kem_phones":[]})
+                    if sh not in det["switches"]:
+                        det["switches"].add(sh); plc["totalSwitches"] += 1
 
-            # KEM module counting (modules + unique phones)
-            kem_count = 0
-            if (r.get("KEM") or "").strip(): kem_count += 1
-            if (r.get("KEM 2") or "").strip(): kem_count += 1
-            if kem_count == 0:
+            # KEM counting (modules + unique phones)
+            kem_modules = 0
+            for fld in ("KEM","KEM 2"):
+                if (r.get(fld) or "").strip(): kem_modules += 1
+            if kem_modules == 0:  # fallback in line number
                 ln = (r.get("Line Number") or "").strip()
-                if "KEM" in ln: kem_count = ln.count("KEM") or 1
-            if kem_count > 0:
-                phones_with_kem_unique += 1; total_kem_modules += kem_count
+                if "KEM" in ln:
+                    kem_modules = ln.count("KEM") or 1
+            if kem_modules>0:
+                phones_with_kem_unique +=1; total_kem_modules += kem_modules
                 if is_jva:
-                    jva_phones_with_kem_unique += 1; jva_total_kem_modules += kem_count
+                    jva_phones_with_kem_unique +=1; jva_total_kem_modules += kem_modules
                 else:
-                    justiz_phones_with_kem_unique += 1; justiz_total_kem_modules += kem_count
-                # Per-location KEM phones
-                if sh:
-                    try:
-                        from api.stats import extract_location as _el
-                        loc2 = _el(sh)
-                    except Exception:
-                        loc2 = None
-                    if loc2:
-                        item = {
-                            "model": (r.get("Model Name") or "").strip() or "Unknown",
-                            "mac": (r.get("MAC Address") or "").strip(),
-                            "serial": (r.get("Serial Number") or "").strip(),
-                            "switch": sh,
-                            "kemModules": int(kem_count)
-                        }
-                        ip = (r.get("IP Address") or "").strip()
-                        if ip: item["ip"] = ip
-                        location_details.setdefault(loc2, {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []})["kem_phones"].append(item)
-                        plc2 = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
-                        plc2["phonesWithKEM"] += 1
+                    justiz_phones_with_kem_unique +=1; justiz_total_kem_modules += kem_modules
+                if loc:
+                    det = location_details.setdefault(loc,{"vlans":{},"switches":set(),"switch_vlans":{},"kem_phones":[]})
+                    item = {"model": (r.get("Model Name") or "").strip() or "Unknown","mac":(r.get("MAC Address") or "").strip(),"serial":(r.get("Serial Number") or "").strip(),"switch":sh,"kemModules":kem_modules}
+                    ip=(r.get("IP Address") or "").strip()
+                    if ip: item["ip"]=ip
+                    det["kem_phones"].append(item)
+                    per_loc_counts[loc]["phonesWithKEM"] +=1
 
-            # Model processing
+            # Model
             model = (r.get("Model Name") or "").strip() or "Unknown"
             if model != "Unknown":
                 try:
                     from api.stats import is_mac_like
-                    if len(model) < 4 or is_mac_like(model):
-                        model = "Unknown"
-                except Exception:
-                    pass
-            model_counts[model] = model_counts.get(model, 0) + 1
-            if sh:
-                try:
-                    from api.stats import is_jva_switch, extract_location
-                    if is_jva_switch(sh):
-                        jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
-                    else:
-                        justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
-                    loc3 = extract_location(sh)
-                except Exception:
-                    loc3 = None
-                if loc3:
-                    # Build detailed per-location model counts
-                    if is_jva:
-                        jva_details_by_location.setdefault(loc3, {})
-                        jva_details_by_location[loc3][model] = jva_details_by_location[loc3].get(model, 0) + 1
-                    else:
-                        justiz_details_by_location.setdefault(loc3, {})
-                        justiz_details_by_location[loc3][model] = justiz_details_by_location[loc3].get(model, 0) + 1
+                    if len(model)<4 or is_mac_like(model):
+                        model="Unknown"
+                except Exception: pass
+            model_counts[model] = model_counts.get(model,0)+1
+            if sh and loc:
+                if is_jva:
+                    jva_model_counts[model] = jva_model_counts.get(model,0)+1
+                    jva_details_by_location.setdefault(loc,{})[model] = jva_details_by_location.setdefault(loc,{}).get(model,0)+1
+                else:
+                    justiz_model_counts[model] = justiz_model_counts.get(model,0)+1
+                    justiz_details_by_location.setdefault(loc,{})[model] = justiz_details_by_location.setdefault(loc,{}).get(model,0)+1
 
-            # VLAN usage per location and per switch
+            # VLAN
             vlan = (r.get("Voice VLAN") or "").strip()
-            if vlan and sh:
-                try:
-                    from api.stats import extract_location as _ex
-                    loc4 = _ex(sh)
-                except Exception:
-                    loc4 = None
-                if loc4:
-                    details = location_details.setdefault(loc4, {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []})
-                    details["vlans"][vlan] = details["vlans"].get(vlan, 0) + 1
-                    if sh not in details["switch_vlans"]:
-                        details["switch_vlans"][sh] = {}
-                    details["switch_vlans"][sh][vlan] = details["switch_vlans"][sh].get(vlan, 0) + 1
+            if vlan and loc:
+                det = location_details.setdefault(loc,{"vlans":{},"switches":set(),"switch_vlans":{},"kem_phones":[]})
+                det["vlans"][vlan] = det["vlans"].get(vlan,0)+1
+                if sh not in det["switch_vlans"]:
+                    det["switch_vlans"][sh] = {}
+                det["switch_vlans"][sh][vlan] = det["switch_vlans"][sh].get(vlan,0)+1
 
-        # Format arrays
-        phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]; phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-        phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
-        phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+        # Format globals
+        phones_by_model = sorted(([{"model":m,"count":c} for m,c in model_counts.items()]), key=lambda x: (-int(x["count"]), x["model"]))
+        phones_by_model_justiz = sorted(([{"model":m,"count":c} for m,c in justiz_model_counts.items()]), key=lambda x: (-int(x["count"]), x["model"]))
+        phones_by_model_jva = sorted(([{"model":m,"count":c} for m,c in jva_model_counts.items()]), key=lambda x: (-int(x["count"]), x["model"]))
         total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
 
-        # Detail arrays for UI
-        def _city_name(code3: str) -> str:
+        def _city_name(cd: str) -> str:
             try:
                 from api.stats import resolve_city_name
-                return resolve_city_name(code3)
-            except Exception:
-                return code3
+                return resolve_city_name(cd)
+            except Exception: return cd
+
         phones_by_model_justiz_details = []
-        for location, models in justiz_details_by_location.items():
-            location_total = sum(models.values())
-            ml = [{"model": m, "count": c} for m, c in models.items()]; ml.sort(key=lambda x: (-x["count"], x["model"]))
-            code3 = location[:3] if location and len(location) >= 3 else ""
-            cname = _city_name(code3) if code3 else ""
-            disp = f"{location} - {cname}" if cname and cname != code3 else location
-            phones_by_model_justiz_details.append({"location": location, "locationDisplay": disp, "totalPhones": location_total, "models": ml})
-        phones_by_model_justiz_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+        for loc, models in justiz_details_by_location.items():
+            ml = sorted(([{"model":m,"count":c} for m,c in models.items()]), key=lambda x: (-int(x["count"]), x["model"]))
+            code3 = loc[:3] if len(loc)>=3 else ""; cname=_city_name(code3) if code3 else ""; disp=f"{loc} - {cname}" if cname and cname!=code3 else loc
+            phones_by_model_justiz_details.append({"location":loc,"locationDisplay":disp,"totalPhones":sum(models.values()),"models":ml})
+        phones_by_model_justiz_details.sort(key=lambda x:(-x["totalPhones"], x["location"]))
 
         phones_by_model_jva_details = []
-        for location, models in jva_details_by_location.items():
-            location_total = sum(models.values())
-            ml = [{"model": m, "count": c} for m, c in models.items()]; ml.sort(key=lambda x: (-x["count"], x["model"]))
-            code3 = location[:3] if location and len(location) >= 3 else ""
-            cname = _city_name(code3) if code3 else ""
-            disp = f"{location} - {cname}" if cname and cname != code3 else location
-            phones_by_model_jva_details.append({"location": location, "locationDisplay": disp, "totalPhones": location_total, "models": ml})
-        phones_by_model_jva_details.sort(key=lambda x: (-x["totalPhones"], x["location"]))
+        for loc, models in jva_details_by_location.items():
+            ml = sorted(([{"model":m,"count":c} for m,c in models.items()]), key=lambda x: (-int(x["count"]), x["model"]))
+            code3 = loc[:3] if len(loc)>=3 else ""; cname=_city_name(code3) if code3 else ""; disp=f"{loc} - {cname}" if cname and cname!=code3 else loc
+            phones_by_model_jva_details.append({"location":loc,"locationDisplay":disp,"totalPhones":sum(models.values()),"models":ml})
+        phones_by_model_jva_details.sort(key=lambda x:(-x["totalPhones"], x["location"]))
 
         metrics = {
-            "totalPhones": total_phones,
+            "totalPhones": len(rows),
             "totalSwitches": len(switches),
             "totalLocations": len(locations),
             "totalCities": len(city_codes),
@@ -389,51 +364,44 @@ def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv") -> 
             "cityCodes": sorted(list(city_codes)),
         }
 
-        # Persist global stats snapshot
         ok = opensearch_config.index_stats_snapshot(file=fm.name, date=date_str, metrics=metrics)
 
-        # Build per-location docs
-        def vlan_key(item):
+        def vlan_key(item: Dict[str, Any]):
             v = item["vlan"]
-            try:
-                return (0, int(v))
-            except:
-                return (1, v)
+            try: return (0,int(v))
+            except: return (1,v)
+
         loc_docs = []
-        for k, agg in per_loc_counts.items():
-            details = location_details.get(k, {"vlans": {}, "switches": set(), "switch_vlans": {}, "kem_phones": []})
-            vlan_usage = [{"vlan": v, "count": c} for v, c in details["vlans"].items()]
-            vlan_usage.sort(key=vlan_key)
+        for loc, agg in per_loc_counts.items():
+            det = location_details.get(loc,{"vlans":{} ,"switches":set(),"switch_vlans":{},"kem_phones":[]})
+            vlan_usage = sorted(([{"vlan":v,"count":c} for v,c in det["vlans"].items()]), key=vlan_key)
             switches_fmt = []
-            sw_vlans = details.get("switch_vlans", {})
-            for sw in sorted(details["switches"]):
-                vl = [{"vlan": v, "count": c} for v, c in sw_vlans.get(sw, {}).items()]
-                vl.sort(key=vlan_key)
-                switches_fmt.append({"hostname": sw, "vlans": vl})
-            # Prepare model lists for this location from details dicts
-            jm = justiz_details_by_location.get(k, {})
-            jvm = jva_details_by_location.get(k, {})
-            allm: Dict[str, int] = {}
-            for m, c in jm.items(): allm[m] = allm.get(m, 0) + c
-            for m, c in jvm.items(): allm[m] = allm.get(m, 0) + c
-            tolist = lambda d: sorted(([{"model": m, "count": c} for m, c in d.items()]), key=lambda x: (-x["count"], x["model"]))
+            for sw in sorted(det["switches"]):
+                vl = det.get("switch_vlans",{}).get(sw,{})
+                sw_vlans_sorted = sorted(([{"vlan":v,"count":c} for v,c in vl.items()]), key=vlan_key)
+                switches_fmt.append({"hostname": sw, "vlans": sw_vlans_sorted})
+            jm_raw = justiz_details_by_location.get(loc, {})
+            jvm_raw = jva_details_by_location.get(loc, {})
+            all_raw: Dict[str,int] = {}
+            for source in (jm_raw, jvm_raw):
+                for m,c in source.items():
+                    all_raw[m] = all_raw.get(m,0)+c
+            tolist = lambda d: sorted(([{"model":m,"count":c} for m,c in d.items()]), key=lambda x:(-int(x["count"]), x["model"]))
             loc_docs.append({
-                "key": k,
+                "key": loc,
                 "mode": "code",
                 "totalPhones": agg["totalPhones"],
                 "totalSwitches": agg["totalSwitches"],
-                # Align to unique KEM phones count based on kem_phones list when available
-                "phonesWithKEM": int(len(details.get("kem_phones", []))),
-                "phonesByModel": tolist(allm),
-                "phonesByModelJustiz": tolist(jm),
-                "phonesByModelJVA": tolist(jvm),
+                "phonesWithKEM": agg.get("phonesWithKEM",0),
+                "phonesByModel": tolist(all_raw),
+                "phonesByModelJustiz": tolist(jm_raw),
+                "phonesByModelJVA": tolist(jvm_raw),
                 "vlanUsage": vlan_usage,
                 "switches": switches_fmt,
-                "kemPhones": details.get("kem_phones", []),
+                "kemPhones": det.get("kem_phones", []),
             })
         if loc_docs:
             opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
-
         return {"status": "success" if ok else "error", "message": "Snapshot with details indexed" if ok else "Failed to index snapshot with details", "file": fm.name, "date": date_str, "loc_docs": len(loc_docs)}
     except Exception as e:
         logger.error(f"snapshot_current_with_details failed: {e}")
@@ -1264,6 +1232,20 @@ def index_all_csv_files(self, directory_path: str) -> dict:
     # Protection against concurrent indexing tasks
     try:
         index_state = load_state()
+
+        # Fix: Nach Reindex explizit index_csv für aktuelle Datei ausführen (Location-Statistiken)
+        current_file_path = Path(directory_path) / "netspeed.csv"
+        if current_file_path.exists():
+            try:
+                logger.info("Triggering index_csv for current netspeed.csv after reindex (location stats fix)")
+                from tasks.tasks import snapshot_current_with_details
+                from datetime import datetime
+                # Schreibe Location-Daten mit aktuellem Datum
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                result = snapshot_current_with_details(file_path=str(current_file_path), force_date=today_str)
+                logger.info(f"snapshot_current_with_details result: {result}")
+            except Exception as e:
+                logger.error(f"snapshot_current_with_details for current netspeed.csv failed: {e}")
         active_task = index_state.get("active_task", {})
         if active_task.get("status") == "running":
             existing_task_id = active_task.get("task_id")
