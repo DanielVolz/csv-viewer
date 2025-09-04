@@ -352,10 +352,30 @@ async def reindex_all_files():
         # Trigger the Celery task asynchronously
         task = index_all_csv_files.delay(csv_dir)
 
+        # Best-effort: queue snapshot task (global + per-location) AFTER bulk reindex
+        snapshot_queued = False
+        try:
+            from tasks.tasks import snapshot_current_with_details as _snap
+            try:
+                _snap.delay()  # default path /app/data/netspeed.csv
+                snapshot_queued = True
+                logger.info("Queued snapshot_current_with_details after reindex_all_files")
+            except Exception as e:
+                logger.debug(f"Could not queue snapshot_current_with_details (bulk): {e}")
+            if not snapshot_queued:
+                try:
+                    logger.info("Running snapshot_current_with_details inline (fallback after reindex_all_files)")
+                    _ = _snap()
+                except Exception as e:
+                    logger.warning(f"Inline snapshot_current_with_details failed after reindex_all_files: {e}")
+        except Exception as e:
+            logger.debug(f"snapshot_current_with_details import failed after reindex_all_files: {e}")
+
         return {
             "success": True,
-            "message": "Reindexing task has been triggered",
-            "task_id": task.id
+            "message": "Reindexing task has been triggered (snapshot queued)" if snapshot_queued else "Reindexing task has been triggered (snapshot fallback attempted)",
+            "task_id": task.id,
+            "snapshot_queued": snapshot_queued
         }
 
     except Exception as e:
