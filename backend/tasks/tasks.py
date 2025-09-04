@@ -548,11 +548,13 @@ def index_csv(file_path: str) -> dict:
 
                     # Process model name
                     model = (r.get("Model Name") or "").strip() or "Unknown"
-                    # Skip invalid models (MAC-like strings)
+                    # Always allow CP-8832, never filter it out
                     if model != "Unknown":
                         try:
                             from api.stats import is_mac_like
-                            if len(model) < 4 or is_mac_like(model):
+                            if model == "CP-8832":
+                                pass  # Do not filter CP-8832
+                            elif len(model) < 4 or is_mac_like(model):
                                 model = "Unknown"
                         except Exception:
                             pass
