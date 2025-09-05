@@ -96,14 +96,6 @@ def intelligent_column_mapping(row: List[str]) -> Dict[str, str]:
         Dictionary mapping column names to values
     """
 
-    # Robuste Normalisierung auf 16 Spalten.
-    # Unterstützte Eingangsvarianten:
-    #  - 16 Spalten (vollständig: IP, Line, Serial, Model, KEM, KEM 2, MAC, MAC2, Subnet, VLAN, Speed1, Speed2, SwitchHost, SwitchPort, SpeedSw, SpeedPC)
-    #  - 15 Spalten (nur 1 KEM Spalte vorhanden -> legt KEM 2 = "")
-    #  - 14 Spalten (keine KEM-Spalten -> KEM und KEM 2 = "")
-    #  - <14: wird aufgefüllt, Rest leer
-    # Wir verlassen uns dabei auf die bekannte Reihenfolge der ursprünglichen Export-Dateien.
-
     full_headers = KNOWN_HEADERS[16]
     out: Dict[str, str] = {h: "" for h in full_headers}
 
@@ -126,18 +118,94 @@ def intelligent_column_mapping(row: List[str]) -> Dict[str, str]:
         if not out.get("KEM 2"):
             out["KEM 2"] = ""
         return out
-    elif col_count == 14:
-        # Annahme: Format ohne KEM: KNOWN_HEADERS[14]
-        base14 = KNOWN_HEADERS[14]
-        for i, h in enumerate(base14):
+    elif col_count >= 13:  # 13 oder 14 Spalten
+        # Erkennung von defekten CP-8832 Zeilen anhand der Datenstruktur
+        # Normale Zeile: Spalte 5 und 6 sind MAC-Adressen, Spalte 10 ist Switch Hostname
+        # Defekte Zeile: Spalte 5 und 6 sind MAC-Adressen, aber Spalte 9 ist Switch Hostname (verschoben)
+
+        # Prüfe ob Spalte 9 wie ein Switch Hostname aussieht (enthält Domain)
+        is_defective_cp8832 = False
+        if col_count >= 10:
+            col9_content = cells[9] if len(cells) > 9 else ""
+            col10_content = cells[10] if len(cells) > 10 else ""
+
+            # Defekte Zeile wenn Spalte 9 einen Switch Hostname enthält
+            # (Format: xxxZSL####P.juwin.bayern.de)
+            is_defective_cp8832 = (
+                "ZSL" in col9_content and ".juwin.bayern.de" in col9_content
+            )
+
+        if is_defective_cp8832:
+            # DEFEKTE CP-8832 Zeile: Speed 2 fehlt, daher ist alles ab Switch Hostname verschoben
+            # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, Speed1, SwitchHost, SwitchPort, SpeedSw, [eventuell leer]
+            mapping_defective = [
+                "IP Address",        # 0
+                "Line Number",       # 1
+                "Serial Number",     # 2
+                "Model Name",        # 3
+                "MAC Address",       # 4
+                "MAC Address 2",     # 5
+                "Subnet Mask",       # 6
+                "Voice VLAN",        # 7
+                "Speed 1",           # 8
+                "Switch Hostname",   # 9  ← Hierher verschoben!
+                "Switch Port",       # 10
+                "Speed Switch-Port"  # 11
+            ]
+
+            for i, header in enumerate(mapping_defective):
+                if i < min(col_count, len(mapping_defective)):
+                    out[header] = cells[i]
+
+            # Fehlende Felder leer lassen
+            out["KEM"] = ""
+            out["KEM 2"] = ""
+            out["Speed 2"] = ""
+            out["Speed PC-Port"] = ""
+
+        else:
+            # Normales 14-Spalten Format ohne KEM: KNOWN_HEADERS[14]
+            base14 = KNOWN_HEADERS[14]
+            for i, h in enumerate(base14):
+                if i < col_count:
+                    out[h] = cells[i]
+            # KEM Felder leeren
+            out["KEM"] = ""
+            out["KEM 2"] = ""
+
+        return out
+    elif col_count == 12:
+        # SPECIAL CASE: CP-8832 und ähnliche Telefone ohne KEM-Spalten haben nur 12 Spalten
+        # Diese Telefone haben KEINE KEM-Spalte, daher sind alle Spalten ab MAC Address um 2 nach links verschoben
+        # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, Speed1, SwitchHost, SwitchPort, SpeedSw
+        mapping_12 = [
+            "IP Address",        # 0
+            "Line Number",       # 1
+            "Serial Number",     # 2
+            "Model Name",        # 3
+            "MAC Address",       # 4 (keine KEM-Spalten davor)
+            "MAC Address 2",     # 5
+            "Subnet Mask",       # 6
+            "Voice VLAN",        # 7
+            "Speed 1",           # 8
+            "Switch Hostname",   # 9 (verschoben von Spalte 11 auf 9!)
+            "Switch Port",       # 10
+            "Speed Switch-Port"  # 11
+        ]
+
+        for i, header in enumerate(mapping_12):
             if i < col_count:
-                out[h] = cells[i]
-        # KEM Felder leeren
+                out[header] = cells[i]
+
+        # KEM-Felder leer lassen
         out["KEM"] = ""
         out["KEM 2"] = ""
+        out["Speed 2"] = ""  # Auch Speed 2 fehlt bei 12-Spalten Format
+        out["Speed PC-Port"] = ""  # Auch Speed PC-Port fehlt
+
         return out
     else:
-        # Weniger als 14 Spalten -> best effort: einfach in Reihenfolge füllen
+        # Weniger als 12 Spalten -> best effort: einfach in Reihenfolge füllen
         for i, val in enumerate(cells):
             if i < len(full_headers):
                 out[full_headers[i]] = val

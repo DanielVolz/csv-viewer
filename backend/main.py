@@ -44,15 +44,8 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start file watcher: {e}")
 
-    # NEU: Initialisierung aller CSVs und Statistiksnapshots beim Backend-Start (synchron/blockierend)
-    try:
-        logger.info("Triggering full CSV and stats indexing on startup (synchronous)...")
-        from tasks.tasks import index_all_csv_files
-        # Starte synchron/blockierend, indem die eigentliche Funktion aufgerufen wird
-        result = index_all_csv_files.__wrapped__("/app/data")
-        logger.info(f"Full CSV/stats indexing completed: {result}")
-    except Exception as e:
-        logger.error(f"Failed to trigger full CSV/stats indexing on startup: {e}")
+    # Indexierung wird über File Watcher oder manuelle API-Calls gestartet
+    logger.info("Backend startup completed - indexing will be triggered by file watcher or manual API calls")
 
 
 @app.on_event("shutdown")

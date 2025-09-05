@@ -147,15 +147,17 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
                 except Exception:
                     pass
             model_counts[model] = model_counts.get(model, 0) + 1
-            if sh:
-                try:
-                    from api.stats import is_jva_switch
-                    if is_jva_switch(sh):
-                        jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
-                    else:
-                        justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
-                except Exception:
+            # Always assign to institution-specific counts, even for devices without switch hostname
+            try:
+                from api.stats import is_jva_switch
+                if is_jva_switch(sh):
+                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                else:
+                    # Devices without switch hostname default to Justiz
                     justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+            except Exception:
+                # Fallback: assign to Justiz on any error
+                justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
 
         if unknown_models_debug:
             logger.warning(f"DEBUG: Folgende Modelle wurden als 'Unknown' ersetzt: {unknown_models_debug}")
@@ -163,13 +165,6 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
         phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]; phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
         phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
         phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
-        # Guarantee CP-8832 is present in both lists if present globally
-        cp8832 = next((x for x in phones_by_model if x["model"] == "CP-8832"), None)
-        if cp8832:
-            if not any(x["model"] == "CP-8832" for x in phones_by_model_justiz):
-                phones_by_model_justiz.append({"model": "CP-8832", "count": cp8832["count"]})
-            if not any(x["model"] == "CP-8832" for x in phones_by_model_jva):
-                phones_by_model_jva.append({"model": "CP-8832", "count": cp8832["count"]})
         total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
 
         metrics = {
