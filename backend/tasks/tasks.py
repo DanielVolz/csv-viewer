@@ -401,7 +401,12 @@ def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv", for
                 "kemPhones": det.get("kem_phones", []),
             })
         if loc_docs:
+            logger.info(f"Indexing {len(loc_docs)} location documents to stats_netspeed_loc for file {fm.name}, date {date_str}")
             opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
+            logger.info(f"Successfully indexed location statistics for {len(loc_docs)} locations")
+        else:
+            logger.warning("No location documents to index - this will cause missing View by Location data!")
+
         return {"status": "success" if ok else "error", "message": "Snapshot with details indexed" if ok else "Failed to index snapshot with details", "file": fm.name, "date": date_str, "loc_docs": len(loc_docs)}
     except Exception as e:
         logger.error(f"snapshot_current_with_details failed: {e}")
@@ -1235,19 +1240,32 @@ def index_all_csv_files(self, directory_path: str) -> dict:
     try:
         index_state = load_state()
 
-        # Fix: Nach Reindex explizit index_csv für aktuelle Datei ausführen (Location-Statistiken)
+        # Fix: Nach Reindex explizit snapshot_current_with_details für aktuelle Datei ausführen (Location-Statistiken)
         current_file_path = Path(directory_path) / "netspeed.csv"
         if current_file_path.exists():
             try:
-                logger.info("Triggering index_csv for current netspeed.csv after reindex (location stats fix)")
+                logger.info("Executing snapshot_current_with_details for current netspeed.csv after reindex (location stats fix)")
                 from tasks.tasks import snapshot_current_with_details
                 from datetime import datetime
                 # Schreibe Location-Daten mit aktuellem Datum
                 today_str = datetime.now().strftime('%Y-%m-%d')
+
+                # Execute inline to ensure it completes immediately
                 result = snapshot_current_with_details(file_path=str(current_file_path), force_date=today_str)
                 logger.info(f"snapshot_current_with_details result: {result}")
+
+                # Invalidate caches immediately after creating location stats
+                try:
+                    from api.stats import invalidate_caches as _invalidate
+                    _invalidate("post-reindex location stats creation")
+                    logger.info("Invalidated stats caches after location stats creation")
+                except Exception as cache_e:
+                    logger.debug(f"Cache invalidation failed: {cache_e}")
+
             except Exception as e:
                 logger.error(f"snapshot_current_with_details for current netspeed.csv failed: {e}")
+                # This is critical for location stats, so we should still return success but warn
+                logger.warning("Location statistics may be incomplete - manual reindex recommended")
         active_task = index_state.get("active_task", {})
         if active_task.get("status") == "running":
             existing_task_id = active_task.get("task_id")
@@ -1524,6 +1542,27 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                     logger.warning(f"Data repair failed: {repair_result}")
             except Exception as e:
                 logger.error(f"Post-indexing data repair failed: {e}")
+
+            # CRITICAL: Ensure location statistics are created after all indexing
+            try:
+                logger.info("Final creation of location statistics after all indexing completed")
+                from tasks.tasks import snapshot_current_with_details
+                from datetime import datetime
+                today_str = datetime.now().strftime('%Y-%m-%d')
+
+                final_result = snapshot_current_with_details(file_path=str(current_file_path), force_date=today_str)
+                logger.info(f"Final location statistics result: {final_result}")
+
+                # Final cache invalidation
+                try:
+                    from api.stats import invalidate_caches as _invalidate
+                    _invalidate("final post-indexing location stats")
+                    logger.info("Final cache invalidation completed")
+                except Exception as cache_e:
+                    logger.debug(f"Final cache invalidation failed: {cache_e}")
+
+            except Exception as e:
+                logger.error(f"Final location statistics creation failed: {e}")
         else:
             logger.info(f"Current file not found for data repair: {current_file_path}")
 

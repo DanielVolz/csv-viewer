@@ -127,30 +127,24 @@ class CSVFileHandler(FileSystemEventHandler):
 
             # Also queue a richer snapshot that computes detail arrays and per-location details
             try:
-                logger.info("Queuing detailed current stats snapshot (models by location, KEM phones, VLANs)...")
+                logger.info("Executing detailed current stats snapshot (models by location, KEM phones, VLANs)...")
                 from tasks.tasks import snapshot_current_with_details
                 csv_file = str(self.current_csv_path)
-                queued = False
+
+                # Execute inline instead of queuing to ensure it runs immediately
+                logger.info("Running detailed snapshot inline for immediate execution")
+                result = snapshot_current_with_details(csv_file)
+                logger.info(f"Detailed snapshot result: {result}")
+
+                # Also try to queue for backup (best effort)
                 try:
                     snapshot_current_with_details.delay(csv_file)
-                    queued = True
+                    logger.info("Also queued backup snapshot task")
                 except Exception as e:
-                    logger.debug(f"Could not queue snapshot_current_with_details (will run inline): {e}")
-                if not queued:
-                    try:
-                        logger.info("Running detailed snapshot inline (dev fallback)")
-                        _ = snapshot_current_with_details(csv_file)
-                    except Exception as e:
-                        logger.warning(f"Inline detailed snapshot failed: {e}")
-                # In development, also run inline every time for determinism
-                if os.environ.get("NODE_ENV") == "development":
-                    try:
-                        logger.info("Development mode: executing detailed snapshot inline for determinism")
-                        _ = snapshot_current_with_details(csv_file)
-                    except Exception as e:
-                        logger.warning(f"Dev inline detailed snapshot failed: {e}")
+                    logger.debug(f"Could not queue backup snapshot_current_with_details: {e}")
+
             except Exception as e:
-                logger.debug(f"Failed to queue snapshot_current_with_details: {e}")
+                logger.warning(f"Failed to execute detailed snapshot: {e}")
 
             # Invalidate in-process stats caches so UI sees changes immediately
             try:
@@ -173,6 +167,42 @@ class CSVFileHandler(FileSystemEventHandler):
             logger.info("Triggering full reindexing of all netspeed files...")
             task = index_all_csv_files.delay(str(self.data_dir))
             logger.info(f"Full reindexing task started with ID: {task.id}")
+
+            # Step 3: Safety net - ensure location statistics are created after a delay
+            import threading
+            import time
+
+            def ensure_location_stats():
+                try:
+                    # Wait for indexing to potentially complete
+                    time.sleep(10)
+                    logger.info("Safety net: Ensuring location statistics are created...")
+
+                    from tasks.tasks import snapshot_current_with_details
+                    from datetime import datetime
+
+                    current_csv = str(self.current_csv_path)
+                    today_str = datetime.now().strftime('%Y-%m-%d')
+
+                    # Execute inline to guarantee execution
+                    safety_result = snapshot_current_with_details(file_path=current_csv, force_date=today_str)
+                    logger.info(f"Safety net location statistics result: {safety_result}")
+
+                    # Final cache invalidation
+                    try:
+                        from api.stats import invalidate_caches as _invalidate
+                        _invalidate("safety net location stats")
+                        logger.info("Safety net cache invalidation completed")
+                    except Exception as cache_e:
+                        logger.debug(f"Safety net cache invalidation failed: {cache_e}")
+
+                except Exception as safety_e:
+                    logger.warning(f"Safety net location statistics creation failed: {safety_e}")
+
+            # Start safety net in background thread
+            safety_thread = threading.Thread(target=ensure_location_stats, daemon=True)
+            safety_thread.start()
+            logger.info("Started safety net thread for location statistics")
 
         except Exception as e:
             logger.error(f"Error handling netspeed files change: {e}")

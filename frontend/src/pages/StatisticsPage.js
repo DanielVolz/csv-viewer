@@ -1,9 +1,10 @@
 import React from 'react';
-import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider } from '@mui/material';
+import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress } from '@mui/material';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CloseIcon from '@mui/icons-material/Close';
+import SearchIcon from '@mui/icons-material/Search';
 import PhoneIcon from '@mui/icons-material/Phone';
 import RouterIcon from '@mui/icons-material/Router';
 import LocationOnIcon from '@mui/icons-material/LocationOn';
@@ -410,8 +411,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   // Location-specific state
   const [locInput, setLocInput] = React.useState('');
-  const [locOptions, setLocOptions] = React.useState([]);
-  const [allLocOptions, setAllLocOptions] = React.useState([]); // Cache all locations
   const [locError, setLocError] = React.useState(null);
 
   // Accordion expansion state for View by Location sections
@@ -464,22 +463,15 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       return '';
     }
   });
-  const [fieldFocused, setFieldFocused] = React.useState(false);
-  const [isSearching, setIsSearching] = React.useState(false);
-  const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(-1); // For keyboard navigation
 
   // Simple handlers for the new TextField approach
   const handleLocationInputChange = React.useCallback((e) => {
     const val = e.target.value;
-    setLocalInput(val); // Update local state immediately (no lag)
-    setSelectedOptionIndex(-1); // Reset keyboard selection
+    setLocalInput(val);
 
     // Clear selection if input is empty
     if (!val || val.trim() === '') {
       setLocSelected(null);
-      setIsSearching(false);
-
-      // Immediately clear statistics when input is cleared
       setLocStats({
         totalPhones: 0,
         totalSwitches: 0,
@@ -492,55 +484,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         kemPhones: [],
       });
       setLocStatsLoading(false);
-    } else if (val.length >= 2) {
-      setIsSearching(true); // Start search indicator
     }
   }, []);
-
-  // Debounce the actual locInput update for filtering (prevents lag)
-  React.useEffect(() => {
-    const timer = setTimeout(() => {
-      setLocInput(localInput);
-      setIsSearching(false); // Search completed
-    }, 300); // Increased to 300ms to reduce search frequency
-
-    return () => clearTimeout(timer);
-  }, [localInput]);
-
-  // Reset selection when user starts typing (if input doesn't match selected location)
-  React.useEffect(() => {
-    if (locSelected && localInput) {
-      const cityCode = locSelected.slice(0, 3);
-      const cityName = cityNameByCode3[cityCode];
-      const expectedDisplay = cityName ? `${locSelected} (${cityName})` : locSelected;
-
-      // If user is typing something different than the expected display, clear selection
-      if (localInput !== expectedDisplay && localInput !== locSelected) {
-        setLocSelected(null);
-
-        // Also clear stats when selection is cleared due to typing mismatch
-        setLocStats({
-          totalPhones: 0,
-          totalSwitches: 0,
-          phonesWithKEM: 0,
-          phonesByModel: [],
-          phonesByModelJustiz: [],
-          phonesByModelJVA: [],
-          vlanUsage: [],
-          switches: [],
-          kemPhones: [],
-        });
-        setLocStatsLoading(false);
-      }
-    }
-  }, [localInput, locSelected, cityNameByCode3]);
-
-  // Save selected location to localStorage when it changes
-  React.useEffect(() => {
-    if (saveStatisticsPrefs) {
-      saveStatisticsPrefs({ lastSelectedLocation: locSelected });
-    }
-  }, [locSelected, saveStatisticsPrefs]);
 
   // Update localInput display when city names are loaded or location changes
   React.useEffect(() => {
@@ -554,121 +499,29 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         setLocalInput(displayValue);
       }
     }
-  }, [locSelected, cityNameByCode3, localInput]);
+  }, [cityNameByCode3, localInput]);
 
-  const handleLocationFocus = React.useCallback(() => {
-    setFieldFocused(true);
-    setSelectedOptionIndex(-1); // Reset keyboard selection when focusing
-  }, []);
-
-  const handleLocationBlur = React.useCallback((e) => {
-    // Delay hiding dropdown to allow clicking on options
-    setTimeout(() => setFieldFocused(false), 150);
-
-    const val = (e.target.value || '').trim().toUpperCase();
-    if (val && /^[A-Z]{3}[0-9]{2}$/.test(val) && (!Array.isArray(locOptions) || !locOptions.includes(val))) {
-      // Valid format but location doesn't exist
-      setSnackbar({
-        open: true,
-        message: `Location "${val}" does not exist. Please select from available locations.`
-      });
-      // Clear the input field
-      setLocInput('');
+  // Save selected location to localStorage when it changes
+  React.useEffect(() => {
+    if (saveStatisticsPrefs) {
+      saveStatisticsPrefs({ lastSelectedLocation: locSelected });
     }
-  }, [locOptions]);
+  }, [locSelected, saveStatisticsPrefs]);
 
-  const handleLocationKeyDown = React.useCallback((e) => {
-    const visibleOptions = locOptions.slice(0, 50);
-    const hasCityHint = localInput.length === 3 && locOptions.length > 0 && cityNameByCode3[localInput.toUpperCase()];
-    const totalOptions = hasCityHint ? visibleOptions.length + 1 : visibleOptions.length; // +1 for city hint
-
-    if (e.key === 'ArrowDown') {
+  const handleKeyDown = React.useCallback((e) => {
+    if (e.key === 'Enter') {
       e.preventDefault();
-      setSelectedOptionIndex(prev => {
-        const next = prev < totalOptions - 1 ? prev + 1 : 0;
-        return next;
-      });
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSelectedOptionIndex(prev => {
-        const next = prev > 0 ? prev - 1 : totalOptions - 1;
-        return next;
-      });
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-
-      if (selectedOptionIndex >= 0 && selectedOptionIndex < totalOptions) {
-        if (hasCityHint && selectedOptionIndex === 0) {
-          // Select city search (first option)
-          const cityCode = localInput.toUpperCase();
-          const cityName = cityNameByCode3[cityCode];
-          setLocSelected(cityCode);
-          setLocalInput(`${cityCode} (${cityName})`);
-          setLocInput(cityCode);
-          setFieldFocused(false);
-          setSelectedOptionIndex(-1);
-        } else {
-          // Select specific location option
-          const optionIndex = hasCityHint ? selectedOptionIndex - 1 : selectedOptionIndex;
-          if (optionIndex >= 0 && optionIndex < visibleOptions.length) {
-            const selectedOption = visibleOptions[optionIndex];
-            const cityCode = selectedOption.slice(0, 3);
-            const cityName = cityNameByCode3[cityCode];
-            const displayValue = cityName ? `${selectedOption} (${cityName})` : selectedOption;
-
-            setLocSelected(selectedOption);
-            setLocalInput(displayValue);
-            setLocInput(selectedOption);
-            setFieldFocused(false);
-            setSelectedOptionIndex(-1);
-          }
-        }
-      } else {
-        // Fallback to original logic
-        const val = (e.target.value || '').trim();
-        const upperVal = val.toUpperCase();
-        if (Array.isArray(locOptions) && locOptions.includes(upperVal)) {
-          const cityCode = upperVal.slice(0, 3);
-          const cityName = cityNameByCode3[cityCode];
-          const displayValue = cityName ? `${upperVal} (${cityName})` : upperVal;
-
-          setLocSelected(upperVal);
-          setLocalInput(displayValue);
-          setLocInput(upperVal);
-        } else if (upperVal && /^[A-Z]{3}[0-9]{2}$/.test(upperVal)) {
-          setSnackbar({
-            open: true,
-            message: `Location "${upperVal}" does not exist. Please select from available locations.`
-          });
-          setLocalInput('');
-          setLocInput('');
-        }
-      }
-
-      if (e.target && typeof e.target.blur === 'function') {
-        e.target.blur();
-      }
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setFieldFocused(false);
-      setSelectedOptionIndex(-1);
-      if (e.target && typeof e.target.blur === 'function') {
-        e.target.blur();
+      const val = (e.target.value || '').trim().toUpperCase();
+      if (val && /^[A-Z]{3}[0-9]{2}$/.test(val)) {
+        setLocSelected(val);
+        setLocInput(val);
+        // Update display with city name if available
+        const cityCode = val.slice(0, 3);
+        const cityName = cityNameByCode3[cityCode];
+        const displayValue = cityName ? `${val} (${cityName})` : val;
+        setLocalInput(displayValue);
       }
     }
-  }, [locOptions, selectedOptionIndex, cityNameByCode3, localInput]);
-
-  // Helper function to select a location and show formatted value in input
-  const selectLocation = React.useCallback((option) => {
-    const cityCode = option.slice(0, 3);
-    const cityName = cityNameByCode3[cityCode];
-    const displayValue = cityName ? `${option} (${cityName})` : option;
-
-    setLocSelected(option);
-    setLocalInput(displayValue); // Show formatted value in input
-    setLocInput(option); // But use raw location code for API
-    setFieldFocused(false);
-    setSelectedOptionIndex(-1);
   }, [cityNameByCode3]);
 
   const handleCityNameChange = React.useCallback((_, value) => {
@@ -1026,74 +879,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       setBackfillInfo('Failed to trigger backfill. Check backend logs.');
     }
   }, []);
-
-  // Load ALL locations once at startup
-  React.useEffect(() => {
-    let abort = false;
-    const controller = new AbortController();
-
-    (async () => {
-      try {
-        setLocError(null);
-        // Use FAST OpenSearch-based API - now working!
-        const r = await fetch(`/api/stats/fast/locations?limit=1000`, { signal: controller.signal });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const json = await r.json();
-        if (abort) return;
-        const options = (json?.options || []).filter((o) => /^[A-Z]{3}[0-9]{2}$/.test(String(o)));
-        setAllLocOptions(options);
-        setLocOptions(options.slice(0, 50)); // Show first 50 initially (more results)
-      } catch (e) {
-        if (e.name === 'AbortError') return;
-        setLocError('Failed to load locations');
-      }
-    })();
-
-    return () => { abort = true; controller.abort(); };
-  }, []); // Only run once on mount
-
-  // Fast local filtering of cached locations (NO DEBOUNCING since localInput is already debounced)
-  React.useEffect(() => {
-    if (!allLocOptions.length) return;
-
-    // No additional debouncing needed since localInput -> locInput is already debounced
-    const input = locInput.trim().toUpperCase();
-    if (!input) {
-      setLocOptions(allLocOptions.slice(0, 50)); // Show more results when empty
-      return;
-    }
-
-    // Start filtering at 2 characters (e.g., "MX" to show "MXX09", "MXX17")
-    if (input.length < 2) {
-      setLocOptions([]);
-      return;
-    }
-
-    // Optimized filtering with prioritized results (exact matches first)
-    const exactMatches = [];
-    const startsWithMatches = [];
-    const containsMatches = [];
-
-    for (let i = 0; i < allLocOptions.length; i++) {
-      const option = allLocOptions[i].toUpperCase();
-      if (option === input) {
-        exactMatches.push(allLocOptions[i]);
-      } else if (option.startsWith(input)) {
-        startsWithMatches.push(allLocOptions[i]);
-      } else if (option.includes(input)) {
-        containsMatches.push(allLocOptions[i]);
-      }
-
-      // Limit total results for performance
-      if (exactMatches.length + startsWithMatches.length + containsMatches.length >= 100) {
-        break;
-      }
-    }
-
-    // Combine results with priority: exact > starts with > contains
-    const filtered = [...exactMatches, ...startsWithMatches, ...containsMatches].slice(0, 100);
-    setLocOptions(filtered);
-  }, [locInput, allLocOptions]);
 
   // Debounce locSelected changes to prevent API spam while typing
   React.useEffect(() => {
@@ -2085,186 +1870,66 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
         {/* Two search fields side by side */}
         <Grid container spacing={2} sx={{ mb: 2 }}>
-          {/* Location Code Search - Simplified for Performance */}
+          {/* Location Code Search */}
           <Grid item xs={12} md={6}>
-            <Box sx={{ position: 'relative' }}>
-              <TextField
-                label="Search by Location Code"
-                placeholder="Type 2+ letters (MX) or full code (MXX09)"
-                size="small"
-                fullWidth
-                value={localInput}
-                onChange={handleLocationInputChange}
-                onFocus={handleLocationFocus}
-                onBlur={handleLocationBlur}
-                onKeyDown={handleLocationKeyDown}
-                helperText={
-                  isSearching && localInput.length >= 2
-                    ? "Searching..."
-                    : localInput.length > 0 && localInput.length < 2
-                      ? "Type at least 2 characters to search"
-                      : localInput.length >= 2 && allLocOptions.length > 0 && locOptions.length === 0 && !locSelected
-                        ? "No matching locations found"
-                        : ""
-                }
-                InputProps={{
-                  endAdornment: locSelected && (
-                    <CloseIcon
-                      fontSize="small"
-                      onClick={() => {
-                        // Immediate clear - no delays
-                        setLocSelected(null);
-                        setLocalInput('');
-                        setLocInput('');
-                        setSelectedOptionIndex(-1);
-
-                        // Immediately clear statistics data to avoid delay
-                        setLocStats({
-                          totalPhones: 0,
-                          totalSwitches: 0,
-                          phonesWithKEM: 0,
-                          phonesByModel: [],
-                          phonesByModelJustiz: [],
-                          phonesByModelJVA: [],
-                          vlanUsage: [],
-                          switches: [],
-                          kemPhones: [],
-                        });
-                        setLocStatsLoading(false);
-
-                        // Clear from localStorage as well
-                        if (saveStatisticsPrefs) {
-                          saveStatisticsPrefs({ lastSelectedLocation: null });
-                        }
-                      }}
-                      sx={{
-                        cursor: 'pointer',
-                        '&:hover': { color: 'primary.main' }
-                      }}
-                    />
-                  ),
-                }}
-              />
-
-              {/* Modern dropdown list with improved design */}
-              {fieldFocused && locOptions.length > 0 && (
-                <Paper
-                  sx={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    right: 0,
-                    zIndex: 1300,
-                    maxHeight: 320,
-                    overflow: 'hidden',
-                    mt: 0.5,
-                    borderRadius: 2,
-                    border: 1,
-                    borderColor: 'primary.main',
-                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
-                  }}
-                  elevation={0}
-                >
-                  <Box sx={{ maxHeight: 320, overflowY: 'auto' }}>
-                    {/* Show hint for 3-letter city codes as first item */}
-                    {localInput.length === 3 && locOptions.length > 0 && (() => {
-                      const cityCode = localInput.toUpperCase();
-                      const cityName = cityNameByCode3[cityCode];
-                      const isSelected = selectedOptionIndex === 0;
-
-                      if (cityName) {
-                        return (
-                          <Box
-                            onClick={() => {
-                              // Search by city prefix (all locations starting with this code)
-                              setLocSelected(cityCode);
-                              setLocalInput(`${cityCode} (${cityName})`);
-                              setLocInput(cityCode);
-                              setFieldFocused(false);
-                              setSelectedOptionIndex(-1);
-                            }}
-                            sx={{
-                              px: 2,
-                              py: 1.5,
-                              backgroundColor: isSelected ? 'primary.dark' : 'primary.main',
-                              color: 'primary.contrastText',
-                              borderBottom: 1,
-                              borderColor: 'divider',
-                              cursor: 'pointer',
-                              borderLeft: isSelected ? 4 : 0,
-                              borderLeftColor: 'primary.contrastText',
-                              '&:hover': {
-                                backgroundColor: 'primary.dark'
-                              },
-                              transition: 'all 0.2s ease'
-                            }}
-                          >
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              🔍 Search all locations in {cityName}
-                            </Typography>
-                          </Box>
-                        );
-                      }
-                      return null;
-                    })()}
-
-                    {locOptions.slice(0, 50).map((option, index) => {
-                      const cityCode = option.slice(0, 3);
-                      const cityName = cityNameByCode3[cityCode];
-                      const hasCityHint = localInput.length === 3 && cityNameByCode3[localInput.toUpperCase()];
-                      const adjustedIndex = hasCityHint ? index + 1 : index; // Adjust for city hint
-                      const isSelected = adjustedIndex === selectedOptionIndex;
-
-                      return (
-                        <Box
-                          key={option}
-                          onClick={() => selectLocation(option)}
-                          sx={{
-                            px: 2,
-                            py: 1.5,
-                            cursor: 'pointer',
-                            backgroundColor: isSelected ? 'primary.light' : 'transparent',
-                            borderLeft: isSelected ? 4 : 0,
-                            borderLeftColor: 'primary.main',
-                            '&:hover': {
-                              backgroundColor: isSelected ? 'primary.light' : 'action.hover',
-                              borderLeft: 4,
-                              borderLeftColor: 'primary.main'
-                            },
-                            '&:not(:last-child)': {
-                              borderBottom: 1,
-                              borderColor: 'divider'
-                            },
-                            transition: 'all 0.2s ease'
+            <TextField
+              label="Search by Location Code"
+              placeholder="Enter location code (e.g., AUG01, NUE02)"
+              size="small"
+              fullWidth
+              value={localInput}
+              onChange={handleLocationInputChange}
+              onKeyDown={handleKeyDown}
+              error={!!locError}
+              helperText={locError || (locInput && !locSelected ? "Press Enter to search" : "")}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ color: 'action.disabled' }} />
+                  </InputAdornment>
+                ),
+                endAdornment: (
+                  <>
+                    {locStatsLoading && (
+                      <InputAdornment position="end">
+                        <CircularProgress size={20} />
+                      </InputAdornment>
+                    )}
+                    {locSelected && (
+                      <InputAdornment position="end">
+                        <CloseIcon
+                          fontSize="small"
+                          onClick={() => {
+                            setLocSelected(null);
+                            setLocalInput('');
+                            setLocInput('');
+                            setLocStats({
+                              totalPhones: 0,
+                              totalSwitches: 0,
+                              phonesWithKEM: 0,
+                              phonesByModel: [],
+                              phonesByModelJustiz: [],
+                              phonesByModelJVA: [],
+                              vlanUsage: [],
+                              switches: [],
+                              kemPhones: [],
+                            });
+                            setLocStatsLoading(false);
+                            if (saveStatisticsPrefs) {
+                              saveStatisticsPrefs({ lastSelectedLocation: null });
+                            }
                           }}
-                        >
-                          <Typography
-                            variant="body1"
-                            sx={{
-                              fontWeight: 600,
-                              color: isSelected ? 'primary.main' : 'text.primary'
-                            }}
-                          >
-                            {option}
-                          </Typography>
-                          {cityName && (
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                color: isSelected ? 'primary.dark' : 'text.secondary',
-                                mt: 0.25
-                              }}
-                            >
-                              📍 {cityName}
-                            </Typography>
-                          )}
-                        </Box>
-                      );
-                    })}
-                  </Box>
-                </Paper>
-              )}
-            </Box>
+                          sx={{
+                            cursor: 'pointer',
+                            '&:hover': { color: 'primary.main' }
+                          }}
+                        />
+                      </InputAdornment>
+                    )}
+                  </>
+                ),
+              }}
+            />
           </Grid>
 
           {/* City Name Search */}
