@@ -544,12 +544,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   }, [debouncedLocationSearch]);
 
   const selectLocationSuggestion = React.useCallback((suggestion) => {
-  // Format code: Nxx01
-  // Format: All X are lowercase, all other letters uppercase
-  const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
-  setLocSelected(formattedCode);
-  setLocalInput(suggestion.display.replace(suggestion.code, formattedCode));
-  setLocInput(formattedCode);
+    // Format code: Nxx01
+    // Format: All X are lowercase, all other letters uppercase
+    const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
+    setLocSelected(formattedCode);
+    setLocalInput(suggestion.display.replace(suggestion.code, formattedCode));
+    setLocInput(formattedCode);
     setShowLocationDropdown(false);
     setLocationSuggestions([]);
     setSelectedSuggestionIndex(-1);

@@ -36,13 +36,23 @@ app.include_router(stats.router)
 
 @app.on_event("startup")
 async def startup_event():
-    """Start file watcher on application startup."""
+    """Start file watcher and trigger full CSV/Stats indexing on application startup."""
     try:
         logger.info("Starting file watcher...")
         start_file_watcher("/app/data")
         logger.info("File watcher started successfully")
     except Exception as e:
         logger.error(f"Failed to start file watcher: {e}")
+
+    # NEU: Initialisierung aller CSVs und Statistiksnapshots beim Backend-Start (synchron/blockierend)
+    try:
+        logger.info("Triggering full CSV and stats indexing on startup (synchronous)...")
+        from tasks.tasks import index_all_csv_files
+        # Starte synchron/blockierend, indem die eigentliche Funktion aufgerufen wird
+        result = index_all_csv_files.__wrapped__("/app/data")
+        logger.info(f"Full CSV/stats indexing completed: {result}")
+    except Exception as e:
+        logger.error(f"Failed to trigger full CSV/stats indexing on startup: {e}")
 
 
 @app.on_event("shutdown")
