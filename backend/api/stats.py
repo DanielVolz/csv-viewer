@@ -1509,6 +1509,103 @@ async def get_locations_fast(limit: int = 1000) -> Dict:
         }
 
 
+@router.get("/fast/locations/suggest")
+async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
+    """
+    Ultra-fast location code suggestions with city names for instant search.
+
+    Optimized for real-time search starting from first character:
+    - 'n' -> all locations starting with N
+    - 'nx' -> all locations starting with NX
+    - 'nxx' -> all locations starting with NXX
+    - 'nxx0' -> all locations starting with NXX0
+    - 'nxx01' -> exact match for NXX01
+
+    Returns format: [{"code": "NXX01", "display": "NXX01 (Nürnberg)"}]
+    """
+    try:
+        from utils.opensearch import OpenSearchConfig
+        opensearch_config = OpenSearchConfig()
+
+        # Validate and normalize input
+        query = q.strip().upper()
+        if not query:
+            return {"success": True, "suggestions": [], "total": 0}
+
+        # Security: Only allow alphanumeric input (location codes are format ABC12)
+        if not query.replace(" ", "").isalnum():
+            return {"success": False, "message": "Invalid search query"}
+
+        # Limit length to prevent abuse
+        if len(query) > 5:
+            query = query[:5]
+
+        # Check if location stats index exists
+        if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
+            return {"success": False, "message": "Location index not found", "suggestions": []}
+
+        # Use prefix query for ultra-fast search
+        body = {
+            "size": 0,
+            "_source": False,  # Don't return document content, only aggregations
+            "aggs": {
+                "matching_locations": {
+                    "terms": {
+                        "field": "key",
+                        "size": min(limit, 200),  # Cap at 200 for performance
+                        "include": f"{query}.*",  # Prefix pattern
+                        "order": {"_key": "asc"}  # Alphabetical order
+                    }
+                }
+            },
+            "query": {
+                "prefix": {
+                    "key": query
+                }
+            }
+        }
+
+        res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
+
+        # Extract location codes and add city names
+        suggestions = []
+        if "aggregations" in res and "matching_locations" in res["aggregations"]:
+            for bucket in res["aggregations"]["matching_locations"]["buckets"]:
+                location_code = bucket["key"]
+                if location_code and len(location_code) >= 3:
+                    # Extract city code (first 3 characters)
+                    city_code = location_code[:3]
+
+                    # Get city name
+                    try:
+                        city_name = resolve_city_name(city_code)
+                        display = f"{location_code} ({city_name})" if city_name and city_name != city_code else location_code
+                    except Exception:
+                        display = location_code
+
+                    suggestions.append({
+                        "code": location_code,
+                        "display": display,
+                        "city": city_name if 'city_name' in locals() else city_code
+                    })
+
+        return {
+            "success": True,
+            "suggestions": suggestions,
+            "total": len(suggestions),
+            "query": query,
+            "mode": "suggest"
+        }
+
+    except Exception as e:
+        logger.error(f"Error in location code suggestions: {e}")
+        return {
+            "success": False,
+            "message": f"Search failed: {str(e)}",
+            "suggestions": []
+        }
+
+
 @router.get("/fast/by_location")
 async def get_stats_by_location_fast(q: str) -> Dict:
     """

@@ -54,8 +54,8 @@ function isJusticeLocation(locationCode) {
 function extractCityCode(locationCode) {
   if (!locationCode) return 'Unknown';
   const code = String(locationCode).trim();
-  // Extract first 3 characters as city code
-  return code.substring(0, 3).toUpperCase();
+  // Extract first 3 characters as city code, format: all x lowercase, rest uppercase
+  return code.substring(0, 3).toUpperCase().replace(/X/g, 'x');
 }
 
 // Helper: group locations by city and sort within each city by totalPhones
@@ -413,6 +413,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const [locInput, setLocInput] = React.useState('');
   const [locError, setLocError] = React.useState(null);
 
+  // Location search dropdown state
+  const [locationSuggestions, setLocationSuggestions] = React.useState([]);
+  const [showLocationDropdown, setShowLocationDropdown] = React.useState(false);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = React.useState(-1);
+  const [isSearchingLocations, setIsSearchingLocations] = React.useState(false);
+
   // Accordion expansion state for View by Location sections
   const [justizCitiesExpanded, setJustizCitiesExpanded] = React.useState({});
   const [jvaCitiesExpanded, setJvaCitiesExpanded] = React.useState({});
@@ -464,8 +470,135 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     }
   });
 
-  // Simple handlers for the new TextField approach
+  // Location search with dropdown functionality
+  const searchLocationSuggestions = React.useCallback(async (query) => {
+    if (!query || query.length === 0) {
+      setLocationSuggestions([]);
+      setShowLocationDropdown(false);
+      return;
+    }
+
+    try {
+      setIsSearchingLocations(true);
+      const response = await fetch(`/api/stats/fast/locations/suggest?q=${encodeURIComponent(query)}&limit=50`);
+      const data = await response.json();
+
+      if (data.success && data.suggestions) {
+        setLocationSuggestions(data.suggestions);
+        setShowLocationDropdown(data.suggestions.length > 0);
+        setSelectedSuggestionIndex(-1);
+      } else {
+        setLocationSuggestions([]);
+        setShowLocationDropdown(false);
+      }
+    } catch (error) {
+      console.error('Error fetching location suggestions:', error);
+      setLocationSuggestions([]);
+      setShowLocationDropdown(false);
+    } finally {
+      setIsSearchingLocations(false);
+    }
+  }, []);
+
+  // Timeout ref for debouncing
+  const timeoutRef = React.useRef();
+
+  // Debounced search for performance
+  const debouncedLocationSearch = React.useMemo(
+    () => {
+      return (query) => {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = setTimeout(() => {
+          searchLocationSuggestions(query);
+        }, 150); // 150ms delay for responsive feel
+      };
+    },
+    [searchLocationSuggestions]
+  );
+
   const handleLocationInputChange = React.useCallback((e) => {
+    const val = e.target.value;
+    setLocalInput(val);
+
+    // Clear selection if input is empty
+    if (!val || val.trim() === '') {
+      setLocSelected(null);
+      setLocationSuggestions([]);
+      setShowLocationDropdown(false);
+      setLocStats({
+        totalPhones: 0,
+        totalSwitches: 0,
+        phonesWithKEM: 0,
+        phonesByModel: [],
+        phonesByModelJustiz: [],
+        phonesByModelJVA: [],
+        vlanUsage: [],
+        switches: [],
+        kemPhones: [],
+      });
+      setLocStatsLoading(false);
+    } else {
+      // Trigger search suggestions
+      debouncedLocationSearch(val.trim());
+    }
+  }, [debouncedLocationSearch]);
+
+  const selectLocationSuggestion = React.useCallback((suggestion) => {
+  // Format code: Nxx01
+  // Format: All X are lowercase, all other letters uppercase
+  const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
+  setLocSelected(formattedCode);
+  setLocalInput(suggestion.display.replace(suggestion.code, formattedCode));
+  setLocInput(formattedCode);
+    setShowLocationDropdown(false);
+    setLocationSuggestions([]);
+    setSelectedSuggestionIndex(-1);
+  }, []);
+
+  const handleLocationKeyDown = React.useCallback((e) => {
+    if (!showLocationDropdown || locationSuggestions.length === 0) {
+      // No dropdown - handle Enter for direct search
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = (e.target.value || '').trim().toUpperCase();
+        if (val && /^[A-Z]{3}[0-9]{2}$/.test(val)) {
+          setLocSelected(val);
+          setLocInput(val);
+          setShowLocationDropdown(false);
+        }
+      }
+      return;
+    }
+
+    // Handle dropdown navigation
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedSuggestionIndex(prev =>
+        prev < locationSuggestions.length - 1 ? prev + 1 : 0
+      );
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedSuggestionIndex(prev =>
+        prev > 0 ? prev - 1 : locationSuggestions.length - 1
+      );
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < locationSuggestions.length) {
+        selectLocationSuggestion(locationSuggestions[selectedSuggestionIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      setShowLocationDropdown(false);
+      setSelectedSuggestionIndex(-1);
+    }
+  }, [showLocationDropdown, locationSuggestions, selectedSuggestionIndex, selectLocationSuggestion]);
+
+  // Handler for clicking on dropdown suggestions
+  const handleLocationSuggestionSelect = React.useCallback((suggestion) => {
+    selectLocationSuggestion(suggestion);
+  }, [selectLocationSuggestion]);
+
+  // Simple handlers for the new TextField approach
+  const handleLocationInputChangeOld = React.useCallback((e) => {
     const val = e.target.value;
     setLocalInput(val);
 
@@ -509,20 +642,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   }, [locSelected, saveStatisticsPrefs]);
 
   const handleKeyDown = React.useCallback((e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const val = (e.target.value || '').trim().toUpperCase();
-      if (val && /^[A-Z]{3}[0-9]{2}$/.test(val)) {
-        setLocSelected(val);
-        setLocInput(val);
-        // Update display with city name if available
-        const cityCode = val.slice(0, 3);
-        const cityName = cityNameByCode3[cityCode];
-        const displayValue = cityName ? `${val} (${cityName})` : val;
-        setLocalInput(displayValue);
-      }
-    }
-  }, [cityNameByCode3]);
+    // Use the new location dropdown handler
+    handleLocationKeyDown(e);
+  }, [handleLocationKeyDown]);
 
   const handleCityNameChange = React.useCallback((_, value) => {
     if (value) {
@@ -1259,49 +1381,50 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                   {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
                     <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', mr: 1 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <PlaceIcon sx={{ fontSize: '1.1rem', color: 'info.main' }} />
-                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                              View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
-                            </Typography>
-                          </Box>
-                          <Box sx={{ display: 'flex', gap: 1 }}>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={(e) => { e.stopPropagation(); expandAllJustizCities(); }}
-                              sx={{
-                                minWidth: 'auto',
-                                px: 1.5,
-                                py: 0.5,
-                                fontSize: '0.7rem',
-                                borderRadius: 2,
-                                textTransform: 'none',
-                                fontWeight: 500
-                              }}
-                            >
-                              Expand All
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={(e) => { e.stopPropagation(); collapseAllJustizCities(); }}
-                              sx={{
-                                minWidth: 'auto',
-                                px: 1.5,
-                                py: 0.5,
-                                fontSize: '0.7rem',
-                                borderRadius: 2,
-                                textTransform: 'none',
-                                fontWeight: 500
-                              }}
-                            >
-                              Collapse All
-                            </Button>
-                          </Box>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <PlaceIcon sx={{ fontSize: '1.1rem', color: 'info.main' }} />
+                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                            View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
+                          </Typography>
                         </Box>
                       </AccordionSummary>
+                      <AccordionDetails>
+                        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={expandAllJustizCities}
+                            sx={{
+                              minWidth: 'auto',
+                              px: 1.5,
+                              py: 0.5,
+                              fontSize: '0.7rem',
+                              borderRadius: 2,
+                              textTransform: 'none',
+                              fontWeight: 500
+                            }}
+                          >
+                            Expand All
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={collapseAllJustizCities}
+                            sx={{
+                              minWidth: 'auto',
+                              px: 1.5,
+                              py: 0.5,
+                              fontSize: '0.7rem',
+                              borderRadius: 2,
+                              textTransform: 'none',
+                              fontWeight: 500
+                            }}
+                          >
+                            Collapse All
+                          </Button>
+                        </Box>
+                        {/* ...existing code... */}
+                      </AccordionDetails>
                       <AccordionDetails sx={{ pt: 0 }}>
                         {groupLocationsByCity(data.phonesByModelJustizDetails || []).map((cityGroup) => (
                           <Accordion
@@ -1447,7 +1570,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                         >
                                           <TableCell>
                                             <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
-                                              {location.location}
+                                              {String(location.location).toUpperCase().replace(/X/g, 'x')}
                                             </Typography>
                                           </TableCell>
                                           <TableCell align="right">
@@ -1475,7 +1598,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
                                               {topModels.map((modelData, index) => (
                                                 <Box
-                                                  key={`${location.location}-${modelData.model}`}
+                                                  key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`}
                                                   sx={{
                                                     display: 'flex',
                                                     justifyContent: 'space-between',
@@ -1601,49 +1724,50 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                   {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
                     <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', mr: 1 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <PlaceIcon sx={{ fontSize: '1.1rem', color: 'warning.main' }} />
-                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                              View by Location ({(data.phonesByModelJVADetails || []).length} locations)
-                            </Typography>
-                          </Box>
-                          <Box sx={{ display: 'flex', gap: 1 }}>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={(e) => { e.stopPropagation(); expandAllJvaCities(); }}
-                              sx={{
-                                minWidth: 'auto',
-                                px: 1.5,
-                                py: 0.5,
-                                fontSize: '0.7rem',
-                                borderRadius: 2,
-                                textTransform: 'none',
-                                fontWeight: 500
-                              }}
-                            >
-                              Expand All
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={(e) => { e.stopPropagation(); collapseAllJvaCities(); }}
-                              sx={{
-                                minWidth: 'auto',
-                                px: 1.5,
-                                py: 0.5,
-                                fontSize: '0.7rem',
-                                borderRadius: 2,
-                                textTransform: 'none',
-                                fontWeight: 500
-                              }}
-                            >
-                              Collapse All
-                            </Button>
-                          </Box>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <PlaceIcon sx={{ fontSize: '1.1rem', color: 'warning.main' }} />
+                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                            View by Location ({(data.phonesByModelJVADetails || []).length} locations)
+                          </Typography>
                         </Box>
                       </AccordionSummary>
+                      <AccordionDetails>
+                        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={expandAllJvaCities}
+                            sx={{
+                              minWidth: 'auto',
+                              px: 1.5,
+                              py: 0.5,
+                              fontSize: '0.7rem',
+                              borderRadius: 2,
+                              textTransform: 'none',
+                              fontWeight: 500
+                            }}
+                          >
+                            Expand All
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={collapseAllJvaCities}
+                            sx={{
+                              minWidth: 'auto',
+                              px: 1.5,
+                              py: 0.5,
+                              fontSize: '0.7rem',
+                              borderRadius: 2,
+                              textTransform: 'none',
+                              fontWeight: 500
+                            }}
+                          >
+                            Collapse All
+                          </Button>
+                        </Box>
+                        {/* ...existing code... */}
+                      </AccordionDetails>
                       <AccordionDetails sx={{ pt: 0 }}>
                         {groupLocationsByCity(data.phonesByModelJVADetails || []).map((cityGroup) => (
                           <Accordion
@@ -1773,7 +1897,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                         >
                                           <TableCell>
                                             <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
-                                              {location.location}
+                                              {String(location.location).toUpperCase().replace(/X/g, 'x')}
                                             </Typography>
                                           </TableCell>
                                           <TableCell align="right">
@@ -1801,7 +1925,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
                                               {topModels.map((modelData) => (
                                                 <Box
-                                                  key={`${location.location}-${modelData.model}`}
+                                                  key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`}
                                                   sx={{
                                                     display: 'flex',
                                                     justifyContent: 'space-between',
@@ -1870,8 +1994,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
         {/* Two search fields side by side */}
         <Grid container spacing={2} sx={{ mb: 2 }}>
-          {/* Location Code Search */}
-          <Grid item xs={12} md={6}>
+          {/* Location Code Search with Dropdown */}
+          <Grid item xs={12} md={6} sx={{ position: 'relative' }}>
             <TextField
               label="Search by Location Code"
               placeholder="Enter location code (e.g., AUG01, NUE02)"
@@ -1890,6 +2014,11 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 ),
                 endAdornment: (
                   <>
+                    {isSearchingLocations && (
+                      <InputAdornment position="end">
+                        <CircularProgress size={20} />
+                      </InputAdornment>
+                    )}
                     {locStatsLoading && (
                       <InputAdornment position="end">
                         <CircularProgress size={20} />
@@ -1903,6 +2032,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                             setLocSelected(null);
                             setLocalInput('');
                             setLocInput('');
+                            setLocationSuggestions([]);
+                            setShowLocationDropdown(false);
+                            setSelectedSuggestionIndex(-1);
                             setLocStats({
                               totalPhones: 0,
                               totalSwitches: 0,
@@ -1930,6 +2062,97 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 ),
               }}
             />
+
+            {/* Location Suggestions Dropdown */}
+            {showLocationDropdown && locationSuggestions.length > 0 && (
+              <Paper
+                elevation={8}
+                sx={{
+                  position: 'absolute',
+                  top: 'calc(100% + 2px)',
+                  left: '2%',
+                  width: '98%',
+                  minWidth: '320px',
+                  maxWidth: 'none',
+                  zIndex: 1300,
+                  maxHeight: '280px',
+                  overflow: 'auto',
+                  borderRadius: 2,
+                  border: (theme) => `1px solid ${theme.palette.divider}`,
+                  boxShadow: (theme) =>
+                    theme.palette.mode === 'dark'
+                      ? '0 8px 32px rgba(0,0,0,0.5)'
+                      : '0 8px 32px rgba(0,0,0,0.12)',
+                }}
+              >
+                {locationSuggestions.map((suggestion, index) => (
+                  <Box
+                    key={suggestion.code.toUpperCase().replace(/X/g, 'x')}
+                    onClick={() => handleLocationSuggestionSelect(suggestion)}
+                    sx={{
+                      px: 2,
+                      py: 1.5,
+                      cursor: 'pointer',
+                      backgroundColor: selectedSuggestionIndex === index
+                        ? (theme) => theme.palette.action.selected
+                        : 'transparent',
+                      '&:hover': {
+                        backgroundColor: (theme) => theme.palette.action.hover,
+                      },
+                      borderBottom: index < locationSuggestions.length - 1 ? '1px solid' : 'none',
+                      borderBottomColor: (theme) => theme.palette.divider,
+                      transition: 'background-color 0.15s ease',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1.5,
+                    }}
+                  >
+                    {/* Location icon */}
+                    <Box
+                      sx={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: '50%',
+                        backgroundColor: (theme) => theme.palette.primary.main,
+                        color: 'white',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {suggestion.code.substring(0, 3).toUpperCase().replace(/X/g, 'x')}
+                    </Box>
+                    {/* Location details */}
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontWeight: 600,
+                          color: 'text.primary',
+                          mb: 0.25,
+                        }}
+                      >
+                        {suggestion.code.toUpperCase().replace(/X/g, 'x')}
+                      </Typography>
+                      {suggestion.city && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          📍 {suggestion.city}
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
+                ))}
+              </Paper>
+            )}
           </Grid>
 
           {/* City Name Search */}
