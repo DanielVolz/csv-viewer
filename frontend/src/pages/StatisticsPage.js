@@ -1236,72 +1236,111 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
         <Typography variant="subtitle1" sx={{ mb: 3, fontWeight: 600 }}>General Statistics</Typography>
 
-        {/* Total Section */}
+        {/* Modern General Statistics Layout: Total Phones left, Justiz & JVA side-by-side */}
+        {/* Modern General Statistics Layout: Total Phones full width, JVA/Justiz right, KPIs full width, percent in parentheses */}
+        {/* Modern General Statistics Layout: Total Phones symbol/count left, KPIs below, JVA/Justiz side-by-side right */}
         <Box sx={{
-          mb: 3,
-          p: 2,
-          borderRadius: 2,
-          backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.06),
-          border: '1px solid',
-          borderColor: (theme) => alpha(theme.palette.primary.main, 0.2)
+          p: 2.5,
+          borderRadius: 3,
+          minWidth: 320,
+          width: '100%',
+          boxShadow: 2,
+          background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.light, 0.04)} 100%)`,
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          justifyContent: 'flex-start',
         }}>
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <PublicIcon sx={{ fontSize: '1.3rem' }} />
-            Total Phones
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={data.totalPhones} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Switches" value={data.totalSwitches} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Locations" value={data.totalLocations} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Total Cities" value={data.totalCities} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.phonesWithKEM} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Total KEMs" value={data.totalKEMs} loading={loading} /></Grid>
-          </Grid>
-        </Box>
+          {/* Left: Total Phones symbol/count and KPIs below */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 220, maxWidth: 260, flex: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <PublicIcon sx={{ fontSize: '2.2rem', color: 'primary.main' }} />
+              <Typography variant="h5" fontWeight={700} color="primary.main">Total Phones</Typography>
+            </Box>
+            <Typography variant="h3" fontWeight={800} color="primary.main" sx={{ letterSpacing: '0.03em', mb: 1 }}>{data.totalPhones?.toLocaleString() ?? '-'}</Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, width: '100%' }}>
+              {[
+                { label: 'Switches', value: data.totalSwitches, color: '#d32f2f' },
+                { label: 'Locations', value: data.totalLocations, color: '#f57c00' },
+                { label: 'Cities', value: data.totalCities, color: '#6a1b9a' },
+                { label: 'Phones with KEM', value: data.phonesWithKEM, color: '#2e7d32' },
+                { label: 'Total KEMs', value: data.totalKEMs, color: '#2e7d32' },
+              ].map(kpi => (
+                <Chip key={kpi.label} label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`} sx={{ bgcolor: kpi.color, color: '#fff', fontWeight: 700, fontSize: '0.9em', px: 1.2, py: 0.5, width: '100%', justifyContent: 'flex-start' }} />
+              ))}
+            </Box>
+          </Box>
 
-        {/* Justice Section */}
-        <Box sx={{
-          mb: 3,
-          p: 2,
-          borderRadius: 2,
-          backgroundColor: justiceTheme.background,
-          border: '1px solid',
-          borderColor: justiceTheme.border
-        }}>
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: justiceTheme.primary, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <GavelIcon sx={{ fontSize: '1.3rem' }} />
-            Justice Institutions (Justiz)
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Phones" value={data.totalJustizPhones} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Switches" value={data.justizSwitches} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Locations" value={data.justizLocations} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Cities" value={data.justizCities} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.justizPhonesWithKEM} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Total KEMs" value={data.totalJustizKEMs} loading={loading} /></Grid>
-          </Grid>
-        </Box>
+          {/* Right: JVA & Justiz side-by-side */}
+          <Box sx={{ display: 'flex', gap: 2, flex: 2, justifyContent: 'stretch', flexWrap: 'wrap', ml: 3 }}>
+            {/* Justiz Card */}
+            <Box sx={{
+              p: 2,
+              borderRadius: 3,
+              boxShadow: 1,
+              background: `linear-gradient(135deg, ${alpha(justiceTheme.primary, 0.18)} 0%, ${alpha(justiceTheme.light, 0.10)} 100%)`,
+              border: `2px solid ${alpha(justiceTheme.primary, 0.18)}`,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              minWidth: 180,
+              flex: 1,
+              width: '100%',
+              maxWidth: 'none',
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <GavelIcon sx={{ fontSize: '1.5rem', color: justiceTheme.primary }} />
+                <Typography variant="subtitle1" fontWeight={700} color={justiceTheme.primary}>Justiz</Typography>
+              </Box>
+              <Typography variant="h5" fontWeight={800} color={justiceTheme.primary} sx={{ mt: 1 }}>{data.totalJustizPhones?.toLocaleString() ?? '-'}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJustizPhones / data.totalPhones)}% of total` : ''}</Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, width: '100%' }}>
+                {[
+                  { label: 'Switches', value: data.justizSwitches, total: data.totalSwitches, color: '#d32f2f' },
+                  { label: 'Locations', value: data.justizLocations, total: data.totalLocations, color: '#f57c00' },
+                  { label: 'Cities', value: data.justizCities, total: null, color: '#6a1b9a' },
+                  { label: 'Phones with KEM', value: data.justizPhonesWithKEM, total: data.phonesWithKEM, color: '#2e7d32' },
+                  { label: 'Total KEMs', value: data.totalJustizKEMs, total: data.totalKEMs, color: '#2e7d32' },
+                ].map(kpi => (
+                  <Chip key={kpi.label} label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${kpi.total ? ` (${Math.round(100 * kpi.value / kpi.total)}%)` : ''}`} sx={{ bgcolor: kpi.color, color: '#fff', fontWeight: 700, fontSize: '0.9em', px: 1.2, py: 0.5, width: '100%', justifyContent: 'flex-start' }} />
+                ))}
+              </Box>
+            </Box>
 
-        {/* JVA Section */}
-        <Box sx={{
-          p: 2,
-          borderRadius: 2,
-          backgroundColor: jvaTheme.background,
-          border: '1px solid',
-          borderColor: jvaTheme.border
-        }}>
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600, color: jvaTheme.primary, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <SecurityIcon sx={{ fontSize: '1.3rem' }} />
-            Correctional Facilities (JVA)
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Phones" value={data.totalJVAPhones} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Switches" value={data.jvaSwitches} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Locations" value={data.jvaLocations} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="warning" title="Cities" value={data.jvaCities} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={data.jvaPhonesWithKEM} loading={loading} /></Grid>
-            <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Total KEMs" value={data.totalJVAKEMs} loading={loading} /></Grid>
-          </Grid>
+            {/* JVA Card */}
+            <Box sx={{
+              p: 2,
+              borderRadius: 3,
+              boxShadow: 1,
+              background: `linear-gradient(135deg, ${alpha(jvaTheme.primary, 0.18)} 0%, ${alpha(jvaTheme.light, 0.10)} 100%)`,
+              border: `2px solid ${alpha(jvaTheme.primary, 0.18)}`,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              minWidth: 180,
+              flex: 1,
+              width: '100%',
+              maxWidth: 'none',
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <SecurityIcon sx={{ fontSize: '1.5rem', color: jvaTheme.primary }} />
+                <Typography variant="subtitle1" fontWeight={700} color={jvaTheme.primary}>JVA</Typography>
+              </Box>
+              <Typography variant="h5" fontWeight={800} color={jvaTheme.primary} sx={{ mt: 1 }}>{data.totalJVAPhones?.toLocaleString() ?? '-'}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJVAPhones / data.totalPhones)}% of total` : ''}</Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, width: '100%' }}>
+                {[
+                  { label: 'Switches', value: data.jvaSwitches, total: data.totalSwitches, color: '#d32f2f' },
+                  { label: 'Locations', value: data.jvaLocations, total: data.totalLocations, color: '#f57c00' },
+                  { label: 'Cities', value: data.jvaCities, total: null, color: '#6a1b9a' },
+                  { label: 'Phones with KEM', value: data.jvaPhonesWithKEM, total: data.phonesWithKEM, color: '#2e7d32' },
+                  { label: 'Total KEMs', value: data.totalJVAKEMs, total: data.totalKEMs, color: '#2e7d32' },
+                ].map(kpi => (
+                  <Chip key={kpi.label} label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${kpi.total ? ` (${Math.round(100 * kpi.value / kpi.total)}%)` : ''}`} sx={{ bgcolor: kpi.color, color: '#fff', fontWeight: 700, fontSize: '0.9em', px: 1.2, py: 0.5, width: '100%', justifyContent: 'flex-start' }} />
+                ))}
+              </Box>
+            </Box>
+          </Box>
         </Box>
       </Paper>
 

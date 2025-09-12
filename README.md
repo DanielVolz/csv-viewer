@@ -158,3 +158,26 @@ docker exec -it csv-viewer-backend celery -A tasks.tasks inspect active
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Analytics Helpers
+
+### City Code Counting
+
+Count unique city codes (prefix before the first dash in switch hostnames) from a `netspeed.csv` file.
+
+Script: `scripts/analytics/count_cities.py`
+
+Usage:
+
+```bash
+# Default (uses test-data/netspeed.csv)
+python3 scripts/analytics/count_cities.py
+
+# Specify a different file (e.g. production mounted path)
+python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/netspeed.csv
+
+# Show top 10 cities by occurrence
+python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/netspeed.csv --top 10
+```
+
+The script auto-detects the delimiter (`;` or `,`) and attempts several likely column positions or a fallback scan to find the switch hostname, then extracts the city code (substring before the first `-`).

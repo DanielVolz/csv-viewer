@@ -418,11 +418,6 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
 
                 rows.append(filtered_row)
 
-                # Log debugging info for CP-8832 phones
-                if row_dict.get("Model Name", "").strip() == "CP-8832":
-                    logger.info(f"CP-8832 detected at row {idx}: Switch Hostname='{row_dict.get('Switch Hostname', '')}', Voice VLAN='{row_dict.get('Voice VLAN', '')}'")
-                    logger.debug(f"Full row mapping: {row_dict}")
-
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
 
         # Create headers list for frontend display (filtered for known columns only)
