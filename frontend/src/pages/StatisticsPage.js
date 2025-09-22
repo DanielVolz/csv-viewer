@@ -418,6 +418,10 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const [showLocationDropdown, setShowLocationDropdown] = React.useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = React.useState(-1);
   const [isSearchingLocations, setIsSearchingLocations] = React.useState(false);
+  // Performance: cache suggestions and abort in-flight requests
+  const suggestionsCacheRef = React.useRef(new Map()); // key: query, value: array
+  const suggestionsControllerRef = React.useRef(null);
+  const suggestRequestSeqRef = React.useRef(0);
 
   // Accordion expansion state for View by Location sections
   const [justizCitiesExpanded, setJustizCitiesExpanded] = React.useState({});
@@ -440,6 +444,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     }
   }); // Debounced version for API calls
   const [snackbar, setSnackbar] = React.useState({ open: false, message: '' });
+  const [isUiPending, startTransition] = React.useTransition();
   const [locStats, setLocStats] = React.useState({
     query: '',
     mode: '',
@@ -469,32 +474,71 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       return '';
     }
   });
+  // Uncontrolled input ref to keep typing instant
+  const locInputRef = React.useRef(null);
 
   // Location search with dropdown functionality
   const searchLocationSuggestions = React.useCallback(async (query) => {
-    if (!query || query.length === 0) {
+    const q = (query || '').trim();
+    if (!q) {
+      startTransition(() => setLocationSuggestions([]));
+      startTransition(() => setShowLocationDropdown(false));
+      return;
+    }
+
+    // Require at least 2 characters to avoid heavy prefix searches
+    if (q.length < 2) {
       setLocationSuggestions([]);
       setShowLocationDropdown(false);
       return;
     }
 
+    // Serve from cache if available
+    if (suggestionsCacheRef.current.has(q)) {
+      const cached = suggestionsCacheRef.current.get(q) || [];
+      startTransition(() => setLocationSuggestions(cached));
+      startTransition(() => setShowLocationDropdown(cached.length > 0));
+      startTransition(() => setSelectedSuggestionIndex(-1));
+      return;
+    }
+
     try {
+      // Abort previous request
+      if (suggestionsControllerRef.current) {
+        try { suggestionsControllerRef.current.abort(); } catch { /* ignore */ }
+      }
+      const controller = new AbortController();
+      suggestionsControllerRef.current = controller;
       setIsSearchingLocations(true);
-      const response = await fetch(`/api/stats/fast/locations/suggest?q=${encodeURIComponent(query)}&limit=50`);
+
+      // Adaptive limit: fewer items for very short prefixes
+      const limit = q.length === 2 ? 30 : (q.length === 3 ? 60 : 80);
+      const seq = ++suggestRequestSeqRef.current;
+      const response = await fetch(`/api/stats/fast/locations/suggest?q=${encodeURIComponent(q)}&limit=${limit}`,
+        { signal: controller.signal });
       const data = await response.json();
 
-      if (data.success && data.suggestions) {
-        setLocationSuggestions(data.suggestions);
-        setShowLocationDropdown(data.suggestions.length > 0);
-        setSelectedSuggestionIndex(-1);
+      // Ignore out-of-order responses
+      if (seq !== suggestRequestSeqRef.current) return;
+
+      if (data.success && Array.isArray(data.suggestions)) {
+        // Cache result (simple LRU cap)
+        suggestionsCacheRef.current.set(q, data.suggestions);
+        if (suggestionsCacheRef.current.size > 200) {
+          const firstKey = suggestionsCacheRef.current.keys().next().value;
+          suggestionsCacheRef.current.delete(firstKey);
+        }
+        startTransition(() => setLocationSuggestions(data.suggestions));
+        startTransition(() => setShowLocationDropdown(data.suggestions.length > 0));
+        startTransition(() => setSelectedSuggestionIndex(-1));
       } else {
-        setLocationSuggestions([]);
-        setShowLocationDropdown(false);
+        startTransition(() => setLocationSuggestions([]));
+        startTransition(() => setShowLocationDropdown(false));
       }
     } catch (error) {
       console.error('Error fetching location suggestions:', error);
-      setLocationSuggestions([]);
-      setShowLocationDropdown(false);
+      startTransition(() => setLocationSuggestions([]));
+      startTransition(() => setShowLocationDropdown(false));
     } finally {
       setIsSearchingLocations(false);
     }
@@ -508,9 +552,10 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     () => {
       return (query) => {
         clearTimeout(timeoutRef.current);
+        // Slightly longer debounce to avoid rapid re-queries on fast typing
         timeoutRef.current = setTimeout(() => {
           searchLocationSuggestions(query);
-        }, 150); // 150ms delay for responsive feel
+        }, 200);
       };
     },
     [searchLocationSuggestions]
@@ -518,14 +563,13 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   const handleLocationInputChange = React.useCallback((e) => {
     const val = e.target.value;
-    setLocalInput(val);
 
     // Clear selection if input is empty
     if (!val || val.trim() === '') {
-      setLocSelected(null);
-      setLocationSuggestions([]);
-      setShowLocationDropdown(false);
-      setLocStats({
+      startTransition(() => setLocSelected(null));
+      startTransition(() => setLocationSuggestions([]));
+      startTransition(() => setShowLocationDropdown(false));
+      startTransition(() => setLocStats({
         totalPhones: 0,
         totalSwitches: 0,
         phonesWithKEM: 0,
@@ -535,8 +579,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         vlanUsage: [],
         switches: [],
         kemPhones: [],
-      });
-      setLocStatsLoading(false);
+      }));
+      startTransition(() => setLocStatsLoading(false));
     } else {
       // Trigger search suggestions
       debouncedLocationSearch(val.trim());
@@ -548,7 +592,11 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     // Format: All X are lowercase, all other letters uppercase
     const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
     setLocSelected(formattedCode);
-    setLocalInput(suggestion.display.replace(suggestion.code, formattedCode));
+    const newDisplay = suggestion.display.replace(suggestion.code, formattedCode);
+    setLocalInput(newDisplay);
+    if (locInputRef.current) {
+      try { locInputRef.current.value = newDisplay; } catch { /* ignore */ }
+    }
     setLocInput(formattedCode);
     setShowLocationDropdown(false);
     setLocationSuggestions([]);
@@ -597,6 +645,14 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     selectLocationSuggestion(suggestion);
   }, [selectLocationSuggestion]);
 
+  // Cleanup abort controller on unmount
+  React.useEffect(() => {
+    return () => {
+      try { suggestionsControllerRef.current?.abort(); } catch { /* ignore */ }
+      suggestionsControllerRef.current = null;
+    };
+  }, []);
+
   // Simple handlers for the new TextField approach
   const handleLocationInputChangeOld = React.useCallback((e) => {
     const val = e.target.value;
@@ -630,6 +686,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       // Only update if current localInput doesn't already match the expected display
       if (localInput !== displayValue) {
         setLocalInput(displayValue);
+        if (locInputRef.current) {
+          try { locInputRef.current.value = displayValue; } catch { /* ignore */ }
+        }
       }
     }
   }, [cityNameByCode3, localInput]);
@@ -2166,7 +2225,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               placeholder="Enter location code (e.g., AUG01, NUE02)"
               size="small"
               fullWidth
-              value={localInput}
+              defaultValue={localInput}
+              inputRef={locInputRef}
               onChange={handleLocationInputChange}
               onKeyDown={handleKeyDown}
               error={!!locError}
@@ -2196,6 +2256,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                           onClick={() => {
                             setLocSelected(null);
                             setLocalInput('');
+                            if (locInputRef.current) {
+                              try { locInputRef.current.value = ''; } catch { /* ignore */ }
+                            }
                             setLocInput('');
                             setLocationSuggestions([]);
                             setShowLocationDropdown(false);

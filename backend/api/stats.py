@@ -1527,67 +1527,140 @@ async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
         from utils.opensearch import OpenSearchConfig
         opensearch_config = OpenSearchConfig()
 
-        # Validate and normalize input
-        query = q.strip().upper()
-        if not query:
+        # Helpers for normalization (accent-insensitive matching)
+        import unicodedata
+        def _norm_txt(s: str) -> str:
+            if not s:
+                return ""
+            s = str(s)
+            s = unicodedata.normalize('NFKD', s)
+            s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+            return s.lower().strip()
+
+        # Normalize input for two modes: code-like vs city-name
+        raw = (q or "").strip()
+        if not raw:
             return {"success": True, "suggestions": [], "total": 0}
+        query = raw.upper()
+        norm_query = _norm_txt(raw)
 
-        # Security: Only allow alphanumeric input (location codes are format ABC12)
-        if not query.replace(" ", "").isalnum():
-            return {"success": False, "message": "Invalid search query"}
-
-        # Limit length to prevent abuse
-        if len(query) > 5:
-            query = query[:5]
+        # Limit code-like queries to 5 chars (AAA01)
+        if len(query) > 48:
+            # Allow longer for city names, but cap at reasonable length
+            raw = raw[:48]
+            query = raw.upper()
+            norm_query = _norm_txt(raw)
 
         # Check if location stats index exists
         if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
             return {"success": False, "message": "Location index not found", "suggestions": []}
 
-        # Use prefix query for ultra-fast search
-        body = {
-            "size": 0,
-            "_source": False,  # Don't return document content, only aggregations
-            "aggs": {
-                "matching_locations": {
-                    "terms": {
-                        "field": "key",
-                        "size": min(limit, 200),  # Cap at 200 for performance
-                        "include": f"{query}.*",  # Prefix pattern
-                        "order": {"_key": "asc"}  # Alphabetical order
+        suggestions: list[dict] = []
+
+        # Determine if user typed a code-like prefix (AAA, AAA0, AAA01) or a city name
+        is_code_like = False
+        import re
+        if re.fullmatch(r"[A-Z]{1,3}[0-9]{0,2}", query):
+            is_code_like = True
+
+        if is_code_like:
+            # Use prefix query for ultra-fast code suggestions
+            code_prefix = query[:5]
+            body = {
+                "size": 0,
+                "_source": False,
+                "aggs": {
+                    "matching_locations": {
+                        "terms": {
+                            "field": "key",
+                            "size": min(limit, 200),
+                            "include": f"{code_prefix}.*",
+                            "order": {"_key": "asc"}
+                        }
+                    }
+                },
+                "query": {"prefix": {"key": code_prefix}}
+            }
+            res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
+            if "aggregations" in res and "matching_locations" in res["aggregations"]:
+                for bucket in res["aggregations"]["matching_locations"]["buckets"]:
+                    location_code = bucket["key"]
+                    if location_code and len(location_code) >= 3:
+                        city_code = location_code[:3]
+                        try:
+                            city_name = resolve_city_name(city_code)
+                            display = f"{location_code} ({city_name})" if city_name and city_name != city_code else location_code
+                        except Exception:
+                            city_name = city_code
+                            display = location_code
+                        suggestions.append({
+                            "code": location_code,
+                            "display": display,
+                            "city": city_name
+                        })
+        else:
+            # City name search: find matching 3-letter city codes by name (accent-insensitive)
+            codes_map = get_city_code_map() if get_city_code_map else {}
+            if not isinstance(codes_map, dict):
+                codes_map = {}
+            # Build reverse lookup using normalized names
+            matched_codes: list[str] = []
+            for code3, name in codes_map.items():
+                if not code3 or not name:
+                    continue
+                if norm_query in _norm_txt(name):
+                    matched_codes.append(str(code3).upper())
+
+            if matched_codes:
+                # Single OS query to fetch all location codes for the matched city codes using regex include
+                # Build a regex like ^(MXX|NXX).*
+                pattern = "^(" + "|".join(re.escape(c) for c in matched_codes) + ").*"
+                body = {
+                    "size": 0,
+                    "_source": False,
+                    "aggs": {
+                        "matching_locations": {
+                            "terms": {
+                                "field": "key",
+                                "size": min(max(limit * 4, 200), 1000),
+                                "include": pattern,
+                                "order": {"_key": "asc"}
+                            }
+                        }
                     }
                 }
-            },
-            "query": {
-                "prefix": {
-                    "key": query
-                }
-            }
-        }
+                res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
+                # Group results by city code
+                by_city: dict[str, list[str]] = {c: [] for c in matched_codes}
+                if "aggregations" in res and "matching_locations" in res["aggregations"]:
+                    for bucket in res["aggregations"]["matching_locations"]["buckets"]:
+                        k = bucket["key"]
+                        if not k or len(k) < 3:
+                            continue
+                        c = k[:3]
+                        if c in by_city:
+                            by_city[c].append(k)
 
-        res = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body)
-
-        # Extract location codes and add city names
-        suggestions = []
-        if "aggregations" in res and "matching_locations" in res["aggregations"]:
-            for bucket in res["aggregations"]["matching_locations"]["buckets"]:
-                location_code = bucket["key"]
-                if location_code and len(location_code) >= 3:
-                    # Extract city code (first 3 characters)
-                    city_code = location_code[:3]
-
-                    # Get city name
-                    try:
-                        city_name = resolve_city_name(city_code)
-                        display = f"{location_code} ({city_name})" if city_name and city_name != city_code else location_code
-                    except Exception:
-                        display = location_code
-
+                # Compose suggestions: for each matched city, add an 'All locations' item and then its specific locations
+                total_budget = max(limit, 10)
+                for c in matched_codes:
+                    city_name = resolve_city_name(c)
+                    # Always add the city-level suggestion first
                     suggestions.append({
-                        "code": location_code,
-                        "display": display,
-                        "city": city_name if 'city_name' in locals() else city_code
+                        "code": c,
+                        "display": f"{c} ({city_name}) – All locations",
+                        "city": city_name
                     })
+                    # Add individual locations for this city
+                    locs = sorted(by_city.get(c, []))
+                    for k in locs:
+                        if len(suggestions) >= total_budget:
+                            break
+                        suggestions.append({
+                            "code": k,
+                            "display": f"{k} ({city_name})",
+                            "city": city_name
+                        })
 
         return {
             "success": True,
