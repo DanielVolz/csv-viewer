@@ -1220,6 +1220,78 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return { yMin, yMax };
   }, [locTimeline.series, KPI_DEFS_LOC, selectedKpisLoc]);
 
+  // Shared soft chip styling helper for calmer colors
+  const softChipSx = React.useCallback((hex) => ({
+    fontWeight: 400,
+    fontSize: '0.95em',
+    px: 1.4,
+    py: 0.6,
+    borderWidth: '1.5px',
+    borderStyle: 'solid',
+    borderRadius: 2,
+    backgroundColor: (theme) => alpha(hex, theme.palette.mode === 'dark' ? 0.36 : 0.28),
+    borderColor: (theme) => alpha(hex, theme.palette.mode === 'dark' ? 0.75 : 0.6),
+    color: (theme) => theme.palette.text.primary,
+    textShadow: (theme) => theme.palette.mode === 'dark'
+      ? '0 0.7px 1.2px rgba(0,0,0,0.75)'
+      : '0 0.7px 1.2px rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    boxShadow: (theme) => theme.palette.mode === 'dark'
+      ? '0 1px 3px rgba(0,0,0,0.4)'
+      : '0 1px 3px rgba(0,0,0,0.18)',
+    transition: 'background-color 120ms ease, box-shadow 120ms ease',
+    '&:hover': {
+      backgroundColor: (theme) => alpha(hex, theme.palette.mode === 'dark' ? 0.42 : 0.32),
+      boxShadow: (theme) => theme.palette.mode === 'dark'
+        ? '0 2px 4px rgba(0,0,0,0.5)'
+        : '0 2px 4px rgba(0,0,0,0.22)'
+    }
+  }), []);
+
+  // Compute a unified width for all General Statistics chips (Total, Justiz, JVA)
+  const [genChipWidth, setGenChipWidth] = React.useState(null);
+  const measureRef = React.useRef(null);
+
+  // Build all chip labels (as actually rendered) for measurement
+  const generalLeftKpis = React.useMemo(() => ([
+    { label: 'Switches', value: data.totalSwitches, color: '#d32f2f' },
+    { label: 'Locations', value: data.totalLocations, color: '#f57c00' },
+    { label: 'Cities', value: data.totalCities, color: '#6a1b9a' },
+    { label: 'Phones with KEM', value: data.phonesWithKEM, color: '#2e7d32' },
+    { label: 'Total KEMs', value: data.totalKEMs, color: '#2e7d32' },
+  ]), [data.totalSwitches, data.totalLocations, data.totalCities, data.phonesWithKEM, data.totalKEMs]);
+
+  const generalJustizKpis = React.useMemo(() => ([
+    { label: 'Switches', value: data.justizSwitches, total: data.totalSwitches, color: '#d32f2f' },
+    { label: 'Locations', value: data.justizLocations, total: data.totalLocations, color: '#f57c00' },
+    { label: 'Cities', value: data.justizCities, total: null, color: '#6a1b9a' },
+    { label: 'Phones with KEM', value: data.justizPhonesWithKEM, total: data.phonesWithKEM, color: '#2e7d32' },
+    { label: 'Total KEMs', value: data.totalJustizKEMs, total: data.totalKEMs, color: '#2e7d32' },
+  ]), [data.justizSwitches, data.justizLocations, data.justizCities, data.justizPhonesWithKEM, data.totalSwitches, data.totalLocations, data.phonesWithKEM, data.totalJustizKEMs, data.totalKEMs]);
+
+  const generalJvaKpis = React.useMemo(() => ([
+    { label: 'Switches', value: data.jvaSwitches, total: data.totalSwitches, color: '#d32f2f' },
+    { label: 'Locations', value: data.jvaLocations, total: data.totalLocations, color: '#f57c00' },
+    { label: 'Cities', value: data.jvaCities, total: null, color: '#6a1b9a' },
+    { label: 'Phones with KEM', value: data.jvaPhonesWithKEM, total: data.phonesWithKEM, color: '#2e7d32' },
+    { label: 'Total KEMs', value: data.totalJVAKEMs, total: data.totalKEMs, color: '#2e7d32' },
+  ]), [data.jvaSwitches, data.jvaLocations, data.jvaCities, data.jvaPhonesWithKEM, data.totalSwitches, data.totalLocations, data.phonesWithKEM, data.totalJVAKEMs, data.totalKEMs]);
+
+  // Measure on data load and window resize
+  React.useEffect(() => {
+    const measure = () => {
+      if (!measureRef.current) return;
+      const chips = measureRef.current.querySelectorAll('.MuiChip-root');
+      let max = 0;
+      chips.forEach((el) => { max = Math.max(max, el.offsetWidth || 0); });
+      if (max > 0) setGenChipWidth(max);
+    };
+    // Small timeout to ensure DOM painted
+    const t = setTimeout(measure, 0);
+    window.addEventListener('resize', measure);
+    return () => { clearTimeout(t); window.removeEventListener('resize', measure); };
+  }, [generalLeftKpis, generalJustizKpis, generalJvaKpis, data.totalJustizPhones, data.totalJVAPhones, data.totalPhones]);
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
@@ -1247,32 +1319,72 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           boxShadow: 2,
           background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.light, 0.04)} 100%)`,
           display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'flex-start',
+          flexDirection: 'column',
+          alignItems: 'center',
           justifyContent: 'flex-start',
         }}>
-          {/* Left: Total Phones symbol/count and KPIs below */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 220, maxWidth: 260, flex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <PublicIcon sx={{ fontSize: '2.2rem', color: 'primary.main' }} />
-              <Typography variant="h5" fontWeight={700} color="primary.main">Total Phones</Typography>
+          {/* Hidden measurement container for unified chip width */}
+          <Box ref={measureRef} sx={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', height: 0 }}>
+            {[...generalLeftKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}`),
+            ...generalJustizKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}${k.total ? ` (${Math.round((Number(k.value || 0) && Number(k.total || 0)) ? (100 * Number(k.value) / Number(k.total)) : 0)}%)` : ''}`),
+            ...generalJvaKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}${k.total ? ` (${Math.round((Number(k.value || 0) && Number(k.total || 0)) ? (100 * Number(k.value) / Number(k.total)) : 0)}%)` : ''}`)
+            ].map((text, i) => (
+              <Chip key={`measure-${i}`} label={text} size="medium" sx={{ fontWeight: 400, fontSize: '0.95em', px: 1.4, py: 0.6 }} />
+            ))}
+          </Box>
+          {/* Top: Total Phones centered (single line), below: KPIs in 2 centered rows */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
+            {/* Row 1: Label + Count */}
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, justifyContent: 'center', mb: 1 }}>
+              <PublicIcon sx={{ fontSize: '2.0rem', color: 'primary.main' }} />
+              <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 600 }}>Total Phones</Typography>
+              <Typography variant="h3" fontWeight={800} color="primary.main" sx={{ letterSpacing: '0.03em' }}>{data.totalPhones?.toLocaleString() ?? '-'}</Typography>
             </Box>
-            <Typography variant="h3" fontWeight={800} color="primary.main" sx={{ letterSpacing: '0.03em', mb: 1 }}>{data.totalPhones?.toLocaleString() ?? '-'}</Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, width: '100%' }}>
-              {[
-                { label: 'Switches', value: data.totalSwitches, color: '#d32f2f' },
-                { label: 'Locations', value: data.totalLocations, color: '#f57c00' },
-                { label: 'Cities', value: data.totalCities, color: '#6a1b9a' },
-                { label: 'Phones with KEM', value: data.phonesWithKEM, color: '#2e7d32' },
-                { label: 'Total KEMs', value: data.totalKEMs, color: '#2e7d32' },
-              ].map(kpi => (
-                <Chip key={kpi.label} label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`} sx={{ bgcolor: kpi.color, color: '#fff', fontWeight: 700, fontSize: '0.9em', px: 1.2, py: 0.5, width: '100%', justifyContent: 'flex-start' }} />
-              ))}
-            </Box>
+            {/* Row 2: KPIs split into two centered rows */}
+            {(() => {
+              const items = generalLeftKpis;
+              const mid = Math.ceil(items.length / 2);
+              const rowA = items.slice(0, mid);
+              const rowB = items.slice(mid);
+              return (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center', width: '100%' }}>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', justifyContent: 'center' }}>
+                    {rowA.map((kpi) => (
+                      <Chip
+                        key={`rowA-${kpi.label}`}
+                        label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`}
+                        size="medium"
+                        variant="outlined"
+                        sx={{
+                          ...(softChipSx(kpi.color)),
+                          width: genChipWidth || 'auto',
+                          minWidth: genChipWidth || 'auto'
+                        }}
+                      />
+                    ))}
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', justifyContent: 'center' }}>
+                    {rowB.map((kpi) => (
+                      <Chip
+                        key={`rowB-${kpi.label}`}
+                        label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`}
+                        size="medium"
+                        variant="outlined"
+                        sx={{
+                          ...(softChipSx(kpi.color)),
+                          width: genChipWidth || 'auto',
+                          minWidth: genChipWidth || 'auto'
+                        }}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              );
+            })()}
           </Box>
 
-          {/* Right: JVA & Justiz side-by-side */}
-          <Box sx={{ display: 'flex', gap: 2, flex: 2, justifyContent: 'stretch', flexWrap: 'wrap', ml: 3 }}>
+          {/* Bottom: JVA & Justiz side-by-side */}
+          <Box sx={{ display: 'flex', gap: 2, flex: 2, justifyContent: 'stretch', flexWrap: 'wrap', mt: 3, width: '100%' }}>
             {/* Justiz Card */}
             <Box sx={{
               p: 2,
@@ -1294,16 +1406,23 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               </Box>
               <Typography variant="h5" fontWeight={800} color={justiceTheme.primary} sx={{ mt: 1 }}>{data.totalJustizPhones?.toLocaleString() ?? '-'}</Typography>
               <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJustizPhones / data.totalPhones)}% of total` : ''}</Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, width: '100%' }}>
-                {[
-                  { label: 'Switches', value: data.justizSwitches, total: data.totalSwitches, color: '#d32f2f' },
-                  { label: 'Locations', value: data.justizLocations, total: data.totalLocations, color: '#f57c00' },
-                  { label: 'Cities', value: data.justizCities, total: null, color: '#6a1b9a' },
-                  { label: 'Phones with KEM', value: data.justizPhonesWithKEM, total: data.phonesWithKEM, color: '#2e7d32' },
-                  { label: 'Total KEMs', value: data.totalJustizKEMs, total: data.totalKEMs, color: '#2e7d32' },
-                ].map(kpi => (
-                  <Chip key={kpi.label} label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${kpi.total ? ` (${Math.round(100 * kpi.value / kpi.total)}%)` : ''}`} sx={{ bgcolor: kpi.color, color: '#fff', fontWeight: 700, fontSize: '0.9em', px: 1.2, py: 0.5, width: '100%', justifyContent: 'flex-start' }} />
-                ))}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, alignItems: 'center' }}>
+                {generalJustizKpis.map(kpi => {
+                  const perc = kpi.total ? ` (${Math.round((Number(kpi.value || 0) && Number(kpi.total || 0)) ? (100 * Number(kpi.value) / Number(kpi.total)) : 0)}%)` : '';
+                  return (
+                    <Chip
+                      key={kpi.label}
+                      label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${perc}`}
+                      size="medium"
+                      variant="outlined"
+                      sx={{
+                        ...(softChipSx(kpi.color)),
+                        width: genChipWidth || 'auto',
+                        minWidth: genChipWidth || 'auto'
+                      }}
+                    />
+                  );
+                })}
               </Box>
             </Box>
 
@@ -1328,16 +1447,23 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               </Box>
               <Typography variant="h5" fontWeight={800} color={jvaTheme.primary} sx={{ mt: 1 }}>{data.totalJVAPhones?.toLocaleString() ?? '-'}</Typography>
               <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJVAPhones / data.totalPhones)}% of total` : ''}</Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, width: '100%' }}>
-                {[
-                  { label: 'Switches', value: data.jvaSwitches, total: data.totalSwitches, color: '#d32f2f' },
-                  { label: 'Locations', value: data.jvaLocations, total: data.totalLocations, color: '#f57c00' },
-                  { label: 'Cities', value: data.jvaCities, total: null, color: '#6a1b9a' },
-                  { label: 'Phones with KEM', value: data.jvaPhonesWithKEM, total: data.phonesWithKEM, color: '#2e7d32' },
-                  { label: 'Total KEMs', value: data.totalJVAKEMs, total: data.totalKEMs, color: '#2e7d32' },
-                ].map(kpi => (
-                  <Chip key={kpi.label} label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${kpi.total ? ` (${Math.round(100 * kpi.value / kpi.total)}%)` : ''}`} sx={{ bgcolor: kpi.color, color: '#fff', fontWeight: 700, fontSize: '0.9em', px: 1.2, py: 0.5, width: '100%', justifyContent: 'flex-start' }} />
-                ))}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, alignItems: 'center' }}>
+                {generalJvaKpis.map(kpi => {
+                  const perc = kpi.total ? ` (${Math.round((Number(kpi.value || 0) && Number(kpi.total || 0)) ? (100 * Number(kpi.value) / Number(kpi.total)) : 0)}%)` : '';
+                  return (
+                    <Chip
+                      key={kpi.label}
+                      label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${perc}`}
+                      size="medium"
+                      variant="outlined"
+                      sx={{
+                        ...(softChipSx(kpi.color)),
+                        width: genChipWidth || 'auto',
+                        minWidth: genChipWidth || 'auto'
+                      }}
+                    />
+                  );
+                })}
               </Box>
             </Box>
           </Box>
