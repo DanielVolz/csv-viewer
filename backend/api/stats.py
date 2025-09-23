@@ -283,7 +283,7 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                                 key=lambda x: x["name"]
                             ),
                         },
-                        "file": {"name": file_model.name, "date": date_str},
+                        "file": {"name": file_model.name, "date": date_str, "is_current": True, "using_fallback": False},
                     }
                     return result
                 else:
@@ -300,7 +300,7 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
                             "totalCities": 0,
                             "cities": [],
                         },
-                        "file": {"name": file_model.name, "date": date_str},
+                        "file": {"name": file_model.name, "date": date_str, "is_current": True, "using_fallback": False},
                         "needsReindex": True
                     }
             except Exception as e:
@@ -1236,6 +1236,7 @@ async def get_current_stats_fast() -> Dict:
         }
 
         res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_current)
+        using_fallback = False
 
         # Fallback: any latest snapshot if netspeed.csv-specific one is missing
         if not res["hits"]["hits"]:
@@ -1245,6 +1246,7 @@ async def get_current_stats_fast() -> Dict:
                 "query": {"match_all": {}}
             }
             res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_any)
+            using_fallback = True
 
         if not res["hits"]["hits"]:
             return {
@@ -1291,6 +1293,34 @@ async def get_current_stats_fast() -> Dict:
         jva_models = latest_doc.get("phonesByModelJVA", [])
         total_justiz = latest_doc.get("totalJustizPhones", 0)
         total_jva = latest_doc.get("totalJVAPhones", 0)
+
+        # If the latest current snapshot is effectively empty (no phones/switches/locations and no cities),
+        # fallback to the latest non-empty snapshot across any file variant
+        try:
+            def _is_empty_snapshot(doc: dict) -> bool:
+                return int(doc.get("totalPhones", 0) or 0) == 0 \
+                    and int(doc.get("totalSwitches", 0) or 0) == 0 \
+                    and int(doc.get("totalLocations", 0) or 0) == 0 \
+                    and not (doc.get("cityCodes") or [])
+
+            if _is_empty_snapshot(latest_doc):
+                body_scan = {"size": 20, "sort": [{"date": {"order": "desc"}}], "query": {"match_all": {}}, "_source": True}
+                rscan = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_scan)
+                for hh in rscan.get("hits", {}).get("hits", []):
+                    src2 = hh.get("_source", {})
+                    if not _is_empty_snapshot(src2):
+                        latest_doc = src2
+                        file_name = latest_doc.get("file", file_name)
+                        date_str = latest_doc.get("date", date_str)
+                        using_fallback = True
+                        break
+                # Re-bind derived structures after fallback
+                justiz_models = latest_doc.get("phonesByModelJustiz", [])
+                jva_models = latest_doc.get("phonesByModelJVA", [])
+                total_justiz = latest_doc.get("totalJustizPhones", 0)
+                total_jva = latest_doc.get("totalJVAPhones", 0)
+        except Exception:
+            pass
 
         # Get city codes and resolve names
         city_codes = latest_doc.get("cityCodes", [])
@@ -1340,6 +1370,19 @@ async def get_current_stats_fast() -> Dict:
             # Best-effort correction; ignore failures silently
             pass
 
+        # Determine if this snapshot is the latest by date across any file variant
+        is_latest = True
+        try:
+            body_max = {"size": 0, "aggs": {"max_date": {"max": {"field": "date"}}}}
+            rmax = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_max)
+            max_date_val = rmax.get("aggregations", {}).get("max_date", {}).get("value")
+            latest_any_date = rmax.get("aggregations", {}).get("max_date", {}).get("value_as_string") if max_date_val is not None else None
+            if latest_any_date and date_str and str(latest_any_date) != str(date_str):
+                is_latest = False
+        except Exception:
+            # best-effort; assume latest if check fails
+            is_latest = True
+
         return {
             "success": True,
             "message": "Statistics loaded from OpenSearch snapshot",
@@ -1374,6 +1417,9 @@ async def get_current_stats_fast() -> Dict:
             "file": {
                 "name": file_name,
                 "date": date_str,
+                "is_current": file_name == "netspeed.csv",
+                "is_latest": bool(is_latest),
+                "using_fallback": bool(using_fallback or file_name != "netspeed.csv" or not is_latest),
             }
         }
 
@@ -1421,28 +1467,35 @@ async def get_cities_fast() -> Dict:
     Returns city code to name mapping for location search.
     """
     try:
-        # Get cities from OpenSearch snapshots only
-        stats_response = await get_current_stats()
-        if stats_response.get("success"):
-            cities = stats_response["data"].get("cities", [])
-            # Convert to simple mapping for frontend
-            city_map = {}
-            for city in cities:
-                if isinstance(city, dict) and city.get("code") and city.get("name"):
-                    city_map[city["code"]] = city["name"]
-
-            return {
-                "success": True,
-                "cities": cities,  # Full city objects
-                "cityMap": city_map,  # Simple code->name mapping
-                "total": len(cities)
-            }
-        else:
-            return {"success": False, "message": "No city data available in OpenSearch snapshots", "cities": [], "cityMap": {}}
-
+        from utils.opensearch import OpenSearchConfig
+        opensearch_config = OpenSearchConfig()
+        # Prefer latest netspeed.csv snapshot; fallback to any snapshot
+        body_current = {"size": 1, "sort": [{"date": {"order": "desc"}}], "query": {"term": {"file": {"value": "netspeed.csv"}}}}
+        r = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_current)
+        if not r.get("hits", {}).get("hits"):
+            body_any = {"size": 1, "sort": [{"date": {"order": "desc"}}], "query": {"match_all": {}}}
+            r = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_any)
+        if not r.get("hits", {}).get("hits"):
+            return {"success": False, "message": "No snapshots found", "cities": [], "cityMap": {}, "total": 0}
+        src = r["hits"]["hits"][0].get("_source", {})
+        codes = src.get("cityCodes", []) or []
+        # If empty, scan a few recent snapshots for any cityCodes
+        if not codes:
+            rscan = opensearch_config.client.search(index=opensearch_config.stats_index, body={"size": 20, "sort": [{"date": {"order": "desc"}}], "query": {"match_all": {}}})
+            for hh in rscan.get("hits", {}).get("hits", []):
+                src2 = hh.get("_source", {})
+                cc = src2.get("cityCodes", []) or []
+                if cc:
+                    src = src2
+                    codes = cc
+                    break
+        # Resolve names
+        cities = sorted([{"code": c, "name": resolve_city_name(c)} for c in codes], key=lambda x: x["name"])
+        city_map = {c["code"]: c["name"] for c in cities}
+        return {"success": True, "cities": cities, "cityMap": city_map, "total": len(cities)}
     except Exception as e:
         logger.error(f"Error getting fast cities: {e}")
-        return {"success": False, "message": "Failed to load city data from OpenSearch", "cities": [], "cityMap": {}}
+        return {"success": False, "message": "Failed to load city data from OpenSearch", "cities": [], "cityMap": {}, "total": 0}
 
 
 @router.get("/fast/locations")

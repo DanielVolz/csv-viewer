@@ -1353,10 +1353,27 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <Typography variant="h5" fontWeight={700}>Statistics</Typography>
         {fileMeta?.date && (
           <Typography variant="body2" color="text.secondary">from {String(fileMeta.date).slice(0, 10)}</Typography>
+        )}
+        {(fileMeta?.using_fallback || fileMeta?.is_latest === false) && (
+          <Chip
+            size="small"
+            color="warning"
+            variant="outlined"
+            label={(() => {
+              const d = fileMeta?.date ? String(fileMeta.date).slice(0, 10) : '';
+              if (fileMeta?.is_current === false) return `Using historical snapshot (${d})`;
+              if (fileMeta?.is_latest === false) return `Latest snapshot unavailable – showing ${d}`;
+              return `Using historical snapshot (${d})`;
+            })()}
+            sx={{
+              borderWidth: '1.5px',
+              fontWeight: 500,
+            }}
+          />
         )}
       </Box>
 
