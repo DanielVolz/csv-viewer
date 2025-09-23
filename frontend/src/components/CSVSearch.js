@@ -110,12 +110,24 @@ function CSVSearch() {
       if (q && typeof q === 'string' && q.trim() !== '') {
         setPreviewEnabled(false);
       }
-    } catch {}
+    } catch { }
   }, []);
   const { previewData, loading: previewLoading, error: previewError } = useFilePreview({ enabled: previewEnabled });
   const missingPreview = !previewLoading && previewData && previewData.success === false && (previewData.message || '').toLowerCase().includes('not found');
-  // Block only while actively loading initial preview OR when file definitely missing
-  const searchBlocked = previewLoading || missingPreview; // rename conceptually: execution blocked, not input
+  // Detect when current netspeed.csv exists but is empty (no rows)
+  const currentEmpty = useRef(false);
+  currentEmpty.current = Boolean(
+    !previewLoading &&
+    previewData &&
+    previewData.success === true &&
+    Array.isArray(previewData.data) && previewData.data.length === 0 &&
+    // using_fallback means we're showing yesterday's data, so not "empty current"
+    !previewData.using_fallback &&
+    // If actual_file_name is present, it must be netspeed.csv to be considered empty current
+    ((previewData.actual_file_name && previewData.actual_file_name === 'netspeed.csv') || (!previewData.actual_file_name && previewData.file_name === 'netspeed.csv'))
+  );
+  // Block only while actively loading initial preview; allow searches even if file is missing
+  const searchBlocked = previewLoading; // execution blocked only during preview loading
 
   // Debug: detailed logging + transition tracking
   const prevRef = useRef({});
@@ -219,7 +231,8 @@ function CSVSearch() {
       const cleaned = stripAllWhitespace(term);
       lastSearchTermRef.current = cleaned;
       const macCanonical = normalizeMacInput(cleaned);
-      const hist = includeHistorical; // respect user selection only
+      // Force historical search if current file is missing or empty
+      const hist = includeHistorical || missingPreview || currentEmpty.current;
       if (macCanonical) recordMac(macCanonical);
       searchAll(cleaned, hist, true).then(success => {
         if (!mountedRef.current) return;
@@ -295,7 +308,8 @@ function CSVSearch() {
     if (cleaned.length >= 3 && cleaned !== lastSearchTermRef.current) {
       lastSearchTermRef.current = cleaned;
       const macCanonical = normalizeMacInput(cleaned);
-      const hist = includeHistorical; // do not auto-enable historical
+      // Auto-include historical when current file is missing or empty
+      const hist = includeHistorical || missingPreview || currentEmpty.current;
       if (macCanonical) {
         const loc = getLocationForMac(macCanonical);
         recordMac(macCanonical, loc || undefined);
@@ -319,8 +333,9 @@ function CSVSearch() {
       const loc = getLocationForMac(macCanonical);
       recordMac(macCanonical, loc || undefined);
     }
-    // Use current checkbox selection for historical
-    searchAll(macCanonical, includeHistorical, true).then(success => {
+    // Auto-include historical when current file is missing or empty
+    const hist = includeHistorical || missingPreview || currentEmpty.current;
+    searchAll(macCanonical, hist, true).then(success => {
       if (!mountedRef.current) return;
       if (success) {
         setHasSearched(true);
@@ -384,7 +399,8 @@ function CSVSearch() {
     const cleaned = stripAllWhitespace(searchTerm);
     lastSearchTermRef.current = cleaned;
     const macCanonical = normalizeMacInput(cleaned);
-    const hist = includeHistorical; // do not auto-enable historical
+    // Auto-include historical when current file is missing or empty
+    const hist = includeHistorical || missingPreview || currentEmpty.current;
     if (macCanonical) {
       const loc = getLocationForMac(macCanonical);
       recordMac(macCanonical, loc || undefined);
@@ -481,8 +497,8 @@ function CSVSearch() {
             value={searchTerm}
             onChange={handleInputChange}
             onKeyPress={handleKeyPress}
-            // keep input enabled; execution will be blocked while preview loads
-            disabled={missingPreview} // only hard-disable if file truly missing
+            // keep input enabled; execution is blocked only while preview loads
+            disabled={false}
             sx={{
               '& .MuiOutlinedInput-root': {
                 backgroundColor: 'background.paper',
@@ -511,7 +527,6 @@ function CSVSearch() {
                         <IconButton
                           onClick={(e) => setHistoryAnchor(e.currentTarget)}
                           size="small"
-                          disabled={missingPreview}
                           sx={{ opacity: 0.55, transition: 'opacity 0.2s', '&:hover': { opacity: 1 } }}
                           aria-label="open mac history"
                         >
@@ -523,7 +538,7 @@ function CSVSearch() {
                       <IconButton
                         onClick={handleClearSearch}
                         size="small"
-                        disabled={missingPreview}
+
                       >
                         <Clear fontSize="small" />
                       </IconButton>
@@ -561,7 +576,9 @@ function CSVSearch() {
                           setSearchTerm(item.mac);
                           lastSearchTermRef.current = item.mac;
                           recordMac(item.mac, displayLoc || undefined);
-                          searchAll(item.mac, includeHistorical, true).then(success => {
+                          // Auto-include historical when current file is missing or empty
+                          const hist = includeHistorical || missingPreview || currentEmpty.current;
+                          searchAll(item.mac, hist, true).then(success => {
                             if (!mountedRef.current) return;
                             if (success) {
                               setHasSearched(true);
@@ -620,11 +637,13 @@ function CSVSearch() {
               )}
             </Box>
           </Popover>
-          {searchBlocked && (
-            <Alert severity={missingPreview ? 'warning' : 'info'} sx={{ mt: -1 }}>
-              {missingPreview
-                ? 'Search disabled: netspeed.csv not available. Please provide the file and reload the page.'
-                : 'Data preview is loading – Search temporarily disabled'}
+          {(searchBlocked || missingPreview || currentEmpty.current) && (
+            <Alert severity={searchBlocked ? 'info' : 'warning'} sx={{ mt: -1 }}>
+              {searchBlocked
+                ? 'Data preview is loading – Search temporarily disabled'
+                : (missingPreview
+                  ? 'Current file missing: results will be shown from historical netspeed.csv files.'
+                  : 'Current file has no data: results will be shown from historical netspeed.csv files.')}
             </Alert>
           )}
 
@@ -643,7 +662,6 @@ function CSVSearch() {
                   <Checkbox
                     checked={includeHistorical}
                     onChange={(e) => setIncludeHistorical(e.target.checked)}
-                    disabled={searchBlocked}
                   />
                 }
                 label={
@@ -667,10 +685,10 @@ function CSVSearch() {
               <Button
                 variant="contained"
                 onClick={handleSearch}
-                disabled={searchBlocked || searchLoading || !searchTerm || searchTerm.length < 3}
+                disabled={searchLoading || !searchTerm || searchTerm.length < 3}
                 startIcon={searchLoading ? <CircularProgress size={20} /> : <Search />}
               >
-                {searchLoading ? 'Searching...' : (searchBlocked ? 'Waiting...' : 'Search')}
+                {searchLoading ? 'Searching...' : 'Search'}
               </Button>
             </Box>
           </Box>

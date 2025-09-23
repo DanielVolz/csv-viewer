@@ -268,24 +268,38 @@ const FileInfoBox = React.memo(({ compact = false }) => {
                 }
               } catch { }
               const dateOut = raw ? (timeStr ? `${raw} ${timeStr}` : raw) : '-';
+              const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
+              const fallbackUsing = Boolean(fileInfo?.using_fallback);
               return (
                 <>
                   Current File: <strong>netspeed.csv</strong> • Created: <strong><Box component="span" sx={{ color: isToday ? 'success.main' : 'inherit' }}>{dateOut}</Box></strong> • Records: <strong>{fileInfo?.line_count?.toLocaleString() || '0'}</strong>
+                  {empty && (
+                    <Box component="span" sx={{ ml: 1, color: 'warning.main', fontWeight: 600 }}>
+                      — Keine tagesaktuellen Daten vorhanden (aktuelles File ist leer)
+                    </Box>
+                  )}
+                  {/* Removed verbose fallback text per request */}
                 </>
               );
             })()}
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Tooltip title={indexStatusLabel()} arrow placement="top">
-              <Chip
-                label="Active"
-                color="success"
-                size="small"
-                variant="filled"
-                sx={{ cursor: 'help' }}
-                icon={<CheckCircleRounded sx={{ fontSize: 18 }} />}
-              />
-            </Tooltip>
+            {(() => {
+              const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
+              const fallbackUsing = Boolean(fileInfo?.using_fallback);
+              if (empty || fallbackUsing) {
+                return (
+                  <Tooltip title={empty ? "No up-to-date data available (current file is empty). Searches will use historical files." : "Current file missing; using historical netspeed.csv.*"} arrow placement="top">
+                    <Chip label={empty ? "No data today" : "Using historical"} color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                  </Tooltip>
+                );
+              }
+              return (
+                <Tooltip title={indexStatusLabel()} arrow placement="top">
+                  <Chip label="Active" color="success" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<CheckCircleRounded sx={{ fontSize: 18 }} />} />
+                </Tooltip>
+              );
+            })()}
             <IconButton
               onClick={handleRefresh}
               disabled={refreshing}
@@ -345,9 +359,22 @@ const FileInfoBox = React.memo(({ compact = false }) => {
               </>
             ) : (
               <>
-                <Tooltip title={indexStatusLabel()} arrow placement="top">
-                  <Chip label="Active" color="success" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<CheckCircleRounded sx={{ fontSize: 18 }} />} />
-                </Tooltip>
+                {(() => {
+                  const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
+                  const fallbackUsing = Boolean(fileInfo?.using_fallback);
+                  if (empty || fallbackUsing) {
+                    return (
+                      <Tooltip title={empty ? "No up-to-date data available (current file is empty). Searches will use historical files." : "Current file missing; using historical netspeed.csv.*"} arrow placement="top">
+                        <Chip label={empty ? "No data today" : "Using historical"} color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                      </Tooltip>
+                    );
+                  }
+                  return (
+                    <Tooltip title={indexStatusLabel()} arrow placement="top">
+                      <Chip label="Active" color="success" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<CheckCircleRounded sx={{ fontSize: 18 }} />} />
+                    </Tooltip>
+                  );
+                })()}
                 <IconButton onClick={handleRefresh} disabled={refreshing} size="small">
                   {refreshing ? (
                     <Refresh fontSize="small" sx={{ '@keyframes spin': { to: { transform: 'rotate(360deg)' } }, animation: 'spin 0.8s linear infinite' }} />
@@ -386,7 +413,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
                   fontWeight={500}
                   color={
                     label === 'Status'
-                      ? 'success.main'
+                      ? ((typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0) || Boolean(fileInfo?.using_fallback) ? 'warning.main' : 'success.main')
                       : (label === 'Created' && (() => { try { const d = fileInfo?.date ? new Date(fileInfo.date) : null; const t = new Date(); return d && d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate(); } catch { return false; } })())
                         ? 'success.main'
                         : 'inherit'
@@ -413,7 +440,11 @@ const FileInfoBox = React.memo(({ compact = false }) => {
                     return d ? `${d}${t ? ` ${t}` : ''}` : 'Unknown';
                   })()}
                   {label === 'Total Records' && (fileInfo?.line_count?.toLocaleString() || '0')}
-                  {label === 'Status' && 'Ready'}
+                  {label === 'Status' && (
+                    Boolean(fileInfo?.using_fallback)
+                      ? 'Using historical'
+                      : ((typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0) ? 'Empty (using historical)' : 'Ready')
+                  )}
                 </Typography>
               )}
             </Box>

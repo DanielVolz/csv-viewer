@@ -128,17 +128,32 @@ async def get_netspeed_info():
         # Get path to current CSV file
         csv_dir = Path("/app/data")
         current_file = csv_dir / "netspeed.csv"
-        fallback_file = csv_dir / "netspeed.csv.0"
+        # We'll pick the latest available historical file if current is missing
+        fallback_file: Optional[Path] = None
 
         using_fallback = False
         file_to_use = current_file
 
-        # Check if current file exists, if not use fallback
+        # If current is missing, try historical files in order: .0, .1, .2, ...
         if not current_file.exists():
-            if fallback_file.exists():
-                using_fallback = True
-                file_to_use = fallback_file
-            else:
+            # Build ordered list of netspeed.csv.N files
+            candidates = []
+            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
+                name = p.name
+                try:
+                    suf = name.split("netspeed.csv.", 1)[1]
+                    if suf.isdigit():
+                        candidates.append(p)
+                except Exception:
+                    continue
+            # Choose the first available (smallest N = most recent after today)
+            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
+                if cand.exists():
+                    fallback_file = cand
+                    using_fallback = True
+                    file_to_use = cand
+                    break
+            if not using_fallback:
                 return {
                     "success": False,
                     "message": "No netspeed.csv found — place a file in /app/data and refresh. The netspeed.csv should be created at 06:55 AM.",
@@ -151,24 +166,51 @@ async def get_netspeed_info():
         # Use the file model which handles creation date properly with fallbacks
         file_model = FileModel.from_path(str(file_to_use))
 
-        # Format date consistently
+        # Count lines first for current file; if it's empty and not using fallback, try to pick a historical file with data
+        def _count_lines(fp: Path) -> int:
+            try:
+                with open(fp, 'r') as f:
+                    return max(0, sum(1 for _ in f) - 1)
+            except Exception:
+                return 0
+
+        initial_count = _count_lines(file_to_use)
+        if not using_fallback and initial_count <= 0:
+            # current file exists but has no data; try historical files
+            candidates = []
+            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
+                name = p.name
+                try:
+                    suf = name.split("netspeed.csv.", 1)[1]
+                    if suf.isdigit():
+                        candidates.append(p)
+                except Exception:
+                    continue
+            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
+                if cand.exists() and _count_lines(cand) > 0:
+                    fallback_file = cand
+                    using_fallback = True
+                    file_to_use = cand
+                    break
+
+        # Recompute model/date/time from selected file
+        file_model = FileModel.from_path(str(file_to_use))
         creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
-
-        # Get file modification time for change detection
         modification_time = file_to_use.stat().st_mtime
+        line_count = _count_lines(file_to_use)
 
-        # Count lines (subtract 1 for header)
-        with open(file_to_use, 'r') as f:
-            line_count = sum(1 for _ in f) - 1
-
+        fb_name = fallback_file.name if (using_fallback and fallback_file is not None) else None
         result = {
             "success": True,
-            "message": "Using yesterday's data from netspeed.csv.0 until new netspeed.csv is generated at 06:55 AM." if using_fallback else "Current netspeed.csv file information retrieved successfully",
+            "message": (
+                f"Using data from {fb_name} until new netspeed.csv is generated at 06:55 AM."
+                if using_fallback else "Current netspeed.csv file information retrieved successfully"
+            ),
             "date": creation_date,
             "line_count": line_count,
             "last_modified": modification_time,
             "using_fallback": using_fallback,
-            "fallback_file": "netspeed.csv.0" if using_fallback else None
+            "fallback_file": fb_name
         }
         return JSONResponse(content=result)
 
@@ -230,10 +272,25 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
 
         # If requesting netspeed.csv but it doesn't exist, try fallback
         if filename == "netspeed.csv" and not file_path.exists():
-            fallback_path = csv_dir / "netspeed.csv.0"
-            if fallback_path.exists():
-                file_path = fallback_path
-                actual_filename = "netspeed.csv.0"
+            # Try the most recent historical netspeed.csv.N, preferring .0, then .1, ...
+            candidates = []
+            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
+                name = p.name
+                try:
+                    suf = name.split("netspeed.csv.", 1)[1]
+                    if suf.isdigit():
+                        candidates.append(p)
+                except Exception:
+                    continue
+            # Choose smallest suffix (0 first)
+            chosen = None
+            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
+                if cand.exists():
+                    chosen = cand
+                    break
+            if chosen is not None:
+                file_path = chosen
+                actual_filename = chosen.name
                 using_fallback = True
             else:
                 return {
@@ -257,6 +314,34 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                 "using_fallback": False,
                 "fallback_file": None
             }
+
+        # If requested file exists but has no data (only header or 0 bytes), try historical netspeed.csv.N with data
+        def _count_lines(fp: Path) -> int:
+            try:
+                with open(fp, 'r') as fh:
+                    return max(0, sum(1 for _ in fh) - 1)
+            except Exception:
+                return 0
+
+        if filename == "netspeed.csv" and file_path.exists() and _count_lines(file_path) <= 0:
+            candidates = []
+            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
+                name = p.name
+                try:
+                    suf = name.split("netspeed.csv.", 1)[1]
+                    if suf.isdigit():
+                        candidates.append(p)
+                except Exception:
+                    continue
+            chosen = None
+            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
+                if cand.exists() and _count_lines(cand) > 0:
+                    chosen = cand
+                    break
+            if chosen is not None:
+                file_path = chosen
+                actual_filename = chosen.name
+                using_fallback = True
 
         # Get file creation date
         file_model = FileModel.from_path(str(file_path))
@@ -299,7 +384,9 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         # Limit number of rows
         preview_rows = rows[:limit]
 
-        fallback_message = " (using yesterday's data from netspeed.csv.0 until new file is generated at 06:55 AM)" if using_fallback else ""
+        fallback_message = (
+            f" (using data from {actual_filename} until new file is generated at 06:55 AM)" if using_fallback else ""
+        )
 
         return {
             "success": True,

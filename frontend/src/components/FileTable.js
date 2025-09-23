@@ -16,7 +16,7 @@ import {
   Snackbar,
   Tooltip
 } from '@mui/material';
-import { Download, Replay, CheckCircleRounded, HistoryRounded, Inventory2Rounded } from '@mui/icons-material';
+import { Download, Replay, CheckCircleRounded, HistoryRounded, Inventory2Rounded, WarningRounded } from '@mui/icons-material';
 import axios from 'axios';
 import useFiles from '../hooks/useFiles';
 import useIndexingProgress from '../hooks/useIndexingProgress';
@@ -84,13 +84,36 @@ function FileTable() {
   // removed unused formatFileSize helper
 
   const getFileStatus = (file) => {
+    const empty = typeof file?.line_count === 'number' ? file.line_count <= 0 : !file?.line_count;
+    const isNetspeed = file?.name?.startsWith('netspeed.csv');
     if (file.name === 'netspeed.csv') {
+      if (empty) {
+        return {
+          label: 'No data',
+          color: 'warning',
+          icon: <WarningRounded sx={{ fontSize: 18 }} />,
+          tooltip: 'Current file is empty/not functional; historical data will be used.'
+        };
+      }
       return { label: 'Active', color: 'success', icon: <CheckCircleRounded sx={{ fontSize: 18 }} /> };
     } else if (file.name.includes('_bak')) {
       return { label: 'Backup', color: 'warning', icon: <Inventory2Rounded sx={{ fontSize: 18 }} /> };
     } else {
-      // Make 'Historical' subtly orange so it’s clearly not current
-      return { label: 'Historical', color: 'warning', icon: <HistoryRounded sx={{ fontSize: 18 }} /> };
+      // Historical netspeed files: mark empty ones as 'No data'
+      if (isNetspeed) {
+        if (empty) {
+          return {
+            label: 'No data',
+            color: 'warning',
+            icon: <WarningRounded sx={{ fontSize: 18 }} />,
+            tooltip: 'This historical file has no data (not functional).'
+          };
+        }
+        // Make 'Historical' subtly orange so it’s clearly not current
+        return { label: 'Historical', color: 'warning', icon: <HistoryRounded sx={{ fontSize: 18 }} /> };
+      }
+      // Other files
+      return { label: 'Other', color: 'default', icon: null };
     }
   };
 
@@ -255,26 +278,24 @@ function FileTable() {
                           </Typography>
                         </TableCell>
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
-                          {isActiveFile ? (
-                            <Tooltip title={indexStatusText} placement="top" arrow>
+                          {(() => {
+                            const chip = (
                               <Chip
                                 label={status.label}
                                 color={status.color}
                                 size="small"
                                 variant="filled"
-                                sx={{ cursor: 'help' }}
                                 icon={status.icon}
+                                sx={(isActiveFile || status.tooltip) ? { cursor: 'help' } : undefined}
                               />
-                            </Tooltip>
-                          ) : (
-                            <Chip
-                              label={status.label}
-                              color={status.color}
-                              size="small"
-                              variant="filled"
-                              icon={status.icon}
-                            />
-                          )}
+                            );
+                            const tip = status.tooltip || (isActiveFile ? indexStatusText : null);
+                            return tip ? (
+                              <Tooltip title={tip} placement="top" arrow>
+                                {chip}
+                              </Tooltip>
+                            ) : chip;
+                          })()}
                         </TableCell>
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
                           <Typography variant="body2">
@@ -299,7 +320,7 @@ function FileTable() {
                         </TableCell>
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
                           <Typography variant="body2">
-                            {file.line_count ? file.line_count.toLocaleString() : '-'}
+                            {typeof file.line_count === 'number' ? file.line_count.toLocaleString() : '-'}
                           </Typography>
                         </TableCell>
                       </TableRow>
