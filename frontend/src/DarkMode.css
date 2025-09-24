@@ -1,7 +1,9 @@
 /* Dark Mode CSS Overrides */
 
 /* General dark mode styles - avoid transitions to ensure atomic swap */
-.dark-mode { transition: none; }
+.dark-mode {
+  transition: none;
+}
 
 /* Keep heavy overrides out to let MUI Theme control backgrounds */
 
@@ -48,11 +50,20 @@
 /* Smooth transitions for theme changes */
 /* Keep transitions minimal to reduce repaint cost on theme toggle */
 /* Avoid global body transitions to prevent jank on mode toggle */
-body { transition: none; }
+body {
+  transition: none;
+}
 
 /* Minimal instant colors to avoid flashes while React repaints */
-body { background: #f8fafc; color: rgba(0,0,0,0.87); }
-.dark-mode { background: #0d1117; color: #e6edf3; }
+body {
+  background: #f8fafc;
+  color: rgba(0, 0, 0, 0.87);
+}
+
+.dark-mode {
+  background: #0d1117;
+  color: #e6edf3;
+}
 
 /* Table customizations */
 .dark-mode .MuiTableCell-root {
@@ -65,32 +76,39 @@ body { background: #f8fafc; color: rgba(0,0,0,0.87); }
 
 /* Override alternating row colors for FilePreview table in dark mode */
 .dark-mode .MuiTableRow-root:nth-of-type(odd) {
-  background-color: rgba(0, 0, 0, 0.3); /* Darker background for odd rows */
+  background-color: rgba(0, 0, 0, 0.3);
+  /* Darker background for odd rows */
 }
 
 /* Style for the "Current CSV File Information" section */
 .dark-mode .file-info-paper {
-  color: rgba(255, 255, 255, 0.87); /* Light text color */
+  color: rgba(255, 255, 255, 0.87);
+  /* Light text color */
 }
 
 /* Style for CardContent in file info box */
 .dark-mode .file-info-paper .MuiCardContent-root {
-  background-color: #333; /* Dark background for the card content */
+  background-color: #333;
+  /* Dark background for the card content */
 }
 
 /* Style for the file info box items */
 .dark-mode .file-info-box-item {
-  background-color: #222 !important; /* Dark background for info box items */
-  color: rgba(255, 255, 255, 0.87); /* Light text color */
+  background-color: #222 !important;
+  /* Dark background for info box items */
+  color: rgba(255, 255, 255, 0.87);
+  /* Light text color */
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
 }
 
 .dark-mode .file-info-box-item .MuiTypography-root {
-  color: rgba(255, 255, 255, 0.87); /* Light text color for all typography elements */
+  color: rgba(255, 255, 255, 0.87);
+  /* Light text color for all typography elements */
 }
 
 .dark-mode .file-info-box-item .MuiTypography-caption {
-  color: rgba(255, 255, 255, 0.6); /* Slightly dimmer color for captions */
+  color: rgba(255, 255, 255, 0.6);
+  /* Slightly dimmer color for captions */
 }
 
 /* Input fields */

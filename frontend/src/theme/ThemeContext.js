@@ -7,7 +7,7 @@ import { CssBaseline } from '@mui/material';
 // Create a context for the theme
 const ThemeContext = createContext({
   isDarkMode: false,
-  toggleTheme: () => {},
+  toggleTheme: () => { },
 });
 
 // Create a provider component
@@ -36,9 +36,9 @@ export const ThemeProvider = ({ children }) => {
       // Force reflow so the style takes effect immediately
       void window.getComputedStyle(document.documentElement).transition;
       window.setTimeout(() => {
-        try { document.head.removeChild(style); } catch {}
+        try { document.head.removeChild(style); } catch { }
       }, timeoutMs);
-    } catch {}
+    } catch { }
   }, []);
 
   // Toggle between light and dark mode
@@ -52,7 +52,7 @@ export const ThemeProvider = ({ children }) => {
     try {
       if (willBeDark) document.body.classList.add('dark-mode');
       else document.body.classList.remove('dark-mode');
-    } catch {}
+    } catch { }
   };
 
   // Update localStorage when the theme changes
