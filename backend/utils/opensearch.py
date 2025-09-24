@@ -1597,18 +1597,21 @@ class OpenSearchConfig:
             hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if qn else None
             if hostname_pattern_match and '.' not in qn and len(qn) >= 13:
                 from utils.csv_utils import DESIRED_ORDER
+                # Case-insensitive exact match on the hostname without domain using the normalized keyword subfield
+                q_lower = qn.lower()
                 return {
                     "query": {
                         "bool": {
                             "should": [
-                                # Exact match for hostname without domain
-                                {"term": {"Switch Hostname.keyword": qn}},
-                                {"term": {"Switch Hostname.keyword": qn.lower()}},
-                                {"term": {"Switch Hostname.keyword": qn.upper()}},
+                                # Exact match for hostname without domain (case-insensitive via normalized field)
+                                {"term": {"Switch Hostname.lower": q_lower}},
+                                # Also try raw field exact (covers data already stored in lower/upper cases)
+                                {"term": {"Switch Hostname": qn}},
+                                {"term": {"Switch Hostname": qn.upper()}},
 
-                                # Prefix match for full hostname with domain
+                                # Prefix match for full hostname with domain (case-insensitive)
+                                {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
                                 {"prefix": {"Switch Hostname": f"{qn}."}},
-                                {"prefix": {"Switch Hostname": f"{qn.lower()}."}},
                                 {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
                             ],
                             "minimum_should_match": 1
@@ -1836,7 +1839,10 @@ class OpenSearchConfig:
 
                 {"wildcard": {"Model Name": f"*{str(query).lower()}*"}},
                 {"wildcard": {"Model Name": f"*{str(query).upper()}*"}},
-                {"wildcard": {"File Name": f"*{query}*"}}
+                {"wildcard": {"File Name": f"*{query}*"}},
+                # If it looks like a bare hostname token (starts with 3 letters + 2 digits),
+                # add a case-insensitive wildcard against the normalized hostname field
+                *([{"wildcard": {"Switch Hostname.lower": f"*{str(query).lower()}*"}}] if is_hostname_pattern else [])
             ], "minimum_should_match": 1}},
             "size": size
         }
