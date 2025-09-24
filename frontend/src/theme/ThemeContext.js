@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { ThemeProvider as MuiThemeProvider } from '@mui/material/styles';
 import { lightTheme, darkTheme } from './theme';
 import { CssBaseline } from '@mui/material';
@@ -18,7 +19,6 @@ export const ThemeProvider = ({ children }) => {
       // Check if the browser/OS prefers dark mode
       const prefersDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
       const initialMode = savedMode !== null ? savedMode === 'true' : prefersDarkMode;
-      console.log('Initial dark mode:', initialMode);
       return initialMode;
     } catch (error) {
       console.error('Error initializing theme:', error);
@@ -26,29 +26,40 @@ export const ThemeProvider = ({ children }) => {
     }
   });
 
+  // Disable all CSS transitions briefly to avoid jank during theme switch
+  const disableTransitionsBriefly = React.useCallback((timeoutMs = 200) => {
+    try {
+      const style = document.createElement('style');
+      style.setAttribute('data-disable-transitions', 'true');
+      style.appendChild(document.createTextNode('*{transition:none!important}'));
+      document.head.appendChild(style);
+      // Force reflow so the style takes effect immediately
+      void window.getComputedStyle(document.documentElement).transition;
+      window.setTimeout(() => {
+        try { document.head.removeChild(style); } catch {}
+      }, timeoutMs);
+    } catch {}
+  }, []);
+
   // Toggle between light and dark mode
   const toggleTheme = () => {
-    console.log('Toggling theme from', isDarkMode, 'to', !isDarkMode);
-    setIsDarkMode(prevMode => !prevMode);
+    // Prevent global repaint storms (instantly switch without animations)
+    disableTransitionsBriefly(220);
+    const willBeDark = !isDarkMode;
+    // Commit theme state synchronously (atomic re-render)
+    flushSync(() => { setIsDarkMode(willBeDark); });
+    // Apply matching body class immediately after commit for a single-frame swap
+    try {
+      if (willBeDark) document.body.classList.add('dark-mode');
+      else document.body.classList.remove('dark-mode');
+    } catch {}
   };
 
   // Update localStorage when the theme changes
   useEffect(() => {
     try {
       localStorage.setItem('darkMode', String(isDarkMode));
-
-      // Apply a class to the body element for additional styling
-      if (isDarkMode) {
-        document.body.classList.add('dark-mode');
-        document.body.style.backgroundColor = '#121212';
-        document.body.style.color = '#ffffff';
-      } else {
-        document.body.classList.remove('dark-mode');
-        document.body.style.backgroundColor = '#f5f5f5';
-        document.body.style.color = 'rgba(0, 0, 0, 0.87)';
-      }
-
-      console.log('Theme updated to:', isDarkMode ? 'dark' : 'light');
+      // Body class is handled synchronously in toggleTheme for atomic swap
     } catch (error) {
       console.error('Error saving theme preference:', error);
     }
@@ -56,13 +67,12 @@ export const ThemeProvider = ({ children }) => {
 
   // Apply the theme to the body when the component mounts
   useEffect(() => {
-    console.log('ThemeProvider mounted, dark mode is:', isDarkMode);
     return () => {
-      console.log('ThemeProvider unmounted');
+      // noop
     };
   }, []);
 
-  // Provide the current theme and toggle function
+  // Provide the current theme and toggle function (classic MUI ThemeProvider)
   return (
     <ThemeContext.Provider value={{ isDarkMode, toggleTheme }}>
       <MuiThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>

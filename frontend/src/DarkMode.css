@@ -1,9 +1,9 @@
 /* Dark Mode CSS Overrides */
 
-/* General dark mode styles */
-.dark-mode {
-  transition: all 0.3s ease;
-}
+/* General dark mode styles - avoid transitions to ensure atomic swap */
+.dark-mode { transition: none; }
+
+/* Keep heavy overrides out to let MUI Theme control backgrounds */
 
 /* Custom scrollbar for dark mode */
 .dark-mode ::-webkit-scrollbar {
@@ -46,16 +46,13 @@
 }
 
 /* Smooth transitions for theme changes */
-body,
-.MuiPaper-root,
-.MuiAppBar-root,
-.MuiCard-root,
-.MuiTableCell-root,
-.MuiTableHead-root,
-.MuiTableRow-root,
-.MuiDivider-root {
-  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
-}
+/* Keep transitions minimal to reduce repaint cost on theme toggle */
+/* Avoid global body transitions to prevent jank on mode toggle */
+body { transition: none; }
+
+/* Minimal instant colors to avoid flashes while React repaints */
+body { background: #f8fafc; color: rgba(0,0,0,0.87); }
+.dark-mode { background: #0d1117; color: #e6edf3; }
 
 /* Table customizations */
 .dark-mode .MuiTableCell-root {

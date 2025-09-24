@@ -108,10 +108,9 @@ export const lightTheme = createTheme({
     MuiAppBar: {
       styleOverrides: {
         root: {
-          background: 'rgba(255, 255, 255, 0.1)',
-          backdropFilter: 'blur(20px)',
-          border: 'none',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
+          background: '#ffffff',
+          borderBottom: '1px solid #e5e7eb',
+          boxShadow: 'none',
         },
       },
     },
@@ -208,11 +207,10 @@ export const lightTheme = createTheme({
     MuiTableContainer: {
       styleOverrides: {
         root: {
-          borderRadius: '16px',
-          background: 'rgba(255, 255, 255, 0.9)',
-          backdropFilter: 'blur(20px)',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.15)',
+          borderRadius: '12px',
+          background: '#ffffff',
+          border: '1px solid #e5e7eb',
+          boxShadow: 'none',
         },
       },
     },
@@ -226,7 +224,7 @@ export const lightTheme = createTheme({
         head: {
           fontWeight: 700,
           color: '#374151',
-          background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%)',
+          background: 'transparent',
           fontSize: '0.8rem',
           textTransform: 'uppercase',
           letterSpacing: '0.05em',
@@ -236,13 +234,12 @@ export const lightTheme = createTheme({
     MuiTableRow: {
       styleOverrides: {
         root: {
-          transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+          transition: 'background-color 0.12s ease',
           '&:nth-of-type(odd)': {
             backgroundColor: 'rgba(249, 250, 251, 0.6)',
           },
           '&:hover': {
             backgroundColor: 'rgba(99, 102, 241, 0.08) !important',
-            transform: 'scale(1.01)',
           },
         },
       },
@@ -250,7 +247,7 @@ export const lightTheme = createTheme({
     MuiTableHead: {
       styleOverrides: {
         root: {
-          background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%)',
+          background: 'transparent',
         },
       },
     },
@@ -734,3 +731,7 @@ export const darkTheme = createTheme({
     ...Array(19).fill('0 25px 40px rgba(0, 0, 0, 0.50)'),
   ],
 });
+
+// CSS Variables theme for fast, flicker-free color scheme switching
+// Reuse existing light/dark palettes to avoid visual drift while moving to CssVarsProvider
+// Removed cssVarsTheme; we are using classic ThemeProvider for stability

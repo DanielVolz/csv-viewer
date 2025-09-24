@@ -732,7 +732,7 @@ function DataTable({
                 fontSize: '0.85rem',
                 color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.5)' : 'text.secondary',
                 borderBottom: theme => `2px solid ${theme.palette.divider}`,
-                backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : 'rgba(0, 0, 0, 0.02)'
+                backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : theme.palette.background.paper
               }}>
                 #
               </TableCell>
@@ -746,7 +746,7 @@ function DataTable({
                   fontSize: '0.85rem',
                   color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.5)' : 'text.secondary',
                   borderBottom: theme => `2px solid ${theme.palette.divider}`,
-                  backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : 'rgba(0, 0, 0, 0.02)',
+                  backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : theme.palette.background.paper,
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -797,7 +797,7 @@ function DataTable({
                   sx={{
                     backgroundColor: theme => theme.palette.mode === 'dark'
                       ? 'rgba(31, 41, 55, 0.5)'
-                      : 'rgba(0, 0, 0, 0.01)',
+                      : 'transparent',
                     borderBottom: theme => `1px solid ${theme.palette.divider}`,
                     '&:hover': {
                       backgroundColor: theme => theme.palette.mode === 'dark'
@@ -807,9 +807,8 @@ function DataTable({
                     '&:nth-of-type(even)': {
                       backgroundColor: theme => theme.palette.mode === 'dark'
                         ? 'rgba(55, 65, 81, 0.3)'
-                        : 'rgba(0, 0, 0, 0.02)',
-                    },
-                    transition: 'all 0.2s ease'
+                        : 'transparent',
+                    }
                   }}
                 >
                   {showRowNumbers && (
@@ -911,7 +910,7 @@ function DataTable({
               sx={{
                 backgroundColor: theme => theme.palette.mode === 'dark'
                   ? 'rgba(31, 41, 55, 0.5)'
-                  : 'rgba(0, 0, 0, 0.01)',
+                  : 'transparent',
                 borderBottom: theme => `1px solid ${theme.palette.divider}`,
                 '&:hover': {
                   backgroundColor: theme => theme.palette.mode === 'dark'
@@ -1019,4 +1018,6 @@ function DataTable({
   );
 }
 
-export default React.memo(DataTable);
+// Memoize to prevent unnecessary rerenders on theme toggles or parent updates when props are equal
+const MemoDataTable = React.memo(DataTable);
+export default MemoDataTable;
