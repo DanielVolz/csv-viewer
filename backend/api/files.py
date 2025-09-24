@@ -56,33 +56,19 @@ async def list_files():
 
                 # Convert to dict and add line count
                 file_dict = file_model.dict()
-                # Normalize date to YYYY-MM-DD for consistent frontend display
+                # Always use the actual file's timestamp for shown date to avoid suffix-based drift
                 try:
-                    if file_model.date:
-                        file_dict["date"] = file_model.date.strftime('%Y-%m-%d')
-                    else:
-                        file_dict["date"] = None
-                except Exception:
-                    file_dict["date"] = None
-
-                # Add precise modification time information
-                try:
-                    mtime = file_path.stat().st_mtime
                     from datetime import datetime as _dt, timezone as _tz
-                    # Expose raw epoch for consistent client-side local formatting
+                    mtime = file_path.stat().st_mtime
+                    file_dict["date"] = _dt.fromtimestamp(mtime).strftime('%Y-%m-%d')
                     file_dict["mtime"] = mtime
-                    # Also include a timezone-aware ISO string in UTC for diagnostics
-                    dt_utc = _dt.fromtimestamp(mtime, tz=_tz.utc)
-                    file_dict["datetime"] = dt_utc.isoformat()
-                    # Keep legacy "time" for backward compatibility (server-local)
+                    file_dict["datetime"] = _dt.fromtimestamp(mtime, tz=_tz.utc).isoformat()
                     try:
-                        dt_local = _dt.fromtimestamp(mtime)
-                        file_dict["time"] = dt_local.strftime('%H:%M')
+                        file_dict["time"] = _dt.fromtimestamp(mtime).strftime('%H:%M')
                     except Exception:
                         pass
                 except Exception:
-                    # Optional fields; ignore if stat fails
-                    pass
+                    file_dict["date"] = None
                 file_dict["line_count"] = line_count
                 files.append(file_dict)
 
@@ -163,7 +149,7 @@ async def get_netspeed_info():
                     "fallback_file": None
                 }
 
-        # Use the file model which handles creation date properly with fallbacks
+        # Use the file model (format detection, optional) – date will be based on mtime instead
         file_model = FileModel.from_path(str(file_to_use))
 
         # Count lines first for current file; if it's empty and not using fallback, try to pick a historical file with data
@@ -193,10 +179,10 @@ async def get_netspeed_info():
                     file_to_use = cand
                     break
 
-        # Recompute model/date/time from selected file
-        file_model = FileModel.from_path(str(file_to_use))
-        creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
+        # Recompute date/time from filesystem so UI reflects the real file date
+        from datetime import datetime as _dt
         modification_time = file_to_use.stat().st_mtime
+        creation_date = _dt.fromtimestamp(modification_time).strftime('%Y-%m-%d')
         line_count = _count_lines(file_to_use)
 
         fb_name = fallback_file.name if (using_fallback and fallback_file is not None) else None
@@ -343,9 +329,13 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                 actual_filename = chosen.name
                 using_fallback = True
 
-        # Get file creation date
+        # Get file creation date from filesystem mtime for consistency with file list
         file_model = FileModel.from_path(str(file_path))
-        creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
+        try:
+            from datetime import datetime as _dt
+            creation_date = _dt.fromtimestamp(file_path.stat().st_mtime).strftime('%Y-%m-%d')
+        except Exception:
+            creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
         # Read CSV file
         headers, rows = read_csv_file(str(file_path))
