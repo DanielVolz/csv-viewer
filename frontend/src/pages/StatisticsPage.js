@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress } from '@mui/material';
+import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, ListItemButton, ListItemIcon, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress } from '@mui/material';
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
@@ -439,6 +439,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   // Location-specific timeline state
   const [locTimeline, setLocTimeline] = React.useState({ loading: false, error: null, series: [] });
   const locTimelineLoadedKeyRef = React.useRef('');
+  // Collapsible state for per-location timeline (default collapsed)
+  const [locTimelineExpanded, setLocTimelineExpanded] = React.useState(false);
 
   // Local input state for immediate UI response, debounced for filtering
   const [localInput, setLocalInput] = React.useState(() => {
@@ -1198,7 +1200,13 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return () => { abort = true; controller.abort(); };
   }, [timelineDays]);
 
-  // Fetch per-location timeline whenever the selected location changes
+  // Reset collapsed state when navigating to By Location view
+  React.useEffect(() => {
+    const p = (locationRouter?.pathname || '/statistics');
+    if (p.startsWith('/statistics/by-location')) setLocTimelineExpanded(false);
+  }, [locationRouter?.pathname]);
+
+  // Fetch per-location timeline only when expanded and a location is selected
   React.useEffect(() => {
     if (!debouncedLocSelected) {
       // Reset timeline when no location is selected
@@ -1206,6 +1214,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       locTimelineLoadedKeyRef.current = '';
       return;
     }
+    if (!locTimelineExpanded) return; // do not fetch while collapsed
     const key = String(debouncedLocSelected).toUpperCase();
     if (locTimelineLoadedKeyRef.current === key && (locTimeline.series || []).length) return;
     let abort = false;
@@ -1229,8 +1238,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       }
     })();
     return () => { abort = true; controller.abort(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedLocSelected]);
+  }, [debouncedLocSelected, locTimelineExpanded]);
 
   // Placeholder series to keep charts stable when no KPI is selected (Global/Per-location)
   const globalEmptySeries = React.useMemo(() => (
@@ -1411,6 +1419,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const isOverview = curPath === '/statistics' || curPath === '/statistics/' || curPath.startsWith('/statistics/overview');
   const isTimelines = curPath.startsWith('/statistics/timelines');
   const isByLocation = curPath.startsWith('/statistics/by-location');
+  const isPhonesByModel = curPath.startsWith('/statistics/phones-by-model');
 
   // Redirect bare /statistics to overview for clarity
   React.useEffect(() => {
@@ -1452,36 +1461,72 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       {/* Two-pane layout: left menu + right content */}
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
         {/* Left menu */}
-        <Box sx={{ width: 240, flexShrink: 0 }}>
-          <Paper variant="outlined" sx={{ p: 1, borderRadius: 2 }}>
-            <List dense>
-              {[{ to: '/statistics/overview', label: 'Overview' }, { to: '/statistics/timelines', label: 'Timelines' }, { to: '/statistics/by-location', label: 'Statistics by Location' }].map((m) => {
+        <Box sx={{ width: 260, flexShrink: 0 }}>
+          <Paper
+            variant="outlined"
+            sx={{
+              p: 1.25,
+              borderRadius: 2.5,
+              borderColor: 'divider',
+              background: (t) => `linear-gradient(180deg, ${alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.08 : 0.06)} 0%, ${alpha(t.palette.background.paper, 1)} 48%, ${alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.06 : 0.04)} 100%)`,
+            }}
+          >
+            <Typography variant="overline" sx={{ px: 1, pt: 0.5, pb: 1, display: 'block', opacity: 0.7, letterSpacing: '0.08em' }}>
+              Views
+            </Typography>
+            <List dense sx={{ py: 0 }}>
+              {[
+                { to: '/statistics/overview', label: 'Overview', Icon: PublicIcon },
+                { to: '/statistics/phones-by-model', label: 'Phones by Model', Icon: PhoneIcon },
+                { to: '/statistics/timelines', label: 'Timelines', Icon: TrendingUpIcon },
+                { to: '/statistics/by-location', label: 'Statistics by Location', Icon: PlaceIcon },
+              ].map((m) => {
                 const active = curPath === m.to || (m.to !== '/statistics/overview' && curPath.startsWith(m.to));
+                const { Icon } = m;
                 return (
-                  <ListItem key={m.to} disablePadding>
-                    <ListItemText
-                      primary={
-                        <Box
-                          component={Link}
-                          to={m.to}
-                          onClick={(e) => { e.preventDefault(); navigate(m.to); }}
-                          sx={{
-                            display: 'block',
-                            width: '100%',
-                            px: 1.5,
-                            py: 1,
-                            borderRadius: 1,
-                            textDecoration: 'none',
-                            color: active ? 'primary.main' : 'text.primary',
-                            fontWeight: active ? 700 : 500,
-                            backgroundColor: active ? 'action.hover' : 'transparent',
-                            '&:hover': { backgroundColor: 'action.hover' },
-                          }}
-                        >
-                          {m.label}
-                        </Box>
-                      }
-                    />
+                  <ListItem key={m.to} disablePadding sx={{ mb: 0.25 }}>
+                    <ListItemButton
+                      component={Link}
+                      to={m.to}
+                      onClick={(e) => { e.preventDefault(); navigate(m.to); }}
+                      sx={{
+                        position: 'relative',
+                        borderRadius: 2,
+                        px: 1.25,
+                        py: 1,
+                        gap: 1,
+                        bgcolor: active ? (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.15 : 0.10) : 'transparent',
+                        color: active ? 'primary.main' : 'text.secondary',
+                        '&:hover': {
+                          bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.12 : 0.08),
+                          transform: 'translateY(-1px)',
+                          transition: 'transform 120ms ease, background-color 120ms ease',
+                        },
+                        '& .MuiListItemIcon-root': {
+                          minWidth: 32,
+                          color: active ? 'primary.main' : 'text.disabled',
+                        },
+                        '& .MuiTypography-root': {
+                          fontWeight: active ? 700 : 600,
+                          color: active ? 'primary.main' : 'text.primary',
+                        },
+                        '&::before': active ? {
+                          content: '""',
+                          position: 'absolute',
+                          left: 6,
+                          top: '16%',
+                          width: 4,
+                          height: '68%',
+                          borderRadius: 2,
+                          backgroundColor: 'primary.main',
+                        } : undefined,
+                      }}
+                    >
+                      <ListItemIcon>
+                        <Icon fontSize="small" />
+                      </ListItemIcon>
+                      <Typography variant="body2">{m.label}</Typography>
+                    </ListItemButton>
                   </ListItem>
                 );
               })}
@@ -1662,7 +1707,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               </Box>
             </Paper>
 
-            <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+            {false && (<Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
               <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
               {loading ? (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -2344,7 +2389,319 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 </Grid>
               )}
             </Paper>
+            )}
           </>)}
+
+          {isPhonesByModel && (
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+              <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
+              {loading ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <Skeleton key={i} variant="rectangular" height={28} />
+                  ))}
+                </Box>
+              ) : (
+                <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
+                  {/* Justice institutions Category */}
+                  <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
+                    <Box sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      backgroundColor: justiceTheme.background,
+                      border: '1px solid',
+                      borderColor: justiceTheme.border,
+                      height: '100%'
+                    }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: justiceTheme.primary }}>
+                        Justice institutions (Justiz)
+                      </Typography>
+                      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                        <List dense sx={{ flex: 1 }}>
+                          <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                  <Chip
+                                    label="Total Phones"
+                                    size="small"
+                                    color="info"
+                                    variant="filled"
+                                    sx={{ fontWeight: 600 }}
+                                  />
+                                  <Typography variant="body2" fontWeight={700} sx={{ color: 'info.main', fontSize: '1rem' }}>
+                                    {Number(data.totalJustizPhones || 0).toLocaleString()}
+                                  </Typography>
+                                </Box>
+                              }
+                            />
+                          </ListItem>
+                          {(data.phonesByModelJustiz || [])
+                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                            .map(({ model, count }) => {
+                              const label = String(model);
+                              const lower = label.toLowerCase();
+                              let color = 'default';
+                              if (lower.includes('kem')) color = 'success';
+                              else if (lower.includes('conference')) color = 'info';
+                              else if (lower.includes('wireless')) color = 'warning';
+                              else color = 'primary';
+                              return (
+                                <ListItem key={`justiz-${model}`} sx={{ py: 0.3, px: 0 }}>
+                                  <ListItemText
+                                    primary={
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                        <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                        <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                      </Box>
+                                    }
+                                  />
+                                </ListItem>
+                              );
+                            })}
+                          {(data.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                          )}
+                        </List>
+
+                        {/* Expanded by default: View by Location (grouped by city) */}
+                        {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
+                          <Accordion defaultExpanded sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
+                            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <PlaceIcon sx={{ fontSize: '1.1rem', color: 'info.main' }} />
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
+                                </Typography>
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails>
+                              <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                                <Button size="small" variant="outlined" onClick={expandAllJustizCities} sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem', borderRadius: 2, textTransform: 'none', fontWeight: 500 }}>Expand All</Button>
+                                <Button size="small" variant="outlined" onClick={collapseAllJustizCities} sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem', borderRadius: 2, textTransform: 'none', fontWeight: 500 }}>Collapse All</Button>
+                              </Box>
+                            </AccordionDetails>
+                            <AccordionDetails sx={{ pt: 0 }}>
+                              {groupLocationsByCity(data.phonesByModelJustizDetails || []).map((cityGroup) => (
+                                <Accordion
+                                  key={`justiz-city-${cityGroup.cityCode}`}
+                                  expanded={justizCitiesExpanded[`justiz-city-${cityGroup.cityCode}`] || false}
+                                  onChange={(event, isExpanded) => {
+                                    setJustizCitiesExpanded(prev => ({ ...prev, [`justiz-city-${cityGroup.cityCode}`]: isExpanded }));
+                                  }}
+                                  TransitionProps={fastTransitionProps}
+                                  sx={{ mb: 1, border: '1px solid', borderColor: justiceTheme.border, borderRadius: 1, backgroundColor: justiceTheme.background, '&.MuiAccordion-root': { '&:before': { display: 'none' } } }}
+                                >
+                                  <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: justiceTheme.background, borderRadius: 1, minHeight: '40px !important', '& .MuiAccordionSummary-content': { margin: '8px 0 !important' } }}>
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <BusinessIcon sx={{ fontSize: '1rem', color: 'info.main' }} />
+                                        <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'info.main' }}>
+                                          {(cityGroup.cityName || cityNameByCode3?.[String(cityGroup.cityCode || '').toUpperCase().replace(/X/g, 'x')] || cityNameByCode3?.[String(cityGroup.cityCode || '').toUpperCase()])}
+                                          {` (${String(cityGroup.cityCode || '').toUpperCase().replace(/X/g, 'x')})`}
+                                        </Typography>
+                                      </Box>
+                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <Chip label={`${cityGroup.totalCityPhones.toLocaleString()} phones`} size="small" color="info" variant="outlined" sx={{ fontSize: '0.7rem', height: '24px', fontWeight: 600 }} />
+                                        <Chip label={`${cityGroup.locations.length} locations`} size="small" variant="outlined" color="info" sx={{ fontSize: '0.7rem', height: '24px', fontWeight: 500, mr: 1 }} />
+                                      </Box>
+                                    </Box>
+                                  </AccordionSummary>
+                                  <AccordionDetails sx={{ pt: 1, pb: 1 }}>
+                                    <TableContainer sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid', borderColor: (theme) => alpha(theme.palette.info.main, 0.1) }}>
+                                      <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.8, px: 1.5, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.info.main, 0.1) } }}>
+                                        <TableHead>
+                                          <TableRow sx={{ background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.info.main, 0.12)} 0%, ${alpha(theme.palette.info.main, 0.08)} 100%)` }}>
+                                            <TableCell sx={{ fontWeight: 700, color: 'info.main', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Location</TableCell>
+                                            <TableCell align="right" sx={{ fontWeight: 700, color: 'info.main', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Phones</TableCell>
+                                            <TableCell sx={{ fontWeight: 700, color: 'info.main', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Top Models</TableCell>
+                                          </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                          {cityGroup.locations.map((location) => {
+                                            const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
+                                            const topModels = filteredModels.slice(0, 3);
+                                            return (
+                                              <TableRow key={`justiz-loc-${location.location}`}>
+                                                <TableCell><Typography variant="body2" fontWeight={600}>{String(location.location).toUpperCase().replace(/X/g, 'x')}</Typography></TableCell>
+                                                <TableCell align="right"><Chip label={location.totalPhones.toLocaleString()} size="small" color="primary" variant="outlined" /></TableCell>
+                                                <TableCell>
+                                                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                                                    {topModels.map((modelData) => (
+                                                      <Box key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <Typography variant="caption" sx={{ fontWeight: 600 }}>{modelData.model}</Typography>
+                                                        <Chip label={modelData.count.toLocaleString()} size="small" color="info" variant="outlined" />
+                                                      </Box>
+                                                    ))}
+                                                    {filteredModels.length > 3 && (
+                                                      <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>+{filteredModels.length - 3} more models</Typography>
+                                                    )}
+                                                  </Box>
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
+                                        </TableBody>
+                                      </Table>
+                                    </TableContainer>
+                                  </AccordionDetails>
+                                </Accordion>
+                              ))}
+                            </AccordionDetails>
+                          </Accordion>
+                        )}
+                      </Box>
+                    </Box>
+                  </Grid>
+
+                  {/* JVA Category */}
+                  <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
+                    <Box sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      backgroundColor: jvaTheme.background,
+                      border: '1px solid',
+                      borderColor: jvaTheme.border,
+                      height: '100%'
+                    }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: jvaTheme.primary }}>
+                        Correctional Facility (JVA)
+                      </Typography>
+                      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                        <List dense sx={{ flex: 1 }}>
+                          <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                  <Chip
+                                    label="Total Phones"
+                                    size="small"
+                                    color="warning"
+                                    variant="filled"
+                                    sx={{ fontWeight: 600 }}
+                                  />
+                                  <Typography variant="body2" fontWeight={700} sx={{ color: 'warning.main', fontSize: '1rem' }}>
+                                    {Number(data.totalJVAPhones || 0).toLocaleString()}
+                                  </Typography>
+                                </Box>
+                              }
+                            />
+                          </ListItem>
+                          {(data.phonesByModelJVA || [])
+                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                            .map(({ model, count }) => {
+                              const label = String(model);
+                              const lower = label.toLowerCase();
+                              let color = 'default';
+                              if (lower.includes('kem')) color = 'success';
+                              else if (lower.includes('conference')) color = 'info';
+                              else if (lower.includes('wireless')) color = 'error';
+                              else color = 'warning';
+                              return (
+                                <ListItem key={`jva-${model}`} sx={{ py: 0.3, px: 0 }}>
+                                  <ListItemText
+                                    primary={
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                        <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                        <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                      </Box>
+                                    }
+                                  />
+                                </ListItem>
+                              );
+                            })}
+                          {(data.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                          )}
+                        </List>
+
+                        {/* Expanded by default: View by Location (grouped by city) */}
+                        {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
+                          <Accordion defaultExpanded sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
+                            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <PlaceIcon sx={{ fontSize: '1.1rem', color: 'warning.main' }} />
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  View by Location ({(data.phonesByModelJVADetails || []).length} locations)
+                                </Typography>
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails>
+                              <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                                <Button size="small" variant="outlined" onClick={expandAllJvaCities} sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem', borderRadius: 2, textTransform: 'none', fontWeight: 500 }}>Expand All</Button>
+                                <Button size="small" variant="outlined" onClick={collapseAllJvaCities} sx={{ minWidth: 'auto', px: 1.5, py: 0.5, fontSize: '0.7rem', borderRadius: 2, textTransform: 'none', fontWeight: 500 }}>Collapse All</Button>
+                              </Box>
+                            </AccordionDetails>
+                            <AccordionDetails sx={{ pt: 0 }}>
+                              {groupLocationsByCity(data.phonesByModelJVADetails || []).map((cityGroup) => (
+                                <Accordion
+                                  key={`jva-city-${cityGroup.cityCode}`}
+                                  expanded={jvaCitiesExpanded[`jva-city-${cityGroup.cityCode}`] || false}
+                                  onChange={(event, isExpanded) => {
+                                    setJvaCitiesExpanded(prev => ({ ...prev, [`jva-city-${cityGroup.cityCode}`]: isExpanded }));
+                                  }}
+                                  TransitionProps={fastTransitionProps}
+                                  sx={{ mb: 1, border: '1px solid', borderColor: jvaTheme.border, borderRadius: 1, backgroundColor: jvaTheme.background, '&.MuiAccordion-root': { '&:before': { display: 'none' } } }}
+                                >
+                                  <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: jvaTheme.background, borderRadius: 1, minHeight: '40px !important', '& .MuiAccordionSummary-content': { margin: '8px 0 !important' } }}>
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'warning.main' }}>
+                                        {(cityGroup.cityName || cityNameByCode3?.[String(cityGroup.cityCode || '').toUpperCase().replace(/X/g, 'x')] || cityNameByCode3?.[String(cityGroup.cityCode || '').toUpperCase()])}
+                                        {` (${String(cityGroup.cityCode || '').toUpperCase().replace(/X/g, 'x')})`}
+                                      </Typography>
+                                      <Chip label={`${cityGroup.totalCityPhones.toLocaleString()} phones`} size="small" color="warning" variant="outlined" sx={{ fontSize: '0.7rem', height: '24px', fontWeight: 600, mr: 1 }} />
+                                    </Box>
+                                  </AccordionSummary>
+                                  <AccordionDetails sx={{ pt: 1, pb: 1 }}>
+                                    <TableContainer sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid', borderColor: (theme) => alpha(theme.palette.warning.main, 0.1) }}>
+                                      <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.8, px: 1.5, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.warning.main, 0.1) } }}>
+                                        <TableHead>
+                                          <TableRow sx={{ background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.warning.main, 0.12)} 0%, ${alpha(theme.palette.warning.main, 0.08)} 100%)` }}>
+                                            <TableCell sx={{ fontWeight: 700, color: 'warning.main', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Location</TableCell>
+                                            <TableCell align="right" sx={{ fontWeight: 700, color: 'warning.main', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Phones</TableCell>
+                                            <TableCell sx={{ fontWeight: 700, color: 'warning.main', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Top Models</TableCell>
+                                          </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                          {cityGroup.locations.map((location) => {
+                                            const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
+                                            const topModels = filteredModels.slice(0, 3);
+                                            return (
+                                              <TableRow key={`jva-loc-${location.location}`}>
+                                                <TableCell><Typography variant="body2" fontWeight={600}>{String(location.location).toUpperCase().replace(/X/g, 'x')}</Typography></TableCell>
+                                                <TableCell align="right"><Chip label={location.totalPhones.toLocaleString()} size="small" color="warning" variant="outlined" /></TableCell>
+                                                <TableCell>
+                                                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                                                    {topModels.map((modelData) => (
+                                                      <Box key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <Typography variant="caption" sx={{ fontWeight: 600 }}>{modelData.model}</Typography>
+                                                        <Chip label={modelData.count.toLocaleString()} size="small" color="warning" variant="outlined" />
+                                                      </Box>
+                                                    ))}
+                                                    {filteredModels.length > 3 && (
+                                                      <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>+{filteredModels.length - 3} more models</Typography>
+                                                    )}
+                                                  </Box>
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
+                                        </TableBody>
+                                      </Table>
+                                    </TableContainer>
+                                  </AccordionDetails>
+                                </Accordion>
+                              ))}
+                            </AccordionDetails>
+                          </Accordion>
+                        )}
+                      </Box>
+                    </Box>
+                  </Grid>
+                </Grid>
+              )}
+            </Paper>
+          )}
           {isByLocation && (
             <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.info.main}`, backgroundColor: (t) => alpha(t.palette.info.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
               <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'info.main' }}>Statistics by Location</Typography>
@@ -3456,92 +3813,105 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 </AccordionDetails>
               </Accordion>
 
-              {/* Location-specific timeline (last 31 days) - moved to bottom */}
+              {/* Location-specific timeline is collapsed by default and lazy-loads on expand */}
               {locSelected && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
-                    Timeline for {(() => {
-                      // If it's a 3-letter code and we have city data in prefix mode, show city name
-                      if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
-                        return `${cityNameByCode3[locSelected]} (${locSelected})`;
-                      }
-                      // If it's a 5-letter location code, show with city name
-                      if (locSelected?.length === 5) {
-                        const cityCode = locSelected.slice(0, 3);
-                        const cityName = cityNameByCode3[cityCode];
-                        return cityName ? `${locSelected} (${cityName})` : locSelected;
-                      }
-                      // Otherwise just show the location code
-                      return locSelected;
-                    })()} ({(locTimeline.series || []).length} days)
-                  </Typography>
-                  {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Chip
-                      label="Select All"
-                      size="small"
-                      color="success"
-                      variant="filled"
-                      onClick={selectAllLocKpis}
-                      icon={<DoneAllIcon fontSize="small" />}
-                      sx={{ fontWeight: 700 }}
-                    />
-                    <Chip
-                      label="Clear"
-                      size="small"
-                      color="error"
-                      variant="filled"
-                      onClick={clearAllLocKpis}
-                      icon={<ClearAllIcon fontSize="small" />}
-                      sx={{ fontWeight: 700 }}
-                    />
-                    <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-                    {KPI_DEFS_LOC.map((k) => {
-                      const selected = selectedKpisLoc.includes(k.id);
-                      return (
-                        <Chip
-                          key={k.id}
-                          label={k.label}
-                          size="small"
-                          color="default"
-                          variant={selected ? 'filled' : 'outlined'}
-                          onClick={() => toggleKpiLoc(k.id)}
-                          sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
-                        />
-                      );
-                    })}
-                  </Box>
-                  {locTimeline.loading ? (
-                    <Skeleton variant="rectangular" height={220} />
-                  ) : locTimeline.error ? (
-                    <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
-                  ) : (
-                    <Box sx={{ width: '100%', overflowX: 'auto' }}>
-                      <LineChart
-                        height={240}
-                        xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-                        series={selectedKpisLoc.length ? (
-                          KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
-                            id: k.id,
-                            label: k.label,
-                            color: k.color,
-                            data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
-                          }))
-                        ) : locEmptySeries}
-                        margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
-                        yAxis={locYAxisBounds ? [{ min: locYAxisBounds.yMin, max: locYAxisBounds.yMax }] : undefined}
-                        slotProps={{
-                          legend: {
-                            position: { vertical: 'top', horizontal: 'middle' },
-                            direction: 'row',
-                            itemGap: 16,
-                          },
-                        }}
-                        sx={{ minWidth: 520 }}
+                <Accordion
+                  expanded={locTimelineExpanded}
+                  onChange={(e, expanded) => setLocTimelineExpanded(expanded)}
+                  TransitionProps={fastTransitionProps}
+                  sx={{
+                    border: '1px solid',
+                    borderColor: (t) => alpha(t.palette.info.main, 0.2),
+                    borderRadius: 1,
+                    '&:before': { display: 'none' },
+                    mt: 2,
+                    backgroundColor: (t) => alpha(t.palette.info.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
+                  }}
+                >
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.secondary' }}>
+                      Timeline for {(() => {
+                        if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
+                          return `${cityNameByCode3[locSelected]} (${locSelected})`;
+                        }
+                        if (locSelected?.length === 5) {
+                          const cityCode = locSelected.slice(0, 3);
+                          const cityName = cityNameByCode3[cityCode];
+                          return cityName ? `${locSelected} (${cityName})` : locSelected;
+                        }
+                        return locSelected;
+                      })()} {locTimeline.series?.length ? `(${locTimeline.series.length} days)` : ''}
+                    </Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <Chip
+                        label="Select All"
+                        size="small"
+                        color="success"
+                        variant="filled"
+                        onClick={selectAllLocKpis}
+                        icon={<DoneAllIcon fontSize="small" />}
+                        sx={{ fontWeight: 700 }}
                       />
+                      <Chip
+                        label="Clear"
+                        size="small"
+                        color="error"
+                        variant="filled"
+                        onClick={clearAllLocKpis}
+                        icon={<ClearAllIcon fontSize="small" />}
+                        sx={{ fontWeight: 700 }}
+                      />
+                      <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+                      {KPI_DEFS_LOC.map((k) => {
+                        const selected = selectedKpisLoc.includes(k.id);
+                        return (
+                          <Chip
+                            key={k.id}
+                            label={k.label}
+                            size="small"
+                            color="default"
+                            variant={selected ? 'filled' : 'outlined'}
+                            onClick={() => toggleKpiLoc(k.id)}
+                            sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                          />
+                        );
+                      })}
                     </Box>
-                  )}
-                </Box>
+                    {locTimeline.loading ? (
+                      <Skeleton variant="rectangular" height={220} />
+                    ) : locTimeline.error ? (
+                      <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
+                    ) : (
+                      <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                        <LineChart
+                          height={240}
+                          xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
+                          series={selectedKpisLoc.length ? (
+                            KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
+                              id: k.id,
+                              label: k.label,
+                              color: k.color,
+                              data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
+                            }))
+                          ) : locEmptySeries}
+                          margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+                          yAxis={locYAxisBounds ? [{ min: locYAxisBounds.yMin, max: locYAxisBounds.yMax }] : undefined}
+                          slotProps={{
+                            legend: {
+                              position: { vertical: 'top', horizontal: 'middle' },
+                              direction: 'row',
+                              itemGap: 16,
+                            },
+                          }}
+                          sx={{ minWidth: 520 }}
+                        />
+                      </Box>
+                    )}
+                  </AccordionDetails>
+                </Accordion>
               )}
 
               {/* Only summary metrics per location as requested */}
