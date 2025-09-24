@@ -493,11 +493,40 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       return;
     }
 
+    // Helper: prepend city prefix option (e.g., Mxx München) as the first item when user typed exactly 3 letters
+    const withCityPrefixOption = (qStr, arr) => {
+      const out = Array.isArray(arr) ? [...arr] : [];
+      const three = qStr.length === 3 && /^[a-zA-Z]{3}$/.test(qStr);
+      if (three) {
+        const code3Upper = qStr.substring(0, 3).toUpperCase();
+        const code3Mxx = code3Upper.replace(/X/g, 'x');
+        const code3MXX = code3Upper;
+        // Try to resolve city name from preloaded map; if missing, we still inject the prefix item (city can be resolved at render time)
+        let cityName = cityNameByCode3?.[code3Mxx] || cityNameByCode3?.[code3MXX];
+        if (!cityName && Array.isArray(arr) && arr.length) {
+          const hit = arr.find(s => String(s.code || '').toUpperCase().startsWith(code3Upper) && s.city);
+          if (hit && hit.city) cityName = hit.city;
+        }
+        // Avoid duplicate if already present
+        const exists = out.some(s => String(s.code || '').toUpperCase().replace(/X/g, 'x') === code3Mxx);
+        const prefixItem = { code: code3Mxx, city: cityName, isPrefixAll: true };
+        if (!exists) {
+          out.unshift(prefixItem);
+        } else {
+          // Ensure the prefix item is first
+          const filtered = out.filter(s => String(s.code || '').toUpperCase().replace(/X/g, 'x') !== code3Mxx);
+          out.length = 0; out.push(prefixItem, ...filtered);
+        }
+      }
+      return out;
+    };
+
     // Serve from cache if available
     if (suggestionsCacheRef.current.has(q)) {
       const cached = suggestionsCacheRef.current.get(q) || [];
-      startTransition(() => setLocationSuggestions(cached));
-      startTransition(() => setShowLocationDropdown(cached.length > 0));
+      const merged = withCityPrefixOption(q, cached);
+      startTransition(() => setLocationSuggestions(merged));
+      startTransition(() => setShowLocationDropdown(merged.length > 0));
       startTransition(() => setSelectedSuggestionIndex(-1));
       return;
     }
@@ -528,8 +557,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           const firstKey = suggestionsCacheRef.current.keys().next().value;
           suggestionsCacheRef.current.delete(firstKey);
         }
-        startTransition(() => setLocationSuggestions(data.suggestions));
-        startTransition(() => setShowLocationDropdown(data.suggestions.length > 0));
+        const merged = withCityPrefixOption(q, data.suggestions);
+        startTransition(() => setLocationSuggestions(merged));
+        startTransition(() => setShowLocationDropdown(merged.length > 0));
         startTransition(() => setSelectedSuggestionIndex(-1));
       } else {
         startTransition(() => setLocationSuggestions([]));
@@ -542,20 +572,20 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     } finally {
       setIsSearchingLocations(false);
     }
-  }, []);
+  }, [cityNameByCode3]);
 
-  // Timeout ref for debouncing
-  const timeoutRef = React.useRef();
+  // Timeout ref for debouncing suggestions only
+  const timeoutRef = React.useRef();             // suggestions debounce
 
   // Debounced search for performance
   const debouncedLocationSearch = React.useMemo(
     () => {
       return (query) => {
         clearTimeout(timeoutRef.current);
-        // Slightly longer debounce to avoid rapid re-queries on fast typing
+        // Longer debounce to avoid interrupting typing and reduce network churn
         timeoutRef.current = setTimeout(() => {
           searchLocationSuggestions(query);
-        }, 200);
+        }, 500);
       };
     },
     [searchLocationSuggestions]
@@ -581,18 +611,38 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         kemPhones: [],
       }));
       startTransition(() => setLocStatsLoading(false));
+      // no idle commit timer; search only on Enter or suggestion select
     } else {
-      // Trigger search suggestions
-      debouncedLocationSearch(val.trim());
+      const trimmed = val.trim();
+      // Trigger search suggestions only after 3+ chars and debounce
+      if (trimmed.length >= 3) {
+        debouncedLocationSearch(trimmed);
+      } else {
+        // Under 3 chars: avoid unnecessary re-renders; only clear if something is shown
+        if (showLocationDropdown || (locationSuggestions && locationSuggestions.length)) {
+          startTransition(() => {
+            setLocationSuggestions([]);
+            setShowLocationDropdown(false);
+          });
+        }
+      }
+      // no idle auto-search; user confirms with Enter
     }
-  }, [debouncedLocationSearch]);
+  }, [debouncedLocationSearch, showLocationDropdown, locationSuggestions, startTransition]);
 
   const selectLocationSuggestion = React.useCallback((suggestion) => {
     // Format code: Nxx01
     // Format: All X are lowercase, all other letters uppercase
     const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
     setLocSelected(formattedCode);
-    const newDisplay = suggestion.display.replace(suggestion.code, formattedCode);
+    // Gracefully handle missing display on synthetic items
+    let newDisplay = suggestion.display;
+    if (!newDisplay) {
+      const cityName = suggestion.city || cityNameByCode3?.[formattedCode.slice(0, 3)] || cityNameByCode3?.[formattedCode.slice(0, 3).toUpperCase()];
+      newDisplay = cityName ? `${formattedCode} (${cityName})` : formattedCode;
+    } else {
+      try { newDisplay = newDisplay.replace(suggestion.code, formattedCode); } catch { newDisplay = formattedCode; }
+    }
     setLocalInput(newDisplay);
     if (locInputRef.current) {
       try { locInputRef.current.value = newDisplay; } catch { /* ignore */ }
@@ -609,10 +659,25 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       if (e.key === 'Enter') {
         e.preventDefault();
         const val = (e.target.value || '').trim().toUpperCase();
-        if (val && /^[A-Z]{3}[0-9]{2}$/.test(val)) {
+        if (!val) return;
+        const isFull = /^[A-Z]{3}[0-9]{2}$/.test(val);
+        const isPrefix = /^[A-Z]{3}$/.test(val);
+        if (isFull) {
           setLocSelected(val);
           setLocInput(val);
           setShowLocationDropdown(false);
+        } else if (isPrefix) {
+          const code3Mxx = val.replace(/X/g, 'x');
+          setLocSelected(code3Mxx);
+          setLocInput(code3Mxx);
+          setShowLocationDropdown(false);
+          // Show "Mxx (City)" instantly if city map is known
+          const cityName = cityNameByCode3?.[code3Mxx] || cityNameByCode3?.[val];
+          const display = cityName ? `${code3Mxx} (${cityName})` : code3Mxx;
+          try {
+            if (locInputRef.current) locInputRef.current.value = display;
+          } catch { }
+          setLocalInput(display);
         }
       }
       return;
@@ -632,7 +697,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < locationSuggestions.length) {
-        selectLocationSuggestion(locationSuggestions[selectedSuggestionIndex]);
+        handleLocationSuggestionSelect(locationSuggestions[selectedSuggestionIndex]);
       }
     } else if (e.key === 'Escape') {
       setShowLocationDropdown(false);
@@ -642,6 +707,20 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   // Handler for clicking on dropdown suggestions
   const handleLocationSuggestionSelect = React.useCallback((suggestion) => {
+    if (suggestion && suggestion.isPrefixAll) {
+      const code3 = String(suggestion.code || '').substring(0, 3).toUpperCase().replace(/X/g, 'x');
+      setLocSelected(code3);
+      const display = suggestion.city ? `${code3} (${suggestion.city})` : code3;
+      setLocalInput(display);
+      if (locInputRef.current) {
+        try { locInputRef.current.value = display; } catch { /* ignore */ }
+      }
+      setLocInput(code3);
+      setShowLocationDropdown(false);
+      setLocationSuggestions([]);
+      setSelectedSuggestionIndex(-1);
+      return;
+    }
     selectLocationSuggestion(suggestion);
   }, [selectLocationSuggestion]);
 
@@ -650,6 +729,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return () => {
       try { suggestionsControllerRef.current?.abort(); } catch { /* ignore */ }
       suggestionsControllerRef.current = null;
+      // Clear any pending timers on unmount
+      try { clearTimeout(timeoutRef.current); } catch { }
     };
   }, []);
 
@@ -679,8 +760,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   // Update localInput display when city names are loaded or location changes
   React.useEffect(() => {
     if (locSelected && cityNameByCode3) {
-      const cityCode = locSelected.slice(0, 3);
-      const cityName = cityNameByCode3[cityCode];
+      const code3 = String(locSelected).slice(0, 3);
+      const codeUpper = code3.toUpperCase();
+      const codeMxx = codeUpper.replace(/X/g, 'x');
+      const cityName = cityNameByCode3[code3]
+        || cityNameByCode3[codeUpper]
+        || cityNameByCode3[codeMxx];
       const displayValue = cityName ? `${locSelected} (${cityName})` : locSelected;
 
       // Only update if current localInput doesn't already match the expected display
@@ -691,7 +776,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         }
       }
     }
-  }, [cityNameByCode3, localInput]);
+  }, [cityNameByCode3, localInput, locSelected]);
 
   // Save selected location to localStorage when it changes
   React.useEffect(() => {
@@ -1061,13 +1146,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     }
   }, []);
 
-  // Debounce locSelected changes to prevent API spam while typing
+  // Apply locSelected immediately (changed only by Enter or suggestion click)
   React.useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedLocSelected(locSelected);
-    }, 500); // 500ms delay after selection stops changing
-
-    return () => clearTimeout(timer);
+    setDebouncedLocSelected(locSelected);
   }, [locSelected]);
 
   // Fetch stats for selected location (use debounced version)
@@ -2247,7 +2328,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
               onChange={handleLocationInputChange}
               onKeyDown={handleKeyDown}
               error={!!locError}
-              helperText={locError || (locInput && !locSelected ? "Press Enter to search" : "")}
+              helperText={locError || (locInput && !locSelected ? "Press Enter or pause to search" : "")}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
@@ -2309,95 +2390,169 @@ const StatisticsPage = React.memo(function StatisticsPage() {
             />
 
             {/* Location Suggestions Dropdown */}
-            {showLocationDropdown && locationSuggestions.length > 0 && (
-              <Paper
-                elevation={8}
-                sx={{
-                  position: 'absolute',
-                  top: 'calc(100% + 2px)',
-                  left: '2%',
-                  width: '98%',
-                  minWidth: '320px',
-                  maxWidth: 'none',
-                  zIndex: 1300,
-                  maxHeight: '280px',
-                  overflow: 'auto',
-                  borderRadius: 2,
-                  border: (theme) => `1px solid ${theme.palette.divider}`,
-                  boxShadow: (theme) =>
-                    theme.palette.mode === 'dark'
-                      ? '0 8px 32px rgba(0,0,0,0.5)'
-                      : '0 8px 32px rgba(0,0,0,0.12)',
-                }}
-              >
-                {locationSuggestions.map((suggestion, index) => (
-                  <Box
-                    key={suggestion.code.toUpperCase().replace(/X/g, 'x')}
-                    onClick={() => handleLocationSuggestionSelect(suggestion)}
-                    sx={{
-                      px: 2,
-                      py: 1.5,
-                      cursor: 'pointer',
-                      backgroundColor: selectedSuggestionIndex === index
-                        ? (theme) => theme.palette.action.selected
-                        : 'transparent',
-                      '&:hover': {
-                        backgroundColor: (theme) => theme.palette.action.hover,
-                      },
-                      borderBottom: index < locationSuggestions.length - 1 ? '1px solid' : 'none',
-                      borderBottomColor: (theme) => theme.palette.divider,
-                      transition: 'background-color 0.15s ease',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1.5,
-                    }}
-                  >
-                    {/* Location icon */}
-                    <Box
-                      sx={{
-                        width: 32,
-                        height: 32,
-                        borderRadius: '50%',
-                        backgroundColor: (theme) => theme.palette.primary.main,
-                        color: 'white',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '14px',
-                        fontWeight: 'bold',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {suggestion.code.substring(0, 3).toUpperCase().replace(/X/g, 'x')}
-                    </Box>
-                    {/* Location details */}
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography
-                        variant="body2"
+            {showLocationDropdown && (() => {
+              const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
+              const three = /^[a-zA-Z]{3}$/.test(inputVal);
+              return three || (locationSuggestions.length > 0);
+            })() && (
+                <Paper
+                  elevation={8}
+                  sx={{
+                    position: 'absolute',
+                    top: 'calc(100% + 2px)',
+                    left: '2%',
+                    width: '98%',
+                    minWidth: '320px',
+                    maxWidth: 'none',
+                    zIndex: 1300,
+                    maxHeight: '280px',
+                    overflow: 'auto',
+                    borderRadius: 2,
+                    border: (theme) => `1px solid ${theme.palette.divider}`,
+                    boxShadow: (theme) =>
+                      theme.palette.mode === 'dark'
+                        ? '0 8px 32px rgba(0,0,0,0.5)'
+                        : '0 8px 32px rgba(0,0,0,0.12)',
+                  }}
+                >
+                  {(() => {
+                    // Redundant safety: render a sticky prefix item at the top when input is exactly 3 letters
+                    const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
+                    const three = /^[a-zA-Z]{3}$/.test(inputVal);
+                    if (!three) return null;
+                    const codeUpper = inputVal.toUpperCase();
+                    const codeMxx = codeUpper.replace(/X/g, 'x');
+                    const city = cityNameByCode3?.[codeMxx] || cityNameByCode3?.[codeUpper];
+                    // If merged array already starts with our synthetic item, skip
+                    const first = locationSuggestions[0];
+                    const firstIsSamePrefix = first && first.isPrefixAll && String(first.code || '').toUpperCase().replace(/X/g, 'x') === codeMxx;
+                    if (firstIsSamePrefix) return null;
+                    return (
+                      <Box
+                        key={`${codeMxx}__prefix_top`}
+                        onClick={() => handleLocationSuggestionSelect({ code: codeMxx, city, isPrefixAll: true })}
                         sx={{
-                          fontWeight: 600,
-                          color: 'text.primary',
-                          mb: 0.25,
+                          px: 2,
+                          py: 1.5,
+                          cursor: 'pointer',
+                          backgroundColor: (theme) => theme.palette.action.hover,
+                          borderBottom: '1px solid',
+                          borderBottomColor: (theme) => theme.palette.divider,
+                          transition: 'background-color 0.15s ease',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 1.5,
                         }}
                       >
-                        {suggestion.code.toUpperCase().replace(/X/g, 'x')}
-                      </Typography>
-                      {suggestion.city && (
-                        <Typography
-                          variant="caption"
+                        <Box
                           sx={{
-                            color: 'text.secondary',
-                            fontSize: '0.75rem',
+                            width: 32,
+                            height: 32,
+                            borderRadius: '50%',
+                            backgroundColor: (theme) => theme.palette.primary.main,
+                            color: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '14px',
+                            fontWeight: 'bold',
+                            flexShrink: 0,
                           }}
                         >
-                          📍 {suggestion.city}
+                          {codeMxx}
+                        </Box>
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary', mb: 0.25 }}>
+                            {city ? `${codeMxx} ${city}` : codeMxx}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
+                            All locations in this city
+                          </Typography>
+                        </Box>
+                      </Box>
+                    );
+                  })()}
+                  {locationSuggestions.map((suggestion, index) => (
+                    <Box
+                      key={suggestion.code.toUpperCase().replace(/X/g, 'x')}
+                      onClick={() => handleLocationSuggestionSelect(suggestion)}
+                      sx={{
+                        px: 2,
+                        py: 1.5,
+                        cursor: 'pointer',
+                        backgroundColor: selectedSuggestionIndex === index
+                          ? (theme) => theme.palette.action.selected
+                          : 'transparent',
+                        '&:hover': {
+                          backgroundColor: (theme) => theme.palette.action.hover,
+                        },
+                        borderBottom: index < locationSuggestions.length - 1 ? '1px solid' : 'none',
+                        borderBottomColor: (theme) => theme.palette.divider,
+                        transition: 'background-color 0.15s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1.5,
+                      }}
+                    >
+                      {/* Location icon */}
+                      <Box
+                        sx={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: '50%',
+                          backgroundColor: (theme) => theme.palette.primary.main,
+                          color: 'white',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '14px',
+                          fontWeight: 'bold',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {suggestion.code.substring(0, 3).toUpperCase().replace(/X/g, 'x')}
+                      </Box>
+                      {/* Location details */}
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 600,
+                            color: 'text.primary',
+                            mb: 0.25,
+                          }}
+                        >
+                          {(() => {
+                            const code = suggestion.code.toUpperCase().replace(/X/g, 'x');
+                            if (!suggestion.isPrefixAll) return code;
+                            const city = suggestion.city || cityNameByCode3?.[code] || cityNameByCode3?.[code.toUpperCase()];
+                            return city ? `${code} ${city}` : code;
+                          })()}
                         </Typography>
-                      )}
+                        {suggestion.city && !suggestion.isPrefixAll && (
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                              fontSize: '0.75rem',
+                            }}
+                          >
+                            📍 {suggestion.city}
+                          </Typography>
+                        )}
+                        {suggestion.isPrefixAll && (
+                          <Typography
+                            variant="caption"
+                            sx={{ color: 'text.secondary', fontSize: '0.75rem' }}
+                          >
+                            All locations in this city
+                          </Typography>
+                        )}
+                      </Box>
                     </Box>
-                  </Box>
-                ))}
-              </Paper>
-            )}
+                  ))}
+                </Paper>
+              )}
           </Grid>
 
           {/* City Name Search */}
