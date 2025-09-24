@@ -144,7 +144,7 @@ function AppContent() {
             <Route path="/" element={<Navigate to="/search" replace />} />
             <Route path="/search" element={<HomePage resetKey={searchResetKey} />} />
             <Route path="/files" element={<FilesPage />} />
-            <Route path="/statistics" element={<StatisticsPage />} />
+            <Route path="/statistics/*" element={<StatisticsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/search" replace />} />
           </Routes>

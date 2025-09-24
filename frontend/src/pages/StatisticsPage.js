@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress } from '@mui/material';
+import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -22,90 +23,62 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import { toast } from 'react-toastify';
 import { useSettings } from '../contexts/SettingsContext';
 
+// --- Local helpers (restored to satisfy lint and preserve behavior) ---
+// Pick an icon for KPI cards based on title
+function getKPIIcon(title) {
+  const t = String(title || '').toLowerCase();
+  if (t.includes('phone') && t.includes('kem')) return ExtensionIcon;
+  if (t.includes('phone')) return PhoneIcon;
+  if (t.includes('switch')) return RouterIcon;
+  if (t.includes('location') || t.includes('city')) return LocationCityIcon;
+  if (t.includes('timeline') || t.includes('trend')) return TrendingUpIcon;
+  return PublicIcon;
+}
+
 // Heuristic: detect MAC address strings in common formats and exclude from model lists
 function isMacLike(value) {
   if (!value) return false;
   const s = String(value).trim();
-  // 6 octets with : or - separators (AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF)
-  const sep6 = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-  // Cisco-style dotted (AABB.CCDD.EEFF)
-  const dotted = /^([0-9A-Fa-f]{4}\.){2}([0-9A-Fa-f]{4})$/;
-  // Plain 12 hex digits (AABBCCDDEEFF)
-  const plain12 = /^[0-9A-Fa-f]{12}$/;
+  const sep6 = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/; // AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF
+  const dotted = /^([0-9A-Fa-f]{4}\.){2}([0-9A-Fa-f]{4})$/; // AABB.CCDD.EEFF
+  const plain12 = /^[0-9A-Fa-f]{12}$/; // AABBCCDDEEFF
   return sep6.test(s) || dotted.test(s) || plain12.test(s);
 }
 
-// Helper: determine if location is JVA (correctional facility) based on location code pattern
+// Determine if a location code belongs to JVA (correctional facility)
 function isJVALocation(locationCode) {
   if (!locationCode) return false;
   const code = String(locationCode).trim();
-  // JVA locations end with 50 or 51 (e.g., SRX50, SRX51)
+  // JVA codes end with 50 or 51 (e.g., SRX50, SRX51)
   return /50$|51$/.test(code);
 }
 
-// Helper: determine if location is Justice institution
+// Justice locations are those not matching the JVA pattern
 function isJusticeLocation(locationCode) {
   if (!locationCode) return false;
-  // Justice locations are those that are not JVA
   return !isJVALocation(locationCode);
 }
 
-// Helper: extract city code from location code (e.g., MXX01 -> MXX, NXX02 -> NXX)
-function extractCityCode(locationCode) {
-  if (!locationCode) return 'Unknown';
-  const code = String(locationCode).trim();
-  // Extract first 3 characters as city code, format: all x lowercase, rest uppercase
-  return code.substring(0, 3).toUpperCase().replace(/X/g, 'x');
+// Group locations by city code for details accordions
+function groupLocationsByCity(detailsArray) {
+  const arr = Array.isArray(detailsArray) ? detailsArray : [];
+  const byCity = new Map();
+  for (const item of arr) {
+    const loc = String(item.location || '').toUpperCase();
+    const cityCode = loc.slice(0, 3);
+    const cityName = item.cityName || item.city || '';
+    const entry = byCity.get(cityCode) || { cityCode, cityName, totalCityPhones: 0, locations: [] };
+    const total = Number(item.totalPhones || item.count || 0);
+    entry.totalCityPhones += Number.isFinite(total) ? total : 0;
+    entry.locations.push({
+      location: loc,
+      totalPhones: total,
+      models: Array.isArray(item.models) ? item.models : [],
+    });
+    byCity.set(cityCode, entry);
+  }
+  return Array.from(byCity.values()).sort((a, b) => String(a.cityCode).localeCompare(String(b.cityCode)));
 }
-
-// Helper: group locations by city and sort within each city by totalPhones
-function groupLocationsByCity(locations) {
-  if (!locations || locations.length === 0) return [];
-
-  // Group by city code
-  const groupedByCity = locations.reduce((acc, location) => {
-    const cityCode = extractCityCode(location.location);
-    if (!acc[cityCode]) {
-      acc[cityCode] = [];
-    }
-    acc[cityCode].push(location);
-    return acc;
-  }, {});
-
-  // Sort locations within each city by totalPhones (descending)
-  Object.keys(groupedByCity).forEach(cityCode => {
-    groupedByCity[cityCode].sort((a, b) => (b.totalPhones || 0) - (a.totalPhones || 0));
-  });
-
-  // Convert to array format and sort cities by total phones across all locations in city
-  const cityGroups = Object.entries(groupedByCity).map(([cityCode, locations]) => {
-    const totalCityPhones = locations.reduce((sum, loc) => sum + (loc.totalPhones || 0), 0);
-    return {
-      cityCode,
-      cityName: locations[0]?.locationDisplay?.split(' - ')[1] || cityCode,
-      locations,
-      totalCityPhones
-    };
-  });
-
-  // Sort cities by total phones (descending)
-  cityGroups.sort((a, b) => b.totalCityPhones - a.totalCityPhones);
-
-  return cityGroups;
-}
-
-// Icon mapping for different KPI types
-const getKPIIcon = (title) => {
-  const titleLower = title.toLowerCase();
-  if (titleLower.includes('phone')) return PhoneIcon;
-  if (titleLower.includes('switch')) return RouterIcon;
-  if (titleLower.includes('location') && titleLower.includes('cities')) return LocationCityIcon;
-  if (titleLower.includes('location')) return LocationOnIcon;
-  if (titleLower.includes('kem')) return ExtensionIcon;
-  if (titleLower.includes('cities')) return LocationCityIcon;
-  return TrendingUpIcon; // default fallback
-};
-
 // Enhanced StatCard with React.memo, icons, and animations
 const StatCard = React.memo(function StatCard({ title, value, loading, tone = 'primary' }) {
   const IconComponent = getKPIIcon(title);
@@ -239,6 +212,8 @@ const showCopyToast = (label, value, opts = {}) => {
 };
 
 const StatisticsPage = React.memo(function StatisticsPage() {
+  const locationRouter = useLocation();
+  const navigate = useNavigate();
   const { sshUsername, navigateToSettings, getStatisticsPrefs, saveStatisticsPrefs } = useSettings?.() || {};
 
   // Color themes for Justice vs JVA differentiation
@@ -1013,7 +988,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return sortedKeys.map((k, idx) => {
       const src = byKey[k]?.[topKpi] || [];
       const aligned = new Array(dates.length).fill(null);
-      // Right-align the series so it ends at the latest date
       const copyLen = Math.min(src.length, dates.length);
       for (let i = 0; i < copyLen; i++) {
         aligned[dates.length - 1 - i] = src[src.length - 1 - i];
@@ -1432,6 +1406,19 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return () => { clearTimeout(t); window.removeEventListener('resize', measure); };
   }, [generalLeftKpis, generalJustizKpis, generalJvaKpis, data.totalJustizPhones, data.totalJVAPhones, data.totalPhones]);
 
+  // Sub-view routing flags for left menu navigation
+  const curPath = (locationRouter.pathname || '/statistics');
+  const isOverview = curPath === '/statistics' || curPath === '/statistics/' || curPath.startsWith('/statistics/overview');
+  const isTimelines = curPath.startsWith('/statistics/timelines');
+  const isByLocation = curPath.startsWith('/statistics/by-location');
+
+  // Redirect bare /statistics to overview for clarity
+  React.useEffect(() => {
+    if (curPath === '/statistics' || curPath === '/statistics/') {
+      try { navigate('/statistics/overview', { replace: true }); } catch { /* ignore */ }
+    }
+  }, [curPath, navigate]);
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
@@ -1462,2256 +1449,2308 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         <Alert severity="info" variant="outlined">{error}</Alert>
       )}
 
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle1" sx={{ mb: 3, fontWeight: 600 }}>General Statistics</Typography>
-
-        {/* Modern General Statistics Layout: Total Phones left, Justiz & JVA side-by-side */}
-        {/* Modern General Statistics Layout: Total Phones full width, JVA/Justiz right, KPIs full width, percent in parentheses */}
-        {/* Modern General Statistics Layout: Total Phones symbol/count left, KPIs below, JVA/Justiz side-by-side right */}
-        <Box sx={{
-          p: 2.5,
-          borderRadius: 3,
-          minWidth: 320,
-          width: '100%',
-          boxShadow: 2,
-          background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.light, 0.04)} 100%)`,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-        }}>
-          {/* Hidden measurement container for unified chip width */}
-          <Box ref={measureRef} sx={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', height: 0 }}>
-            {[...generalLeftKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}`),
-            ...generalJustizKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}${k.total ? ` (${Math.round((Number(k.value || 0) && Number(k.total || 0)) ? (100 * Number(k.value) / Number(k.total)) : 0)}%)` : ''}`),
-            ...generalJvaKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}${k.total ? ` (${Math.round((Number(k.value || 0) && Number(k.total || 0)) ? (100 * Number(k.value) / Number(k.total)) : 0)}%)` : ''}`)
-            ].map((text, i) => (
-              <Chip key={`measure-${i}`} label={text} size="medium" sx={{ fontWeight: 400, fontSize: '0.95em', px: 1.4, py: 0.6 }} />
-            ))}
-          </Box>
-          {/* Top: Total Phones centered (single line), below: KPIs in 2 centered rows */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
-            {/* Row 1: Label + Count */}
-            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, justifyContent: 'center', mb: 1 }}>
-              <PublicIcon sx={{ fontSize: '2.0rem', color: 'primary.main' }} />
-              <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 600 }}>Total Phones</Typography>
-              <Typography variant="h3" fontWeight={800} color="primary.main" sx={{ letterSpacing: '0.03em' }}>{data.totalPhones?.toLocaleString() ?? '-'}</Typography>
-            </Box>
-            {/* Row 2: KPIs split into two centered rows */}
-            {(() => {
-              const items = generalLeftKpis;
-              const mid = Math.ceil(items.length / 2);
-              const rowA = items.slice(0, mid);
-              const rowB = items.slice(mid);
-              return (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center', width: '100%' }}>
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', justifyContent: 'center' }}>
-                    {rowA.map((kpi) => (
-                      <Chip
-                        key={`rowA-${kpi.label}`}
-                        label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`}
-                        size="medium"
-                        variant="outlined"
-                        sx={{
-                          ...(softChipSx(kpi.color)),
-                          width: genChipWidth || 'auto',
-                          minWidth: genChipWidth || 'auto'
-                        }}
-                      />
-                    ))}
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', justifyContent: 'center' }}>
-                    {rowB.map((kpi) => (
-                      <Chip
-                        key={`rowB-${kpi.label}`}
-                        label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`}
-                        size="medium"
-                        variant="outlined"
-                        sx={{
-                          ...(softChipSx(kpi.color)),
-                          width: genChipWidth || 'auto',
-                          minWidth: genChipWidth || 'auto'
-                        }}
-                      />
-                    ))}
-                  </Box>
-                </Box>
-              );
-            })()}
-          </Box>
-
-          {/* Bottom: JVA & Justiz side-by-side */}
-          <Box sx={{ display: 'flex', gap: 2, flex: 2, justifyContent: 'stretch', flexWrap: 'wrap', mt: 3, width: '100%' }}>
-            {/* Justiz Card */}
-            <Box sx={{
-              p: 2,
-              borderRadius: 3,
-              boxShadow: 1,
-              background: `linear-gradient(135deg, ${alpha(justiceTheme.primary, 0.18)} 0%, ${alpha(justiceTheme.light, 0.10)} 100%)`,
-              border: `2px solid ${alpha(justiceTheme.primary, 0.18)}`,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              minWidth: 180,
-              flex: 1,
-              width: '100%',
-              maxWidth: 'none',
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <GavelIcon sx={{ fontSize: '1.5rem', color: justiceTheme.primary }} />
-                <Typography variant="subtitle1" fontWeight={700} color={justiceTheme.primary}>Justiz</Typography>
-              </Box>
-              <Typography variant="h5" fontWeight={800} color={justiceTheme.primary} sx={{ mt: 1 }}>{data.totalJustizPhones?.toLocaleString() ?? '-'}</Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJustizPhones / data.totalPhones)}% of total` : ''}</Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, alignItems: 'center' }}>
-                {generalJustizKpis.map(kpi => {
-                  const perc = kpi.total ? ` (${Math.round((Number(kpi.value || 0) && Number(kpi.total || 0)) ? (100 * Number(kpi.value) / Number(kpi.total)) : 0)}%)` : '';
-                  return (
-                    <Chip
-                      key={kpi.label}
-                      label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${perc}`}
-                      size="medium"
-                      variant="outlined"
-                      sx={{
-                        ...(softChipSx(kpi.color)),
-                        width: genChipWidth || 'auto',
-                        minWidth: genChipWidth || 'auto'
-                      }}
-                    />
-                  );
-                })}
-              </Box>
-            </Box>
-
-            {/* JVA Card */}
-            <Box sx={{
-              p: 2,
-              borderRadius: 3,
-              boxShadow: 1,
-              background: `linear-gradient(135deg, ${alpha(jvaTheme.primary, 0.18)} 0%, ${alpha(jvaTheme.light, 0.10)} 100%)`,
-              border: `2px solid ${alpha(jvaTheme.primary, 0.18)}`,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              minWidth: 180,
-              flex: 1,
-              width: '100%',
-              maxWidth: 'none',
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <SecurityIcon sx={{ fontSize: '1.5rem', color: jvaTheme.primary }} />
-                <Typography variant="subtitle1" fontWeight={700} color={jvaTheme.primary}>JVA</Typography>
-              </Box>
-              <Typography variant="h5" fontWeight={800} color={jvaTheme.primary} sx={{ mt: 1 }}>{data.totalJVAPhones?.toLocaleString() ?? '-'}</Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJVAPhones / data.totalPhones)}% of total` : ''}</Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, alignItems: 'center' }}>
-                {generalJvaKpis.map(kpi => {
-                  const perc = kpi.total ? ` (${Math.round((Number(kpi.value || 0) && Number(kpi.total || 0)) ? (100 * Number(kpi.value) / Number(kpi.total)) : 0)}%)` : '';
-                  return (
-                    <Chip
-                      key={kpi.label}
-                      label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${perc}`}
-                      size="medium"
-                      variant="outlined"
-                      sx={{
-                        ...(softChipSx(kpi.color)),
-                        width: genChipWidth || 'auto',
-                        minWidth: genChipWidth || 'auto'
-                      }}
-                    />
-                  );
-                })}
-              </Box>
-            </Box>
-          </Box>
-        </Box>
-      </Paper>
-
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
-        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
-        {loading ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} variant="rectangular" height={28} />
-            ))}
-          </Box>
-        ) : (
-          <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
-            {/* Justice institutions Category - ALWAYS show for global stats */}
-            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
-              <Box sx={{
-                p: 2,
-                borderRadius: 2,
-                backgroundColor: justiceTheme.background,
-                border: '1px solid',
-                borderColor: justiceTheme.border,
-                height: '100%'
-              }}>
-                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: justiceTheme.primary }}>
-                  Justice institutions (Justiz)
-                </Typography>
-                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  <List dense sx={{ flex: 1 }}>
-                    {/* Total Phones für Justiz */}
-                    <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
-                      <ListItemText
-                        primary={
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                            <Chip
-                              label="Total Phones"
-                              size="small"
-                              color="info"
-                              variant="filled"
-                              sx={{ fontWeight: 600 }}
-                            />
-                            <Typography variant="body2" fontWeight={700} sx={{ color: 'info.main', fontSize: '1rem' }}>
-                              {Number(data.totalJustizPhones || 0).toLocaleString()}
-                            </Typography>
-                          </Box>
-                        }
-                      />
-                    </ListItem>
-                    {(data.phonesByModelJustiz || [])
-                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                      .map(({ model, count }) => {
-                        const label = String(model);
-                        const lower = label.toLowerCase();
-                        let color = 'default';
-                        if (lower.includes('kem')) color = 'success';
-                        else if (lower.includes('conference')) color = 'info';
-                        else if (lower.includes('wireless')) color = 'warning';
-                        else color = 'primary';
-                        return (
-                          <ListItem key={`justiz-${model}`} sx={{ py: 0.3, px: 0 }}>
-                            <ListItemText
-                              primary={
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                  <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                                  <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                                </Box>
-                              }
-                            />
-                          </ListItem>
-                        );
-                      })}
-                    {(data.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
-                      <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
-                    )}
-                  </List>
-
-                  {/* Expandable detailed breakdown by location - grouped by city */}
-                  {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
-                    <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
-                      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <PlaceIcon sx={{ fontSize: '1.1rem', color: 'info.main' }} />
-                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                            View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
-                          </Typography>
-                        </Box>
-                      </AccordionSummary>
-                      <AccordionDetails>
-                        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={expandAllJustizCities}
-                            sx={{
-                              minWidth: 'auto',
-                              px: 1.5,
-                              py: 0.5,
-                              fontSize: '0.7rem',
-                              borderRadius: 2,
-                              textTransform: 'none',
-                              fontWeight: 500
-                            }}
-                          >
-                            Expand All
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={collapseAllJustizCities}
-                            sx={{
-                              minWidth: 'auto',
-                              px: 1.5,
-                              py: 0.5,
-                              fontSize: '0.7rem',
-                              borderRadius: 2,
-                              textTransform: 'none',
-                              fontWeight: 500
-                            }}
-                          >
-                            Collapse All
-                          </Button>
-                        </Box>
-                        {/* ...existing code... */}
-                      </AccordionDetails>
-                      <AccordionDetails sx={{ pt: 0 }}>
-                        {groupLocationsByCity(data.phonesByModelJustizDetails || []).map((cityGroup) => (
-                          <Accordion
-                            key={`justiz-city-${cityGroup.cityCode}`}
-                            expanded={justizCitiesExpanded[`justiz-city-${cityGroup.cityCode}`] || false}
-                            onChange={(event, isExpanded) => {
-                              setJustizCitiesExpanded(prev => ({
-                                ...prev,
-                                [`justiz-city-${cityGroup.cityCode}`]: isExpanded
-                              }));
-                            }}
-                            TransitionProps={fastTransitionProps}
-                            sx={{
-                              mb: 1,
-                              border: '1px solid',
-                              borderColor: justiceTheme.border,
-                              borderRadius: 1,
-                              backgroundColor: justiceTheme.background,
-                              '&.MuiAccordion-root': {
-                                '&:before': { display: 'none' }
-                              },
-                              '& .MuiAccordionSummary-root': {
-                                transition: 'all 0.1s ease-in-out'
-                              },
-                              '& .MuiAccordionDetails-root': {
-                                transition: 'all 0.1s ease-in-out'
-                              }
-                            }}
-                          >
-                            <AccordionSummary
-                              expandIcon={<ExpandMoreIcon />}
-                              sx={{
-                                backgroundColor: justiceTheme.background,
-                                borderRadius: 1,
-                                minHeight: '40px !important',
-                                '& .MuiAccordionSummary-content': {
-                                  margin: '8px 0 !important'
-                                }
-                              }}
-                            >
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <BusinessIcon sx={{ fontSize: '1rem', color: 'info.main' }} />
-                                  <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'info.main' }}>
-                                    {cityGroup.cityName} ({cityGroup.cityCode})
-                                  </Typography>
-                                </Box>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <Chip
-                                    label={`${cityGroup.totalCityPhones.toLocaleString()} phones`}
-                                    size="small"
-                                    color="info"
-                                    variant="outlined"
-                                    sx={{
-                                      fontSize: '0.7rem',
-                                      height: '24px',
-                                      fontWeight: 600,
-                                      backgroundColor: (theme) => alpha(theme.palette.info.main, 0.1),
-                                      borderColor: (theme) => theme.palette.info.main,
-                                      color: (theme) => theme.palette.info.main
-                                    }}
-                                  />
-                                  <Chip
-                                    label={`${cityGroup.locations.length} locations`}
-                                    size="small"
-                                    variant="outlined"
-                                    color="info"
-                                    sx={{
-                                      fontSize: '0.7rem',
-                                      height: '24px',
-                                      fontWeight: 500,
-                                      mr: 1
-                                    }}
-                                  />
-                                </Box>
-                              </Box>
-                            </AccordionSummary>
-                            <AccordionDetails sx={{ pt: 1, pb: 1 }}>
-                              <TableContainer sx={{
-                                borderRadius: 2,
-                                overflow: 'hidden',
-                                border: '1px solid',
-                                borderColor: (theme) => alpha(theme.palette.info.main, 0.1)
-                              }}>
-                                <Table size="small" sx={{
-                                  '& .MuiTableCell-root': {
-                                    py: 0.8,
-                                    px: 1.5,
-                                    borderBottom: '1px solid',
-                                    borderColor: (theme) => alpha(theme.palette.info.main, 0.1)
-                                  }
-                                }}>
-                                  <TableHead>
-                                    <TableRow sx={{
-                                      background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.info.main, 0.12)} 0%, ${alpha(theme.palette.info.main, 0.08)} 100%)`
-                                    }}>
-                                      <TableCell sx={{
-                                        fontWeight: 700,
-                                        color: 'info.main',
-                                        fontSize: '0.8rem',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.5px'
-                                      }}>
-                                        Location
-                                      </TableCell>
-                                      <TableCell align="right" sx={{
-                                        fontWeight: 700,
-                                        color: 'info.main',
-                                        fontSize: '0.8rem',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.5px'
-                                      }}>
-                                        Total Phones
-                                      </TableCell>
-                                      <TableCell sx={{
-                                        fontWeight: 700,
-                                        color: 'info.main',
-                                        fontSize: '0.8rem',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.5px'
-                                      }}>
-                                        Top Models
-                                      </TableCell>
-                                    </TableRow>
-                                  </TableHead>
-                                  <TableBody>
-                                    {cityGroup.locations.map((location) => {
-                                      const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
-                                      const topModels = filteredModels.slice(0, 3);
-                                      return (
-                                        <TableRow
-                                          key={`justiz-loc-${location.location}`}
-                                          sx={{
-                                            '&:hover': {
-                                              backgroundColor: (theme) => alpha(theme.palette.info.main, 0.05),
-                                              transform: 'translateX(2px)',
-                                              transition: 'all 0.2s ease'
-                                            },
-                                            '&:nth-of-type(even)': {
-                                              backgroundColor: (theme) => alpha(theme.palette.info.main, 0.02)
-                                            }
-                                          }}
-                                        >
-                                          <TableCell>
-                                            <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
-                                              {String(location.location).toUpperCase().replace(/X/g, 'x')}
-                                            </Typography>
-                                          </TableCell>
-                                          <TableCell align="right">
-                                            <Chip
-                                              label={location.totalPhones.toLocaleString()}
-                                              size="small"
-                                              color="primary"
-                                              variant="outlined"
-                                              sx={{
-                                                fontSize: '0.75rem',
-                                                height: '20px',
-                                                minWidth: '45px',
-                                                fontWeight: 500,
-                                                color: 'text.secondary',
-                                                backgroundColor: 'transparent',
-                                                border: '1px solid',
-                                                borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                                                '&:hover': {
-                                                  backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.04)
-                                                }
-                                              }}
-                                            />
-                                          </TableCell>
-                                          <TableCell>
-                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
-                                              {topModels.map((modelData, index) => (
-                                                <Box
-                                                  key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`}
-                                                  sx={{
-                                                    display: 'flex',
-                                                    justifyContent: 'space-between',
-                                                    alignItems: 'center',
-                                                    backgroundColor: (theme) => alpha(theme.palette.info.main, 0.06),
-                                                    borderRadius: 1,
-                                                    px: 1,
-                                                    py: 0.4,
-                                                    border: '1px solid',
-                                                    borderColor: (theme) => alpha(theme.palette.info.main, 0.15)
-                                                  }}
-                                                >
-                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 600, fontSize: '0.75rem' }}>
-                                                    {modelData.model}
-                                                  </Typography>
-                                                  <Chip
-                                                    label={modelData.count.toLocaleString()}
-                                                    size="small"
-                                                    color="info"
-                                                    variant="outlined"
-                                                    sx={{
-                                                      fontSize: '0.7rem',
-                                                      height: '16px',
-                                                      minWidth: '30px',
-                                                      fontWeight: 400,
-                                                      color: 'text.secondary',
-                                                      backgroundColor: 'transparent',
-                                                      border: '1px solid',
-                                                      borderColor: (theme) => alpha(theme.palette.divider, 0.2),
-                                                      '&:hover': {
-                                                        backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.03)
-                                                      }
-                                                    }}
-                                                  />
-                                                </Box>
-                                              ))}
-                                              {filteredModels.length > 3 && (
-                                                <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>
-                                                  +{filteredModels.length - 3} more models
-                                                </Typography>
-                                              )}
-                                            </Box>
-                                          </TableCell>
-                                        </TableRow>
-                                      );
-                                    })}
-                                  </TableBody>
-                                </Table>
-                              </TableContainer>
-                            </AccordionDetails>
-                          </Accordion>
-                        ))}
-                      </AccordionDetails>
-                    </Accordion>
-                  )}
-                </Box>
-              </Box>
-            </Grid>
-
-            {/* Correctional Facility Category - ALWAYS show for global stats */}
-            <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
-              <Box sx={{
-                p: 2,
-                borderRadius: 2,
-                backgroundColor: jvaTheme.background,
-                border: '1px solid',
-                borderColor: jvaTheme.border,
-                height: '100%'
-              }}>
-                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: jvaTheme.primary }}>
-                  Correctional Facility (JVA)
-                </Typography>
-                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  <List dense sx={{ flex: 1 }}>
-                    {/* Total Phones für JVA */}
-                    <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
-                      <ListItemText
-                        primary={
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                            <Chip
-                              label="Total Phones"
-                              size="small"
-                              color="warning"
-                              variant="filled"
-                              sx={{ fontWeight: 600 }}
-                            />
-                            <Typography variant="body2" fontWeight={700} sx={{ color: 'warning.main', fontSize: '1rem' }}>
-                              {Number(data.totalJVAPhones || 0).toLocaleString()}
-                            </Typography>
-                          </Box>
-                        }
-                      />
-                    </ListItem>
-                    {(data.phonesByModelJVA || [])
-                      .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                      .map(({ model, count }) => {
-                        const label = String(model);
-                        const lower = label.toLowerCase();
-                        let color = 'default';
-                        if (lower.includes('kem')) color = 'success';
-                        else if (lower.includes('conference')) color = 'info';
-                        else if (lower.includes('wireless')) color = 'error';
-                        else color = 'warning';
-                        return (
-                          <ListItem key={`jva-${model}`} sx={{ py: 0.3, px: 0 }}>
-                            <ListItemText
-                              primary={
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                  <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                                  <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                                </Box>
-                              }
-                            />
-                          </ListItem>
-                        );
-                      })}
-                    {(data.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
-                      <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
-                    )}
-                  </List>
-
-                  {/* Expandable detailed breakdown by location - grouped by city */}
-                  {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
-                    <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
-                      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <PlaceIcon sx={{ fontSize: '1.1rem', color: 'warning.main' }} />
-                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                            View by Location ({(data.phonesByModelJVADetails || []).length} locations)
-                          </Typography>
-                        </Box>
-                      </AccordionSummary>
-                      <AccordionDetails>
-                        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={expandAllJvaCities}
-                            sx={{
-                              minWidth: 'auto',
-                              px: 1.5,
-                              py: 0.5,
-                              fontSize: '0.7rem',
-                              borderRadius: 2,
-                              textTransform: 'none',
-                              fontWeight: 500
-                            }}
-                          >
-                            Expand All
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={collapseAllJvaCities}
-                            sx={{
-                              minWidth: 'auto',
-                              px: 1.5,
-                              py: 0.5,
-                              fontSize: '0.7rem',
-                              borderRadius: 2,
-                              textTransform: 'none',
-                              fontWeight: 500
-                            }}
-                          >
-                            Collapse All
-                          </Button>
-                        </Box>
-                        {/* ...existing code... */}
-                      </AccordionDetails>
-                      <AccordionDetails sx={{ pt: 0 }}>
-                        {groupLocationsByCity(data.phonesByModelJVADetails || []).map((cityGroup) => (
-                          <Accordion
-                            key={`jva-city-${cityGroup.cityCode}`}
-                            expanded={jvaCitiesExpanded[`jva-city-${cityGroup.cityCode}`] || false}
-                            onChange={(event, isExpanded) => {
-                              setJvaCitiesExpanded(prev => ({
-                                ...prev,
-                                [`jva-city-${cityGroup.cityCode}`]: isExpanded
-                              }));
-                            }}
-                            TransitionProps={fastTransitionProps}
-                            sx={{
-                              mb: 1,
-                              border: '1px solid',
-                              borderColor: jvaTheme.border,
-                              borderRadius: 1,
-                              backgroundColor: jvaTheme.background,
-                              '&.MuiAccordion-root': {
-                                '&:before': { display: 'none' }
-                              },
-                              '& .MuiAccordionSummary-root': {
-                                transition: 'all 0.1s ease-in-out'
-                              },
-                              '& .MuiAccordionDetails-root': {
-                                transition: 'all 0.1s ease-in-out'
-                              }
-                            }}
-                          >
-                            <AccordionSummary
-                              expandIcon={<ExpandMoreIcon />}
-                              sx={{
-                                backgroundColor: jvaTheme.background,
-                                borderRadius: 1,
-                                minHeight: '40px !important',
-                                '& .MuiAccordionSummary-content': {
-                                  margin: '8px 0 !important'
-                                }
-                              }}
-                            >
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'warning.main' }}>
-                                  {cityGroup.cityName} ({cityGroup.cityCode})
-                                </Typography>
-                                <Chip
-                                  label={`${cityGroup.totalCityPhones.toLocaleString()} phones`}
-                                  size="small"
-                                  color="warning"
-                                  variant="outlined"
-                                  sx={{
-                                    fontSize: '0.7rem',
-                                    height: '24px',
-                                    fontWeight: 600,
-                                    backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.1),
-                                    borderColor: (theme) => theme.palette.warning.main,
-                                    color: (theme) => theme.palette.warning.main,
-                                    mr: 1
-                                  }}
-                                />
-                              </Box>
-                            </AccordionSummary>
-                            <AccordionDetails sx={{ pt: 1, pb: 1 }}>
-                              <TableContainer sx={{
-                                borderRadius: 2,
-                                overflow: 'hidden',
-                                border: '1px solid',
-                                borderColor: (theme) => alpha(theme.palette.warning.main, 0.1)
-                              }}>
-                                <Table size="small" sx={{
-                                  '& .MuiTableCell-root': {
-                                    py: 0.8,
-                                    px: 1.5,
-                                    borderBottom: '1px solid',
-                                    borderColor: (theme) => alpha(theme.palette.warning.main, 0.1)
-                                  }
-                                }}>
-                                  <TableHead>
-                                    <TableRow sx={{
-                                      background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.warning.main, 0.12)} 0%, ${alpha(theme.palette.warning.main, 0.08)} 100%)`
-                                    }}>
-                                      <TableCell sx={{
-                                        fontWeight: 700,
-                                        color: 'warning.main',
-                                        fontSize: '0.8rem',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.5px'
-                                      }}>
-                                        Location
-                                      </TableCell>
-                                      <TableCell align="right" sx={{
-                                        fontWeight: 700,
-                                        color: 'warning.main',
-                                        fontSize: '0.8rem',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.5px'
-                                      }}>
-                                        Total Phones
-                                      </TableCell>
-                                      <TableCell sx={{
-                                        fontWeight: 700,
-                                        color: 'warning.main',
-                                        fontSize: '0.8rem',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.5px'
-                                      }}>
-                                        Top Models
-                                      </TableCell>
-                                    </TableRow>
-                                  </TableHead>
-                                  <TableBody>
-                                    {cityGroup.locations.map((location) => {
-                                      const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
-                                      const topModels = filteredModels.slice(0, 3);
-                                      return (
-                                        <TableRow
-                                          key={`jva-loc-${location.location}`}
-                                          sx={{
-                                            '&:hover': {
-                                              backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.05),
-                                              transform: 'translateX(2px)',
-                                              transition: 'all 0.2s ease'
-                                            },
-                                            '&:nth-of-type(even)': {
-                                              backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.02)
-                                            }
-                                          }}
-                                        >
-                                          <TableCell>
-                                            <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
-                                              {String(location.location).toUpperCase().replace(/X/g, 'x')}
-                                            </Typography>
-                                          </TableCell>
-                                          <TableCell align="right">
-                                            <Chip
-                                              label={location.totalPhones.toLocaleString()}
-                                              size="small"
-                                              color="warning"
-                                              variant="outlined"
-                                              sx={{
-                                                fontSize: '0.75rem',
-                                                height: '20px',
-                                                minWidth: '45px',
-                                                fontWeight: 500,
-                                                color: 'text.secondary',
-                                                backgroundColor: 'transparent',
-                                                border: '1px solid',
-                                                borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                                                '&:hover': {
-                                                  backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.04)
-                                                }
-                                              }}
-                                            />
-                                          </TableCell>
-                                          <TableCell>
-                                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
-                                              {topModels.map((modelData) => (
-                                                <Box
-                                                  key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`}
-                                                  sx={{
-                                                    display: 'flex',
-                                                    justifyContent: 'space-between',
-                                                    alignItems: 'center',
-                                                    backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.06),
-                                                    borderRadius: 1,
-                                                    px: 1,
-                                                    py: 0.4,
-                                                    border: '1px solid',
-                                                    borderColor: (theme) => alpha(theme.palette.warning.main, 0.15)
-                                                  }}
-                                                >
-                                                  <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 600, fontSize: '0.75rem' }}>
-                                                    {modelData.model}
-                                                  </Typography>
-                                                  <Chip
-                                                    label={modelData.count.toLocaleString()}
-                                                    size="small"
-                                                    color="warning"
-                                                    variant="outlined"
-                                                    sx={{
-                                                      fontSize: '0.7rem',
-                                                      height: '16px',
-                                                      minWidth: '30px',
-                                                      fontWeight: 400,
-                                                      color: 'text.secondary',
-                                                      backgroundColor: 'transparent',
-                                                      border: '1px solid',
-                                                      borderColor: (theme) => alpha(theme.palette.divider, 0.2),
-                                                      '&:hover': {
-                                                        backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.03)
-                                                      }
-                                                    }}
-                                                  />
-                                                </Box>
-                                              ))}
-                                              {filteredModels.length > 3 && (
-                                                <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>
-                                                  +{filteredModels.length - 3} more models
-                                                </Typography>
-                                              )}
-                                            </Box>
-                                          </TableCell>
-                                        </TableRow>
-                                      );
-                                    })}
-                                  </TableBody>
-                                </Table>
-                              </TableContainer>
-                            </AccordionDetails>
-                          </Accordion>
-                        ))}
-                      </AccordionDetails>
-                    </Accordion>
-                  )}
-                </Box>
-              </Box>
-            </Grid>
-          </Grid>
-        )}
-      </Paper>
-
-      {/* Statistics by Location */}
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.info.main}`, backgroundColor: (t) => alpha(t.palette.info.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
-        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'info.main' }}>Statistics by Location</Typography>
-
-        {/* Two search fields side by side */}
-        <Grid container spacing={2} sx={{ mb: 2 }}>
-          {/* Location Code Search with Dropdown */}
-          <Grid item xs={12} md={6} sx={{ position: 'relative' }}>
-            <TextField
-              label="Search by Location Code"
-              placeholder="Enter location code (e.g., AUG01, NUE02)"
-              size="small"
-              fullWidth
-              defaultValue={localInput}
-              inputRef={locInputRef}
-              onChange={handleLocationInputChange}
-              onKeyDown={handleKeyDown}
-              error={!!locError}
-              helperText={locError || (locInput && !locSelected ? "Press Enter or pause to search" : "")}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ color: 'action.disabled' }} />
-                  </InputAdornment>
-                ),
-                endAdornment: (
-                  <>
-                    {isSearchingLocations && (
-                      <InputAdornment position="end">
-                        <CircularProgress size={20} />
-                      </InputAdornment>
-                    )}
-                    {locStatsLoading && (
-                      <InputAdornment position="end">
-                        <CircularProgress size={20} />
-                      </InputAdornment>
-                    )}
-                    {locSelected && (
-                      <InputAdornment position="end">
-                        <CloseIcon
-                          fontSize="small"
-                          onClick={() => {
-                            setLocSelected(null);
-                            setLocalInput('');
-                            if (locInputRef.current) {
-                              try { locInputRef.current.value = ''; } catch { /* ignore */ }
-                            }
-                            setLocInput('');
-                            setLocationSuggestions([]);
-                            setShowLocationDropdown(false);
-                            setSelectedSuggestionIndex(-1);
-                            setLocStats({
-                              totalPhones: 0,
-                              totalSwitches: 0,
-                              phonesWithKEM: 0,
-                              phonesByModel: [],
-                              phonesByModelJustiz: [],
-                              phonesByModelJVA: [],
-                              vlanUsage: [],
-                              switches: [],
-                              kemPhones: [],
-                            });
-                            setLocStatsLoading(false);
-                            if (saveStatisticsPrefs) {
-                              saveStatisticsPrefs({ lastSelectedLocation: null });
-                            }
-                          }}
-                          sx={{
-                            cursor: 'pointer',
-                            '&:hover': { color: 'primary.main' }
-                          }}
-                        />
-                      </InputAdornment>
-                    )}
-                  </>
-                ),
-              }}
-            />
-
-            {/* Location Suggestions Dropdown */}
-            {showLocationDropdown && (() => {
-              const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
-              const three = /^[a-zA-Z]{3}$/.test(inputVal);
-              return three || (locationSuggestions.length > 0);
-            })() && (
-                <Paper
-                  elevation={8}
-                  sx={{
-                    position: 'absolute',
-                    top: 'calc(100% + 2px)',
-                    left: '2%',
-                    width: '98%',
-                    minWidth: '320px',
-                    maxWidth: 'none',
-                    zIndex: 1300,
-                    maxHeight: '280px',
-                    overflow: 'auto',
-                    borderRadius: 2,
-                    border: (theme) => `1px solid ${theme.palette.divider}`,
-                    boxShadow: (theme) =>
-                      theme.palette.mode === 'dark'
-                        ? '0 8px 32px rgba(0,0,0,0.5)'
-                        : '0 8px 32px rgba(0,0,0,0.12)',
-                  }}
-                >
-                  {(() => {
-                    // Redundant safety: render a sticky prefix item at the top when input is exactly 3 letters
-                    const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
-                    const three = /^[a-zA-Z]{3}$/.test(inputVal);
-                    if (!three) return null;
-                    const codeUpper = inputVal.toUpperCase();
-                    const codeMxx = codeUpper.replace(/X/g, 'x');
-                    const city = cityNameByCode3?.[codeMxx] || cityNameByCode3?.[codeUpper];
-                    // If merged array already starts with our synthetic item, skip
-                    const first = locationSuggestions[0];
-                    const firstIsSamePrefix = first && first.isPrefixAll && String(first.code || '').toUpperCase().replace(/X/g, 'x') === codeMxx;
-                    if (firstIsSamePrefix) return null;
-                    return (
-                      <Box
-                        key={`${codeMxx}__prefix_top`}
-                        onClick={() => handleLocationSuggestionSelect({ code: codeMxx, city, isPrefixAll: true })}
-                        sx={{
-                          px: 2,
-                          py: 1.5,
-                          cursor: 'pointer',
-                          backgroundColor: (theme) => theme.palette.action.hover,
-                          borderBottom: '1px solid',
-                          borderBottomColor: (theme) => theme.palette.divider,
-                          transition: 'background-color 0.15s ease',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 1.5,
-                        }}
-                      >
+      {/* Two-pane layout: left menu + right content */}
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+        {/* Left menu */}
+        <Box sx={{ width: 240, flexShrink: 0 }}>
+          <Paper variant="outlined" sx={{ p: 1, borderRadius: 2 }}>
+            <List dense>
+              {[{ to: '/statistics/overview', label: 'Overview' }, { to: '/statistics/timelines', label: 'Timelines' }, { to: '/statistics/by-location', label: 'Statistics by Location' }].map((m) => {
+                const active = curPath === m.to || (m.to !== '/statistics/overview' && curPath.startsWith(m.to));
+                return (
+                  <ListItem key={m.to} disablePadding>
+                    <ListItemText
+                      primary={
                         <Box
+                          component={Link}
+                          to={m.to}
+                          onClick={(e) => { e.preventDefault(); navigate(m.to); }}
                           sx={{
-                            width: 32,
-                            height: 32,
-                            borderRadius: '50%',
-                            backgroundColor: (theme) => theme.palette.primary.main,
-                            color: 'white',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '14px',
-                            fontWeight: 'bold',
-                            flexShrink: 0,
+                            display: 'block',
+                            width: '100%',
+                            px: 1.5,
+                            py: 1,
+                            borderRadius: 1,
+                            textDecoration: 'none',
+                            color: active ? 'primary.main' : 'text.primary',
+                            fontWeight: active ? 700 : 500,
+                            backgroundColor: active ? 'action.hover' : 'transparent',
+                            '&:hover': { backgroundColor: 'action.hover' },
                           }}
                         >
-                          {codeMxx}
+                          {m.label}
                         </Box>
-                        <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary', mb: 0.25 }}>
-                            {city ? `${codeMxx} ${city}` : codeMxx}
-                          </Typography>
-                          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
-                            All locations in this city
-                          </Typography>
+                      }
+                    />
+                  </ListItem>
+                );
+              })}
+            </List>
+          </Paper>
+        </Box>
+
+        {/* Right content */}
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* Overview content */}
+          {isOverview && (<>
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+              <Typography variant="subtitle1" sx={{ mb: 3, fontWeight: 600 }}>General Statistics</Typography>
+
+              {/* Begin: previously existing General Statistics markup remains unchanged below */}
+
+              {/* marker: overview-general-start */}
+
+              {/* Modern General Statistics Layout: Total Phones left, Justiz & JVA side-by-side */}
+              {/* Modern General Statistics Layout: Total Phones full width, JVA/Justiz right, KPIs full width, percent in parentheses */}
+              {/* Modern General Statistics Layout: Total Phones symbol/count left, KPIs below, JVA/Justiz side-by-side right */}
+              <Box sx={{
+                p: 2.5,
+                borderRadius: 3,
+                minWidth: 320,
+                width: '100%',
+                boxShadow: 2,
+                background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.light, 0.04)} 100%)`,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+              }}>
+                {/* Hidden measurement container for unified chip width */}
+                <Box ref={measureRef} sx={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', height: 0 }}>
+                  {[...generalLeftKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}`),
+                  ...generalJustizKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}${k.total ? ` (${Math.round((Number(k.value || 0) && Number(k.total || 0)) ? (100 * Number(k.value) / Number(k.total)) : 0)}%)` : ''}`),
+                  ...generalJvaKpis.map(k => `${(k.value ?? '-').toLocaleString?.() ?? k.value ?? '-'} ${k.label}${k.total ? ` (${Math.round((Number(k.value || 0) && Number(k.total || 0)) ? (100 * Number(k.value) / Number(k.total)) : 0)}%)` : ''}`)
+                  ].map((text, i) => (
+                    <Chip key={`measure-${i}`} label={text} size="medium" sx={{ fontWeight: 400, fontSize: '0.95em', px: 1.4, py: 0.6 }} />
+                  ))}
+                </Box>
+                {/* Top: Total Phones centered (single line), below: KPIs in 2 centered rows */}
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
+                  {/* Row 1: Label + Count */}
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, justifyContent: 'center', mb: 1 }}>
+                    <PublicIcon sx={{ fontSize: '2.0rem', color: 'primary.main' }} />
+                    <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 600 }}>Total Phones</Typography>
+                    <Typography variant="h3" fontWeight={800} color="primary.main" sx={{ letterSpacing: '0.03em' }}>{data.totalPhones?.toLocaleString() ?? '-'}</Typography>
+                  </Box>
+                  {/* Row 2: KPIs split into two centered rows */}
+                  {(() => {
+                    const items = generalLeftKpis;
+                    const mid = Math.ceil(items.length / 2);
+                    const rowA = items.slice(0, mid);
+                    const rowB = items.slice(mid);
+                    return (
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center', width: '100%' }}>
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', justifyContent: 'center' }}>
+                          {rowA.map((kpi) => (
+                            <Chip
+                              key={`rowA-${kpi.label}`}
+                              label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`}
+                              size="medium"
+                              variant="outlined"
+                              sx={{
+                                ...(softChipSx(kpi.color)),
+                                width: genChipWidth || 'auto',
+                                minWidth: genChipWidth || 'auto'
+                              }}
+                            />
+                          ))}
+                        </Box>
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', justifyContent: 'center' }}>
+                          {rowB.map((kpi) => (
+                            <Chip
+                              key={`rowB-${kpi.label}`}
+                              label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}`}
+                              size="medium"
+                              variant="outlined"
+                              sx={{
+                                ...(softChipSx(kpi.color)),
+                                width: genChipWidth || 'auto',
+                                minWidth: genChipWidth || 'auto'
+                              }}
+                            />
+                          ))}
                         </Box>
                       </Box>
                     );
                   })()}
-                  {locationSuggestions.map((suggestion, index) => (
-                    <Box
-                      key={suggestion.code.toUpperCase().replace(/X/g, 'x')}
-                      onClick={() => handleLocationSuggestionSelect(suggestion)}
-                      sx={{
-                        px: 2,
-                        py: 1.5,
-                        cursor: 'pointer',
-                        backgroundColor: selectedSuggestionIndex === index
-                          ? (theme) => theme.palette.action.selected
-                          : 'transparent',
-                        '&:hover': {
-                          backgroundColor: (theme) => theme.palette.action.hover,
-                        },
-                        borderBottom: index < locationSuggestions.length - 1 ? '1px solid' : 'none',
-                        borderBottomColor: (theme) => theme.palette.divider,
-                        transition: 'background-color 0.15s ease',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 1.5,
-                      }}
-                    >
-                      {/* Location icon */}
-                      <Box
-                        sx={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: '50%',
-                          backgroundColor: (theme) => theme.palette.primary.main,
-                          color: 'white',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '14px',
-                          fontWeight: 'bold',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {suggestion.code.substring(0, 3).toUpperCase().replace(/X/g, 'x')}
-                      </Box>
-                      {/* Location details */}
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            fontWeight: 600,
-                            color: 'text.primary',
-                            mb: 0.25,
-                          }}
-                        >
-                          {(() => {
-                            const code = suggestion.code.toUpperCase().replace(/X/g, 'x');
-                            if (!suggestion.isPrefixAll) return code;
-                            const city = suggestion.city || cityNameByCode3?.[code] || cityNameByCode3?.[code.toUpperCase()];
-                            return city ? `${code} ${city}` : code;
-                          })()}
-                        </Typography>
-                        {suggestion.city && !suggestion.isPrefixAll && (
-                          <Typography
-                            variant="caption"
+                </Box>
+
+                {/* Bottom: JVA & Justiz side-by-side */}
+                <Box sx={{ display: 'flex', gap: 2, flex: 2, justifyContent: 'stretch', flexWrap: 'wrap', mt: 3, width: '100%' }}>
+                  {/* Justiz Card */}
+                  <Box sx={{
+                    p: 2,
+                    borderRadius: 3,
+                    boxShadow: 1,
+                    background: `linear-gradient(135deg, ${alpha(justiceTheme.primary, 0.18)} 0%, ${alpha(justiceTheme.light, 0.10)} 100%)`,
+                    border: `2px solid ${alpha(justiceTheme.primary, 0.18)}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    minWidth: 180,
+                    flex: 1,
+                    width: '100%',
+                    maxWidth: 'none',
+                  }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <GavelIcon sx={{ fontSize: '1.5rem', color: justiceTheme.primary }} />
+                      <Typography variant="subtitle1" fontWeight={700} color={justiceTheme.primary}>Justiz</Typography>
+                    </Box>
+                    <Typography variant="h5" fontWeight={800} color={justiceTheme.primary} sx={{ mt: 1 }}>{data.totalJustizPhones?.toLocaleString() ?? '-'}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJustizPhones / data.totalPhones)}% of total` : ''}</Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, alignItems: 'center' }}>
+                      {generalJustizKpis.map(kpi => {
+                        const perc = kpi.total ? ` (${Math.round((Number(kpi.value || 0) && Number(kpi.total || 0)) ? (100 * Number(kpi.value) / Number(kpi.total)) : 0)}%)` : '';
+                        return (
+                          <Chip
+                            key={kpi.label}
+                            label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${perc}`}
+                            size="medium"
+                            variant="outlined"
                             sx={{
-                              color: 'text.secondary',
-                              fontSize: '0.75rem',
+                              ...(softChipSx(kpi.color)),
+                              width: genChipWidth || 'auto',
+                              minWidth: genChipWidth || 'auto'
                             }}
-                          >
-                            📍 {suggestion.city}
-                          </Typography>
-                        )}
-                        {suggestion.isPrefixAll && (
-                          <Typography
-                            variant="caption"
-                            sx={{ color: 'text.secondary', fontSize: '0.75rem' }}
-                          >
-                            All locations in this city
-                          </Typography>
-                        )}
-                      </Box>
+                          />
+                        );
+                      })}
                     </Box>
+                  </Box>
+
+                  {/* JVA Card */}
+                  <Box sx={{
+                    p: 2,
+                    borderRadius: 3,
+                    boxShadow: 1,
+                    background: `linear-gradient(135deg, ${alpha(jvaTheme.primary, 0.18)} 0%, ${alpha(jvaTheme.light, 0.10)} 100%)`,
+                    border: `2px solid ${alpha(jvaTheme.primary, 0.18)}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    minWidth: 180,
+                    flex: 1,
+                    width: '100%',
+                    maxWidth: 'none',
+                  }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <SecurityIcon sx={{ fontSize: '1.5rem', color: jvaTheme.primary }} />
+                      <Typography variant="subtitle1" fontWeight={700} color={jvaTheme.primary}>JVA</Typography>
+                    </Box>
+                    <Typography variant="h5" fontWeight={800} color={jvaTheme.primary} sx={{ mt: 1 }}>{data.totalJVAPhones?.toLocaleString() ?? '-'}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>{data.totalPhones ? `${Math.round(100 * data.totalJVAPhones / data.totalPhones)}% of total` : ''}</Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, alignItems: 'center' }}>
+                      {generalJvaKpis.map(kpi => {
+                        const perc = kpi.total ? ` (${Math.round((Number(kpi.value || 0) && Number(kpi.total || 0)) ? (100 * Number(kpi.value) / Number(kpi.total)) : 0)}%)` : '';
+                        return (
+                          <Chip
+                            key={kpi.label}
+                            label={`${kpi.value?.toLocaleString() ?? '-'} ${kpi.label}${perc}`}
+                            size="medium"
+                            variant="outlined"
+                            sx={{
+                              ...(softChipSx(kpi.color)),
+                              width: genChipWidth || 'auto',
+                              minWidth: genChipWidth || 'auto'
+                            }}
+                          />
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                </Box>
+              </Box>
+            </Paper>
+
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+              <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
+              {loading ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <Skeleton key={i} variant="rectangular" height={28} />
                   ))}
-                </Paper>
-              )}
-          </Grid>
-
-          {/* City Name Search */}
-          <Grid item xs={12} md={6}>
-            <Autocomplete
-              options={Object.values(cityNameByCode3).sort()}
-              freeSolo={false} // Change to false for better performance
-              openOnFocus={false} // Disable auto-open for performance
-              // Keep popup size fixed and make options scrollable
-              slotProps={{
-                paper: { sx: { maxHeight: 200, overflowY: 'auto' } }, // Reduced height
-                listbox: { sx: { maxHeight: 160, overflowY: 'auto' } },
-              }}
-              ListboxProps={{
-                style: { maxHeight: 160, overflowY: 'auto' },
-              }}
-              limitTags={5}
-              disableListWrap={true}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Search by City Name"
-                  placeholder="Type city name (e.g., München, Augsburg)"
-                  size="small"
-                />
-              )}
-              onChange={handleCityNameChange}
-              filterOptions={filterCityOptions}
-              getOptionLabel={(option) => option}
-              renderOption={(props, option) => {
-                // Find the corresponding location code
-                const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
-                  name === option
-                )?.[0];
-
-                // Extract key from props to avoid React warning
-                const { key, ...otherProps } = props;
-
-                return (
-                  <li key={key} {...otherProps}>
-                    <Box>
-                      <Typography variant="body2">{option}</Typography>
-                      {cityCode && (
-                        <Typography variant="caption" color="text.secondary">
-                          Code: {cityCode}
-                        </Typography>
-                      )}
-                    </Box>
-                  </li>
-                );
-              }}
-            />
-          </Grid>
-        </Grid>
-
-        {locError && (
-          <Box sx={{ mb: 2 }}>
-            <Alert severity="warning" variant="outlined">{locError}</Alert>
-          </Box>
-        )}
-
-        <Grid container spacing={2} sx={{ mb: 1 }}>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={locStats.totalPhones} loading={locStatsLoading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Total Switches" value={locStats.totalSwitches} loading={locStatsLoading} /></Grid>
-          <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={locStats.phonesWithKEM} loading={locStatsLoading} /></Grid>
-        </Grid>
-
-        {/* Subtle hint when city prefix is selected */}
-        {locStats?.mode === 'prefix' && locStats?.query && (
-          <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="subtitle2" color="text.secondary">
-              Statistics by Location
-            </Typography>
-            <Chip
-              size="small"
-              color="default"
-              variant="outlined"
-              label={`All locations matching ${locStats.query}*`}
-            />
-          </Box>
-        )}
-
-        {/* Additional per-location details */}
-        <Box sx={{ mt: 2 }}>
-          {/* Phones by Model - Full Width */}
-          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
-          {locStatsLoading ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} variant="rectangular" height={28} />
-              ))}
-            </Box>
-          ) : (
-            <Grid container spacing={2}>
-              {/* Justice institutions Box */}
-              {(!locSelected || locSelected.length === 3 || isJusticeLocation(locSelected)) &&
-                (locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
-                  <Grid item xs={12} md={4}>
+                </Box>
+              ) : (
+                <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
+                  {/* Justice institutions Category - ALWAYS show for global stats */}
+                  <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
                     <Box sx={{
-                      p: 1.5,
-                      borderRadius: 1,
+                      p: 2,
+                      borderRadius: 2,
                       backgroundColor: justiceTheme.background,
                       border: '1px solid',
                       borderColor: justiceTheme.border,
-                      height: 'fit-content'
+                      height: '100%'
                     }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, color: justiceTheme.primary, mb: 0.5 }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: justiceTheme.primary }}>
                         Justice institutions (Justiz)
                       </Typography>
-                      <List dense sx={{ mb: 0 }}>
-                        {(locStats.phonesByModelJustiz || [])
-                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                          .slice(0, 5)
-                          .map(({ model, count }) => {
-                            const label = String(model);
-                            const lower = label.toLowerCase();
-                            let color = 'default';
-                            if (lower.includes('kem')) color = 'success';
-                            else if (lower.includes('conference')) color = 'info';
-                            else if (lower.includes('wireless')) color = 'warning';
-                            else color = 'primary';
-                            return (
-                              <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
-                                <ListItemText
-                                  primary={
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                      <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                                      <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                                    </Box>
-                                  }
-                                />
-                              </ListItem>
-                            );
-                          })}
-                      </List>
-                    </Box>
-                  </Grid>
-                )}
-
-              {/* JVA Box */}
-              {(!locSelected || locSelected.length === 3 || isJVALocation(locSelected)) &&
-                (locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
-                  <Grid item xs={12} md={4}>
-                    <Box sx={{
-                      p: 1.5,
-                      borderRadius: 1,
-                      backgroundColor: jvaTheme.background,
-                      border: '1px solid',
-                      borderColor: jvaTheme.border,
-                      height: 'fit-content'
-                    }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, color: jvaTheme.primary, mb: 0.5 }}>
-                        Correctional Facility (JVA)
-                      </Typography>
-                      <List dense>
-                        {(locStats.phonesByModelJVA || [])
-                          .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
-                          .slice(0, 5)
-                          .map(({ model, count }) => {
-                            const label = String(model);
-                            const lower = label.toLowerCase();
-                            let color = 'default';
-                            if (lower.includes('kem')) color = 'success';
-                            else if (lower.includes('conference')) color = 'info';
-                            else if (lower.includes('wireless')) color = 'error';
-                            else color = 'warning';
-                            return (
-                              <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
-                                <ListItemText
-                                  primary={
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                      <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
-                                      <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
-                                    </Box>
-                                  }
-                                />
-                              </ListItem>
-                            );
-                          })}
-                      </List>
-                    </Box>
-                  </Grid>
-                )}
-
-              {/* VLAN Usage Box */}
-              {(locStats.vlanUsage || []).length > 0 && (
-                <Grid item xs={12} md={4}>
-                  <Box sx={{
-                    p: 1.5,
-                    borderRadius: 1,
-                    backgroundColor: (theme) => alpha(theme.palette.primary.light, theme.palette.mode === 'dark' ? 0.08 : 0.05),
-                    border: '1px solid',
-                    borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
-                    height: 'fit-content'
-                  }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
-                      VLAN Usage
-                    </Typography>
-                    <List dense>
-                      {(locStats.vlanUsage || []).slice(0, 5).map(({ vlan, count }) => {
-                        const vLabel = String(vlan ?? '').trim();
-                        const lower = vLabel.toLowerCase();
-                        let color = 'default';
-                        let variant = 'outlined';
-                        if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
-                        else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
-                        else if (lower.includes('data')) { color = 'primary'; }
-                        else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
-                        else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
-                        return (
-                          <ListItem key={`vlan-${vlan}`} sx={{ py: 0.2, px: 0 }}>
+                      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                        <List dense sx={{ flex: 1 }}>
+                          {/* Total Phones für Justiz */}
+                          <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
                             <ListItemText
                               primary={
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                  <Chip label={vLabel} size="small" color={color} variant={variant} />
-                                  <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                  <Chip
+                                    label="Total Phones"
+                                    size="small"
+                                    color="info"
+                                    variant="filled"
+                                    sx={{ fontWeight: 600 }}
+                                  />
+                                  <Typography variant="body2" fontWeight={700} sx={{ color: 'info.main', fontSize: '1rem' }}>
+                                    {Number(data.totalJustizPhones || 0).toLocaleString()}
+                                  </Typography>
                                 </Box>
                               }
                             />
                           </ListItem>
-                        );
-                      })}
-                    </List>
-                  </Box>
-                </Grid>
-              )}
-            </Grid>
-          )}
-        </Box>
-
-        <Accordion
-          disableGutters
-          elevation={0}
-          TransitionProps={fastTransitionProps}
-          sx={{
-            border: '1px solid',
-            borderColor: (t) => alpha(t.palette.primary.main, 0.2),
-            borderRadius: 1,
-            '&:before': { display: 'none' },
-            mt: 2,
-            mb: 1,
-            backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
-            '& .MuiAccordionSummary-root': { transition: 'all 0.1s ease-in-out' },
-            '& .MuiAccordionDetails-root': { transition: 'all 0.1s ease-in-out' }
-          }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}
-          >
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <RouterIcon sx={{ fontSize: '1.1rem', color: 'primary.main' }} />
-                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'primary.main' }}>
-                  Switches {(() => {
-                    const q = String(locStats?.query || '').toUpperCase();
-                    // Prefix mode (e.g., ABX) -> show city name with code
-                    if (locStats?.mode === 'prefix' && q.length === 3 && cityNameByCode3[q]) {
-                      return `in ${cityNameByCode3[q]} (${q})`;
-                    }
-                    // Exact location (e.g., ABX01) -> show code with city name if available
-                    if (q && q.length === 5) {
-                      const cityName = cityNameByCode3[q.slice(0, 3)] || '';
-                      return cityName ? `${q} (${cityName})` : q;
-                    }
-                    return 'at this Location';
-                  })()}
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {(() => {
-                  const total = Number(
-                    (locStats.totalSwitches ?? ((locStats.switchDetails && locStats.switchDetails.length)
-                      ? locStats.switchDetails.length
-                      : (locStats.switches || []).length)) || 0
-                  );
-                  return (
-                    <Chip
-                      label={`${total.toLocaleString()} switches`}
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                      sx={{
-                        fontSize: '0.7rem',
-                        height: '24px',
-                        fontWeight: 600,
-                        backgroundColor: (t) => alpha(t.palette.primary.main, 0.08),
-                        borderColor: (t) => t.palette.primary.main,
-                        color: (t) => t.palette.primary.main
-                      }}
-                    />
-                  );
-                })()}
-                {(() => {
-                  const vlanSet = new Set();
-                  const src = (locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || []);
-                  (src || []).forEach(sw => (sw.vlans || []).forEach(v => {
-                    const label = v?.vlan;
-                    if (label !== undefined && label !== null && String(label).trim() !== '') vlanSet.add(String(label).trim());
-                  }));
-                  const cnt = vlanSet.size;
-                  if (!cnt) return null;
-                  return (
-                    <Chip
-                      label={`${cnt} VLANs`}
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                      sx={{
-                        fontSize: '0.7rem',
-                        height: '24px',
-                        fontWeight: 600,
-                        backgroundColor: (t) => alpha(t.palette.primary.main, 0.08),
-                        borderColor: (t) => t.palette.primary.main,
-                        color: (t) => t.palette.primary.main
-                      }}
-                    />
-                  );
-                })()}
-              </Box>
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails>
-            {locStatsLoading ? (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} variant="rectangular" height={24} />
-                ))}
-              </Box>
-            ) : (
-              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, border: '1px solid', borderColor: (t) => alpha(t.palette.primary.main, 0.1) }}>
-                <Table size="small" sx={{
-                  '& .MuiTableCell-root': {
-                    py: 0.8,
-                    px: 1.5,
-                    borderBottom: '1px solid',
-                    borderColor: (t) => alpha(t.palette.primary.main, 0.1)
-                  }
-                }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Switch</TableCell>
-                      <TableCell>VLAN</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || [])).map((sw) => (
-                      <TableRow key={sw.hostname} hover>
-                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                          {/* Switch Hostname mit getrennten Klick-Bereichen wie in DataTable */}
-                          {(() => {
-                            const hostname = String(sw.hostname || '');
-                            // Split hostname in hostname Teil (vor erstem .) und Domain Teil
-                            const parts = hostname.split('.');
-                            const hostnameShort = parts[0] || hostname;
-                            const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
-
-                            const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
-
-                            const sshTitle = sshUsername
-                              ? `Connect SSH ${sshUsername}@${hostname}`
-                              : `SSH connection (SSH username not set)`;
-
-                            return (
-                              <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
-                                {/* Hostname short part - kopiert hostname Teil vor dem . */}
-                                <Tooltip arrow placement="top" title={copyHostnameTitle}>
-                                  <Typography
-                                    variant="body2"
-                                    component="span"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      // Copy hostname short part (before first .)
-                                      copyToClipboard(hostnameShort).then(success => {
-                                        if (success) {
-                                          showCopyToast('Copied hostname', hostnameShort);
-                                        } else {
-                                          toast.error(`❌ Copy failed`, {
-                                            autoClose: 2000,
-                                            pauseOnHover: true,
-                                            pauseOnFocusLoss: false
-                                          });
-                                        }
-                                      });
-                                    }}
-                                    sx={{
-                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
-                                      cursor: 'pointer',
-                                      textDecoration: 'underline',
-                                      '&:hover': {
-                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
-                                        textDecoration: 'underline'
-                                      }
-                                    }}
-                                  >
-                                    {hostnameShort}
-                                  </Typography>
-                                </Tooltip>
-
-                                {/* Domain part - SSH Verbindung + kopiert Switch Port Cisco Format */}
-                                {domainPart && (
-                                  <Tooltip arrow placement="top" title={sshTitle}>
-                                    <Typography
-                                      variant="body2"
-                                      component="span"
-                                      onClick={async (e) => {
-                                        e.stopPropagation();
-                                        // SSH link functionality (no switch port copying for Statistics switches)
-                                        if (sshUsername && sshUsername.trim() !== '') {
-                                          const sshUrl = `ssh://${sshUsername}@${hostname}`;
-                                          toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
-                                          setTimeout(() => { window.location.href = sshUrl; }, 150);
-                                        } else {
-                                          // If no SSH username, show warning
-                                          const ToastContent = () => (
-                                            <div>
-                                              ⚠️ SSH username not configured!{' '}
-                                              <span
-                                                onClick={() => {
-                                                  try { navigateToSettings?.(); } catch { }
-                                                  try { toast.dismiss(); } catch { }
-                                                }}
-                                                style={{
-                                                  color: '#4f46e5',
-                                                  textDecoration: 'underline',
-                                                  cursor: 'pointer',
-                                                  fontWeight: 'bold'
-                                                }}
-                                              >
-                                                Go to Settings
-                                              </span> to set your SSH username.
-                                            </div>
-                                          );
-                                          toast.warning(<ToastContent />, {
-                                            autoClose: 6000,
-                                            pauseOnHover: true,
-                                            pauseOnFocusLoss: false
-                                          });
-                                        }
-                                      }}
-                                      sx={{
-                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 0.8)' : '#689f38',
-                                        cursor: 'pointer',
-                                        textDecoration: 'underline',
-                                        '&:hover': {
-                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 1)' : '#558b2f',
-                                          textDecoration: 'underline'
-                                        }
-                                      }}
-                                    >
-                                      {domainPart}
-                                    </Typography>
-                                  </Tooltip>
-                                )}
-
-                                {/* SSH Icon - click opens SSH, no switch port copy */}
-                                <Tooltip arrow placement="top" title={sshTitle}>
-                                  <TerminalIcon
-                                    className="ssh-icon"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (sshUsername && sshUsername.trim() !== '') {
-                                        const sshUrl = `ssh://${sshUsername}@${hostname}`;
-                                        toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
-                                        setTimeout(() => { window.location.href = sshUrl; }, 150);
-                                      } else {
-                                        const ToastContent = () => (
-                                          <div>
-                                            ⚠️ SSH username not configured!{' '}
-                                            <span
-                                              onClick={() => {
-                                                try { navigateToSettings?.(); } catch { }
-                                                try { toast.dismiss(); } catch { }
-                                              }}
-                                              style={{
-                                                color: '#4f46e5',
-                                                textDecoration: 'underline',
-                                                cursor: 'pointer',
-                                                fontWeight: 'bold'
-                                              }}
-                                            >
-                                              Go to Settings
-                                            </span> to set your SSH username.
-                                          </div>
-                                        );
-                                        toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
-                                      }
-                                    }}
-                                    sx={{
-                                      color: (theme) => sshUsername
-                                        ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
-                                        : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
-                                      fontSize: '14px',
-                                      ml: 0.5,
-                                      verticalAlign: 'middle',
-                                      cursor: 'pointer'
-                                    }}
+                          {(data.phonesByModelJustiz || [])
+                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                            .map(({ model, count }) => {
+                              const label = String(model);
+                              const lower = label.toLowerCase();
+                              let color = 'default';
+                              if (lower.includes('kem')) color = 'success';
+                              else if (lower.includes('conference')) color = 'info';
+                              else if (lower.includes('wireless')) color = 'warning';
+                              else color = 'primary';
+                              return (
+                                <ListItem key={`justiz-${model}`} sx={{ py: 0.3, px: 0 }}>
+                                  <ListItemText
+                                    primary={
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                        <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                        <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                      </Box>
+                                    }
                                   />
-                                </Tooltip>
-                              </Box>
-                            );
-                          })()}
-                        </TableCell>
-                        <TableCell>
-                          {/* Show VLANs for this specific switch */}
-                          {sw.vlans && sw.vlans.length > 0 ? (
-                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                              {sw.vlans.map(({ vlan, count }) => {
-                                const label = String(vlan ?? '').trim();
-                                const lower = label.toLowerCase();
-                                let color = 'default';
-                                let variant = 'outlined';
-                                if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
-                                else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
-                                else if (lower.includes('data')) { color = 'primary'; }
-                                else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
-                                else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
-                                else if (lower.includes('inactive') || lower.includes('down') || lower.includes('disabled')) { color = 'default'; variant = 'outlined'; }
-                                return (
-                                  <Chip
-                                    key={`${sw.hostname}-vlan-${vlan}`}
-                                    size="small"
-                                    label={`${label}: ${count}`}
-                                    color={color}
-                                    variant={variant}
-                                  />
-                                );
-                              })}
-                            </Box>
-                          ) : (
-                            <Typography variant="body2" color="text.secondary">—</Typography>
+                                </ListItem>
+                              );
+                            })}
+                          {(data.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
                           )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </AccordionDetails>
-        </Accordion>
+                        </List>
 
-        <Accordion
-          disableGutters
-          elevation={0}
-          TransitionProps={fastTransitionProps}
-          sx={{
-            border: '1px solid',
-            borderColor: (t) => alpha(t.palette.success.main, 0.2),
-            borderRadius: 1,
-            '&:before': { display: 'none' },
-            backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
-            '& .MuiAccordionSummary-root': { transition: 'all 0.1s ease-in-out' },
-            '& .MuiAccordionDetails-root': { transition: 'all 0.1s ease-in-out' }
-          }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}
-          >
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <ExtensionIcon sx={{ fontSize: '1.1rem', color: 'success.main' }} />
-                <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'success.main' }}>
-                  {(() => {
-                    const q = String(locStats?.query || '').toUpperCase();
-                    if (locStats?.mode === 'prefix' && q.length === 3 && cityNameByCode3[q]) {
-                      return `Phones with KEM in ${cityNameByCode3[q]} (${q})`;
-                    }
-                    if (q && q.length === 5) {
-                      const cityName = cityNameByCode3[q.slice(0, 3)] || '';
-                      return `Phones with KEM in ${cityName ? `${q} (${cityName})` : q}`;
-                    }
-                    return 'Phones with KEM at this Location';
-                  })()}
-                </Typography>
-              </Box>
-              <Chip
-                label={`${Number(locStats.phonesWithKEM || (locStats.kemPhones || []).length || 0).toLocaleString()} phones`}
-                size="small"
-                color="success"
-                variant="outlined"
-                sx={{
-                  fontSize: '0.7rem',
-                  height: '24px',
-                  fontWeight: 600,
-                  backgroundColor: (t) => alpha(t.palette.success.main, 0.08),
-                  borderColor: (t) => t.palette.success.main,
-                  color: (t) => t.palette.success.main
-                }}
-              />
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails>
-            {locStatsLoading ? (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} variant="rectangular" height={24} />
-                ))}
-              </Box>
-            ) : (
-              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, border: '1px solid', borderColor: (t) => alpha(t.palette.success.main, 0.1) }}>
-                <Table size="small" sx={{
-                  '& .MuiTableCell-root': {
-                    py: 0.8,
-                    px: 1.5,
-                    borderBottom: '1px solid',
-                    borderColor: (t) => alpha(t.palette.success.main, 0.1)
-                  }
-                }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>IP Address</TableCell>
-                      <TableCell>MAC Address</TableCell>
-                      <TableCell>Switch Hostname</TableCell>
-                      <TableCell align="right">KEMs</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {(locStats.kemPhones || []).map((p, idx) => {
-                      // Handle both old format (CSV fields) and new format (backend objects)
-                      const mac = p.mac || p['MAC Address'];
-                      const ip = p.ip || p['IP Address'];
-                      const model = p.model || p['Model Name'];
-                      const serial = p.serial || p['Serial Number'];
-                      const switchHostname = p.switch || p['Switch Hostname'];
-                      // Ensure a unique, stable key (avoid collapsing duplicates visually)
-                      const key = `${mac || 'nomac'}|${ip || 'noip'}|${serial || 'noserial'}|${switchHostname || 'nosw'}|${idx}`;
-                      // Prefer kemModules when present; else derive from CSV fields with fallback to Line Number
-                      const kemModulesVal = (typeof p.kemModules === 'number') ? p.kemModules
-                        : (p.kemModules ? parseInt(String(p.kemModules), 10) : NaN);
-                      let kemCount = Number.isFinite(kemModulesVal) ? kemModulesVal : undefined;
-                      if (!Number.isFinite(kemCount)) {
-                        const kem1 = (p['KEM'] || '').trim();
-                        const kem2 = (p['KEM 2'] || '').trim();
-                        const explicit = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
-                        if (explicit > 0) {
-                          kemCount = explicit;
-                        } else {
-                          const ln = (p['Line Number'] || '').trim();
-                          kemCount = ln.includes('KEM') ? Math.max(1, (ln.match(/KEM/g) || []).length) : 1;
-                        }
-                      }
-                      return (
-                        <TableRow key={key} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'action.hover' } }} hover>
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            {ip ? (
-                              <Tooltip arrow placement="top" title={`Open http://${ip}`}>
-                                <Typography
-                                  variant="body2"
-                                  component="a"
-                                  href={`http://${encodeURIComponent(ip)}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                        {/* Expandable detailed breakdown by location - grouped by city */}
+                        {!loading && (data.phonesByModelJustizDetails || []).length > 0 && (
+                          <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
+                            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <PlaceIcon sx={{ fontSize: '1.1rem', color: 'info.main' }} />
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  View by Location ({(data.phonesByModelJustizDetails || []).length} locations)
+                                </Typography>
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails>
+                              <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={expandAllJustizCities}
                                   sx={{
-                                    textDecoration: 'underline',
-                                    color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
-                                    cursor: 'pointer',
-                                    '&:hover': {
-                                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-                                      textDecoration: 'underline'
+                                    minWidth: 'auto',
+                                    px: 1.5,
+                                    py: 0.5,
+                                    fontSize: '0.7rem',
+                                    borderRadius: 2,
+                                    textTransform: 'none',
+                                    fontWeight: 500
+                                  }}
+                                >
+                                  Expand All
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={collapseAllJustizCities}
+                                  sx={{
+                                    minWidth: 'auto',
+                                    px: 1.5,
+                                    py: 0.5,
+                                    fontSize: '0.7rem',
+                                    borderRadius: 2,
+                                    textTransform: 'none',
+                                    fontWeight: 500
+                                  }}
+                                >
+                                  Collapse All
+                                </Button>
+                              </Box>
+                              {/* ...existing code... */}
+                            </AccordionDetails>
+                            <AccordionDetails sx={{ pt: 0 }}>
+                              {groupLocationsByCity(data.phonesByModelJustizDetails || []).map((cityGroup) => (
+                                <Accordion
+                                  key={`justiz-city-${cityGroup.cityCode}`}
+                                  expanded={justizCitiesExpanded[`justiz-city-${cityGroup.cityCode}`] || false}
+                                  onChange={(event, isExpanded) => {
+                                    setJustizCitiesExpanded(prev => ({
+                                      ...prev,
+                                      [`justiz-city-${cityGroup.cityCode}`]: isExpanded
+                                    }));
+                                  }}
+                                  TransitionProps={fastTransitionProps}
+                                  sx={{
+                                    mb: 1,
+                                    border: '1px solid',
+                                    borderColor: justiceTheme.border,
+                                    borderRadius: 1,
+                                    backgroundColor: justiceTheme.background,
+                                    '&.MuiAccordion-root': {
+                                      '&:before': { display: 'none' }
+                                    },
+                                    '& .MuiAccordionSummary-root': {
+                                      transition: 'all 0.1s ease-in-out'
+                                    },
+                                    '& .MuiAccordionDetails-root': {
+                                      transition: 'all 0.1s ease-in-out'
                                     }
                                   }}
                                 >
-                                  {ip}
+                                  <AccordionSummary
+                                    expandIcon={<ExpandMoreIcon />}
+                                    sx={{
+                                      backgroundColor: justiceTheme.background,
+                                      borderRadius: 1,
+                                      minHeight: '40px !important',
+                                      '& .MuiAccordionSummary-content': {
+                                        margin: '8px 0 !important'
+                                      }
+                                    }}
+                                  >
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <BusinessIcon sx={{ fontSize: '1rem', color: 'info.main' }} />
+                                        <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'info.main' }}>
+                                          {cityGroup.cityName} ({cityGroup.cityCode})
+                                        </Typography>
+                                      </Box>
+                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <Chip
+                                          label={`${cityGroup.totalCityPhones.toLocaleString()} phones`}
+                                          size="small"
+                                          color="info"
+                                          variant="outlined"
+                                          sx={{
+                                            fontSize: '0.7rem',
+                                            height: '24px',
+                                            fontWeight: 600,
+                                            backgroundColor: (theme) => alpha(theme.palette.info.main, 0.1),
+                                            borderColor: (theme) => theme.palette.info.main,
+                                            color: (theme) => theme.palette.info.main
+                                          }}
+                                        />
+                                        <Chip
+                                          label={`${cityGroup.locations.length} locations`}
+                                          size="small"
+                                          variant="outlined"
+                                          color="info"
+                                          sx={{
+                                            fontSize: '0.7rem',
+                                            height: '24px',
+                                            fontWeight: 500,
+                                            mr: 1
+                                          }}
+                                        />
+                                      </Box>
+                                    </Box>
+                                  </AccordionSummary>
+                                  <AccordionDetails sx={{ pt: 1, pb: 1 }}>
+                                    <TableContainer sx={{
+                                      borderRadius: 2,
+                                      overflow: 'hidden',
+                                      border: '1px solid',
+                                      borderColor: (theme) => alpha(theme.palette.info.main, 0.1)
+                                    }}>
+                                      <Table size="small" sx={{
+                                        '& .MuiTableCell-root': {
+                                          py: 0.8,
+                                          px: 1.5,
+                                          borderBottom: '1px solid',
+                                          borderColor: (theme) => alpha(theme.palette.info.main, 0.1)
+                                        }
+                                      }}>
+                                        <TableHead>
+                                          <TableRow sx={{
+                                            background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.info.main, 0.12)} 0%, ${alpha(theme.palette.info.main, 0.08)} 100%)`
+                                          }}>
+                                            <TableCell sx={{
+                                              fontWeight: 700,
+                                              color: 'info.main',
+                                              fontSize: '0.8rem',
+                                              textTransform: 'uppercase',
+                                              letterSpacing: '0.5px'
+                                            }}>
+                                              Location
+                                            </TableCell>
+                                            <TableCell align="right" sx={{
+                                              fontWeight: 700,
+                                              color: 'info.main',
+                                              fontSize: '0.8rem',
+                                              textTransform: 'uppercase',
+                                              letterSpacing: '0.5px'
+                                            }}>
+                                              Total Phones
+                                            </TableCell>
+                                            <TableCell sx={{
+                                              fontWeight: 700,
+                                              color: 'info.main',
+                                              fontSize: '0.8rem',
+                                              textTransform: 'uppercase',
+                                              letterSpacing: '0.5px'
+                                            }}>
+                                              Top Models
+                                            </TableCell>
+                                          </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                          {cityGroup.locations.map((location) => {
+                                            const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
+                                            const topModels = filteredModels.slice(0, 3);
+                                            return (
+                                              <TableRow
+                                                key={`justiz-loc-${location.location}`}
+                                                sx={{
+                                                  '&:hover': {
+                                                    backgroundColor: (theme) => alpha(theme.palette.info.main, 0.05),
+                                                    transform: 'translateX(2px)',
+                                                    transition: 'all 0.2s ease'
+                                                  },
+                                                  '&:nth-of-type(even)': {
+                                                    backgroundColor: (theme) => alpha(theme.palette.info.main, 0.02)
+                                                  }
+                                                }}
+                                              >
+                                                <TableCell>
+                                                  <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
+                                                    {String(location.location).toUpperCase().replace(/X/g, 'x')}
+                                                  </Typography>
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                  <Chip
+                                                    label={location.totalPhones.toLocaleString()}
+                                                    size="small"
+                                                    color="primary"
+                                                    variant="outlined"
+                                                    sx={{
+                                                      fontSize: '0.75rem',
+                                                      height: '20px',
+                                                      minWidth: '45px',
+                                                      fontWeight: 500,
+                                                      color: 'text.secondary',
+                                                      backgroundColor: 'transparent',
+                                                      border: '1px solid',
+                                                      borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                                                      '&:hover': {
+                                                        backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.04)
+                                                      }
+                                                    }}
+                                                  />
+                                                </TableCell>
+                                                <TableCell>
+                                                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                                                    {topModels.map((modelData, index) => (
+                                                      <Box
+                                                        key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`}
+                                                        sx={{
+                                                          display: 'flex',
+                                                          justifyContent: 'space-between',
+                                                          alignItems: 'center',
+                                                          backgroundColor: (theme) => alpha(theme.palette.info.main, 0.06),
+                                                          borderRadius: 1,
+                                                          px: 1,
+                                                          py: 0.4,
+                                                          border: '1px solid',
+                                                          borderColor: (theme) => alpha(theme.palette.info.main, 0.15)
+                                                        }}
+                                                      >
+                                                        <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 600, fontSize: '0.75rem' }}>
+                                                          {modelData.model}
+                                                        </Typography>
+                                                        <Chip
+                                                          label={modelData.count.toLocaleString()}
+                                                          size="small"
+                                                          color="info"
+                                                          variant="outlined"
+                                                          sx={{
+                                                            fontSize: '0.7rem',
+                                                            height: '16px',
+                                                            minWidth: '30px',
+                                                            fontWeight: 400,
+                                                            color: 'text.secondary',
+                                                            backgroundColor: 'transparent',
+                                                            border: '1px solid',
+                                                            borderColor: (theme) => alpha(theme.palette.divider, 0.2),
+                                                            '&:hover': {
+                                                              backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.03)
+                                                            }
+                                                          }}
+                                                        />
+                                                      </Box>
+                                                    ))}
+                                                    {filteredModels.length > 3 && (
+                                                      <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>
+                                                        +{filteredModels.length - 3} more models
+                                                      </Typography>
+                                                    )}
+                                                  </Box>
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
+                                        </TableBody>
+                                      </Table>
+                                    </TableContainer>
+                                  </AccordionDetails>
+                                </Accordion>
+                              ))}
+                            </AccordionDetails>
+                          </Accordion>
+                        )}
+                      </Box>
+                    </Box>
+                  </Grid>
+
+                  {/* Correctional Facility Category - ALWAYS show for global stats */}
+                  <Grid item xs={12} md={6} sx={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
+                    <Box sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      backgroundColor: jvaTheme.background,
+                      border: '1px solid',
+                      borderColor: jvaTheme.border,
+                      height: '100%'
+                    }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: jvaTheme.primary }}>
+                        Correctional Facility (JVA)
+                      </Typography>
+                      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                        <List dense sx={{ flex: 1 }}>
+                          {/* Total Phones für JVA */}
+                          <ListItem sx={{ py: 0.5, px: 0, borderBottom: '1px solid', borderColor: (theme) => alpha(theme.palette.divider, 0.3), mb: 1 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                  <Chip
+                                    label="Total Phones"
+                                    size="small"
+                                    color="warning"
+                                    variant="filled"
+                                    sx={{ fontWeight: 600 }}
+                                  />
+                                  <Typography variant="body2" fontWeight={700} sx={{ color: 'warning.main', fontSize: '1rem' }}>
+                                    {Number(data.totalJVAPhones || 0).toLocaleString()}
+                                  </Typography>
+                                </Box>
+                              }
+                            />
+                          </ListItem>
+                          {(data.phonesByModelJVA || [])
+                            .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                            .map(({ model, count }) => {
+                              const label = String(model);
+                              const lower = label.toLowerCase();
+                              let color = 'default';
+                              if (lower.includes('kem')) color = 'success';
+                              else if (lower.includes('conference')) color = 'info';
+                              else if (lower.includes('wireless')) color = 'error';
+                              else color = 'warning';
+                              return (
+                                <ListItem key={`jva-${model}`} sx={{ py: 0.3, px: 0 }}>
+                                  <ListItemText
+                                    primary={
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                        <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                        <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                      </Box>
+                                    }
+                                  />
+                                </ListItem>
+                              );
+                            })}
+                          {(data.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length === 0 && !loading && (
+                            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>No data available</Typography>
+                          )}
+                        </List>
+
+                        {/* Expandable detailed breakdown by location - grouped by city */}
+                        {!loading && (data.phonesByModelJVADetails || []).length > 0 && (
+                          <Accordion sx={{ mt: 1 }} TransitionProps={fastTransitionProps}>
+                            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <PlaceIcon sx={{ fontSize: '1.1rem', color: 'warning.main' }} />
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  View by Location ({(data.phonesByModelJVADetails || []).length} locations)
                                 </Typography>
-                              </Tooltip>
-                            ) : 'n/a'}
-                          </TableCell>
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            {mac ? (
-                              <Typography
-                                variant="body2"
-                                component="a"
-                                href={`/search?q=${encodeURIComponent(mac)}`}
-                                sx={{
-                                  textDecoration: 'underline',
-                                  color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
-                                  cursor: 'pointer',
-                                  '&:hover': {
-                                    color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-                                    textDecoration: 'underline'
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails>
+                              <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={expandAllJvaCities}
+                                  sx={{
+                                    minWidth: 'auto',
+                                    px: 1.5,
+                                    py: 0.5,
+                                    fontSize: '0.7rem',
+                                    borderRadius: 2,
+                                    textTransform: 'none',
+                                    fontWeight: 500
+                                  }}
+                                >
+                                  Expand All
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={collapseAllJvaCities}
+                                  sx={{
+                                    minWidth: 'auto',
+                                    px: 1.5,
+                                    py: 0.5,
+                                    fontSize: '0.7rem',
+                                    borderRadius: 2,
+                                    textTransform: 'none',
+                                    fontWeight: 500
+                                  }}
+                                >
+                                  Collapse All
+                                </Button>
+                              </Box>
+                              {/* ...existing code... */}
+                            </AccordionDetails>
+                            <AccordionDetails sx={{ pt: 0 }}>
+                              {groupLocationsByCity(data.phonesByModelJVADetails || []).map((cityGroup) => (
+                                <Accordion
+                                  key={`jva-city-${cityGroup.cityCode}`}
+                                  expanded={jvaCitiesExpanded[`jva-city-${cityGroup.cityCode}`] || false}
+                                  onChange={(event, isExpanded) => {
+                                    setJvaCitiesExpanded(prev => ({
+                                      ...prev,
+                                      [`jva-city-${cityGroup.cityCode}`]: isExpanded
+                                    }));
+                                  }}
+                                  TransitionProps={fastTransitionProps}
+                                  sx={{
+                                    mb: 1,
+                                    border: '1px solid',
+                                    borderColor: jvaTheme.border,
+                                    borderRadius: 1,
+                                    backgroundColor: jvaTheme.background,
+                                    '&.MuiAccordion-root': {
+                                      '&:before': { display: 'none' }
+                                    },
+                                    '& .MuiAccordionSummary-root': {
+                                      transition: 'all 0.1s ease-in-out'
+                                    },
+                                    '& .MuiAccordionDetails-root': {
+                                      transition: 'all 0.1s ease-in-out'
+                                    }
+                                  }}
+                                >
+                                  <AccordionSummary
+                                    expandIcon={<ExpandMoreIcon />}
+                                    sx={{
+                                      backgroundColor: jvaTheme.background,
+                                      borderRadius: 1,
+                                      minHeight: '40px !important',
+                                      '& .MuiAccordionSummary-content': {
+                                        margin: '8px 0 !important'
+                                      }
+                                    }}
+                                  >
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'warning.main' }}>
+                                        {cityGroup.cityName} ({cityGroup.cityCode})
+                                      </Typography>
+                                      <Chip
+                                        label={`${cityGroup.totalCityPhones.toLocaleString()} phones`}
+                                        size="small"
+                                        color="warning"
+                                        variant="outlined"
+                                        sx={{
+                                          fontSize: '0.7rem',
+                                          height: '24px',
+                                          fontWeight: 600,
+                                          backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.1),
+                                          borderColor: (theme) => theme.palette.warning.main,
+                                          color: (theme) => theme.palette.warning.main,
+                                          mr: 1
+                                        }}
+                                      />
+                                    </Box>
+                                  </AccordionSummary>
+                                  <AccordionDetails sx={{ pt: 1, pb: 1 }}>
+                                    <TableContainer sx={{
+                                      borderRadius: 2,
+                                      overflow: 'hidden',
+                                      border: '1px solid',
+                                      borderColor: (theme) => alpha(theme.palette.warning.main, 0.1)
+                                    }}>
+                                      <Table size="small" sx={{
+                                        '& .MuiTableCell-root': {
+                                          py: 0.8,
+                                          px: 1.5,
+                                          borderBottom: '1px solid',
+                                          borderColor: (theme) => alpha(theme.palette.warning.main, 0.1)
+                                        }
+                                      }}>
+                                        <TableHead>
+                                          <TableRow sx={{
+                                            background: (theme) => `linear-gradient(135deg, ${alpha(theme.palette.warning.main, 0.12)} 0%, ${alpha(theme.palette.warning.main, 0.08)} 100%)`
+                                          }}>
+                                            <TableCell sx={{
+                                              fontWeight: 700,
+                                              color: 'warning.main',
+                                              fontSize: '0.8rem',
+                                              textTransform: 'uppercase',
+                                              letterSpacing: '0.5px'
+                                            }}>
+                                              Location
+                                            </TableCell>
+                                            <TableCell align="right" sx={{
+                                              fontWeight: 700,
+                                              color: 'warning.main',
+                                              fontSize: '0.8rem',
+                                              textTransform: 'uppercase',
+                                              letterSpacing: '0.5px'
+                                            }}>
+                                              Total Phones
+                                            </TableCell>
+                                            <TableCell sx={{
+                                              fontWeight: 700,
+                                              color: 'warning.main',
+                                              fontSize: '0.8rem',
+                                              textTransform: 'uppercase',
+                                              letterSpacing: '0.5px'
+                                            }}>
+                                              Top Models
+                                            </TableCell>
+                                          </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                          {cityGroup.locations.map((location) => {
+                                            const filteredModels = location.models.filter(m => m.model && m.model !== 'Unknown');
+                                            const topModels = filteredModels.slice(0, 3);
+                                            return (
+                                              <TableRow
+                                                key={`jva-loc-${location.location}`}
+                                                sx={{
+                                                  '&:hover': {
+                                                    backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.05),
+                                                    transform: 'translateX(2px)',
+                                                    transition: 'all 0.2s ease'
+                                                  },
+                                                  '&:nth-of-type(even)': {
+                                                    backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.02)
+                                                  }
+                                                }}
+                                              >
+                                                <TableCell>
+                                                  <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
+                                                    {String(location.location).toUpperCase().replace(/X/g, 'x')}
+                                                  </Typography>
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                  <Chip
+                                                    label={location.totalPhones.toLocaleString()}
+                                                    size="small"
+                                                    color="warning"
+                                                    variant="outlined"
+                                                    sx={{
+                                                      fontSize: '0.75rem',
+                                                      height: '20px',
+                                                      minWidth: '45px',
+                                                      fontWeight: 500,
+                                                      color: 'text.secondary',
+                                                      backgroundColor: 'transparent',
+                                                      border: '1px solid',
+                                                      borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                                                      '&:hover': {
+                                                        backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.04)
+                                                      }
+                                                    }}
+                                                  />
+                                                </TableCell>
+                                                <TableCell>
+                                                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                                                    {topModels.map((modelData) => (
+                                                      <Box
+                                                        key={`${String(location.location).toUpperCase().replace(/X/g, 'x')}-${modelData.model}`}
+                                                        sx={{
+                                                          display: 'flex',
+                                                          justifyContent: 'space-between',
+                                                          alignItems: 'center',
+                                                          backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.06),
+                                                          borderRadius: 1,
+                                                          px: 1,
+                                                          py: 0.4,
+                                                          border: '1px solid',
+                                                          borderColor: (theme) => alpha(theme.palette.warning.main, 0.15)
+                                                        }}
+                                                      >
+                                                        <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 600, fontSize: '0.75rem' }}>
+                                                          {modelData.model}
+                                                        </Typography>
+                                                        <Chip
+                                                          label={modelData.count.toLocaleString()}
+                                                          size="small"
+                                                          color="warning"
+                                                          variant="outlined"
+                                                          sx={{
+                                                            fontSize: '0.7rem',
+                                                            height: '16px',
+                                                            minWidth: '30px',
+                                                            fontWeight: 400,
+                                                            color: 'text.secondary',
+                                                            backgroundColor: 'transparent',
+                                                            border: '1px solid',
+                                                            borderColor: (theme) => alpha(theme.palette.divider, 0.2),
+                                                            '&:hover': {
+                                                              backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.03)
+                                                            }
+                                                          }}
+                                                        />
+                                                      </Box>
+                                                    ))}
+                                                    {filteredModels.length > 3 && (
+                                                      <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', textAlign: 'center', pt: 0.2 }}>
+                                                        +{filteredModels.length - 3} more models
+                                                      </Typography>
+                                                    )}
+                                                  </Box>
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
+                                        </TableBody>
+                                      </Table>
+                                    </TableContainer>
+                                  </AccordionDetails>
+                                </Accordion>
+                              ))}
+                            </AccordionDetails>
+                          </Accordion>
+                        )}
+                      </Box>
+                    </Box>
+                  </Grid>
+                </Grid>
+              )}
+            </Paper>
+          </>)}
+          {isByLocation && (
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.info.main}`, backgroundColor: (t) => alpha(t.palette.info.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+              <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 700, color: 'info.main' }}>Statistics by Location</Typography>
+
+              {/* Two search fields side by side */}
+              <Grid container spacing={2} sx={{ mb: 2 }}>
+                {/* Location Code Search with Dropdown */}
+                <Grid item xs={12} md={6} sx={{ position: 'relative' }}>
+                  <TextField
+                    label="Search by Location Code"
+                    placeholder="Enter location code (e.g., AUG01, NUE02)"
+                    size="small"
+                    fullWidth
+                    defaultValue={localInput}
+                    inputRef={locInputRef}
+                    onChange={handleLocationInputChange}
+                    onKeyDown={handleKeyDown}
+                    error={!!locError}
+                    helperText={locError || (locInput && !locSelected ? "Press Enter or pause to search" : "")}
+                    InputProps={{
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <SearchIcon sx={{ color: 'action.disabled' }} />
+                        </InputAdornment>
+                      ),
+                      endAdornment: (
+                        <>
+                          {isSearchingLocations && (
+                            <InputAdornment position="end">
+                              <CircularProgress size={20} />
+                            </InputAdornment>
+                          )}
+                          {locStatsLoading && (
+                            <InputAdornment position="end">
+                              <CircularProgress size={20} />
+                            </InputAdornment>
+                          )}
+                          {locSelected && (
+                            <InputAdornment position="end">
+                              <CloseIcon
+                                fontSize="small"
+                                onClick={() => {
+                                  setLocSelected(null);
+                                  setLocalInput('');
+                                  if (locInputRef.current) {
+                                    try { locInputRef.current.value = ''; } catch { /* ignore */ }
+                                  }
+                                  setShowLocationDropdown(false);
+                                  setSelectedSuggestionIndex(-1);
+                                  setLocStats({
+                                    totalPhones: 0,
+                                    totalSwitches: 0,
+                                    phonesWithKEM: 0,
+                                    phonesByModel: [],
+                                    phonesByModelJustiz: [],
+                                    phonesByModelJVA: [],
+                                    vlanUsage: [],
+                                    switches: [],
+                                    kemPhones: [],
+                                  });
+                                  setLocStatsLoading(false);
+                                  if (saveStatisticsPrefs) {
+                                    saveStatisticsPrefs({ lastSelectedLocation: null });
                                   }
                                 }}
+                                sx={{
+                                  cursor: 'pointer',
+                                  '&:hover': { color: 'primary.main' }
+                                }}
+                              />
+                            </InputAdornment>
+                          )}
+                        </>
+                      ),
+                    }}
+                  />
+
+                  {/* Location Suggestions Dropdown */}
+                  {showLocationDropdown && (() => {
+                    const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
+                    const three = /^[a-zA-Z]{3}$/.test(inputVal);
+                    return three || (locationSuggestions.length > 0);
+                  })() && (
+                      <Paper
+                        elevation={8}
+                        sx={{
+                          position: 'absolute',
+                          top: 'calc(100% + 2px)',
+                          left: '2%',
+                          width: '98%',
+                          minWidth: '320px',
+                          maxWidth: 'none',
+                          zIndex: 1300,
+                          maxHeight: '280px',
+                          overflow: 'auto',
+                          borderRadius: 2,
+                          border: (theme) => `1px solid ${theme.palette.divider}`,
+                          boxShadow: (theme) =>
+                            theme.palette.mode === 'dark'
+                              ? '0 8px 32px rgba(0,0,0,0.5)'
+                              : '0 8px 32px rgba(0,0,0,0.12)',
+                        }}
+                      >
+                        {(() => {
+                          // Redundant safety: render a sticky prefix item at the top when input is exactly 3 letters
+                          const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
+                          const three = /^[a-zA-Z]{3}$/.test(inputVal);
+                          if (!three) return null;
+                          const codeUpper = inputVal.toUpperCase();
+                          const codeMxx = codeUpper.replace(/X/g, 'x');
+                          const city = cityNameByCode3?.[codeMxx] || cityNameByCode3?.[codeUpper];
+                          // If merged array already starts with our synthetic item, skip
+                          const first = locationSuggestions[0];
+                          const firstIsSamePrefix = first && first.isPrefixAll && String(first.code || '').toUpperCase().replace(/X/g, 'x') === codeMxx;
+                          if (firstIsSamePrefix) return null;
+                          return (
+                            <Box
+                              key={`${codeMxx}__prefix_top`}
+                              onClick={() => handleLocationSuggestionSelect({ code: codeMxx, city, isPrefixAll: true })}
+                              sx={{
+                                px: 2,
+                                py: 1.5,
+                                cursor: 'pointer',
+                                backgroundColor: (theme) => theme.palette.action.hover,
+                                borderBottom: '1px solid',
+                                borderBottomColor: (theme) => theme.palette.divider,
+                                transition: 'background-color 0.15s ease',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 1.5,
+                              }}
+                            >
+                              <Box
+                                sx={{
+                                  width: 32,
+                                  height: 32,
+                                  borderRadius: '50%',
+                                  backgroundColor: (theme) => theme.palette.primary.main,
+                                  color: 'white',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '14px',
+                                  fontWeight: 'bold',
+                                  flexShrink: 0,
+                                }}
                               >
-                                {mac}
+                                {codeMxx}
+                              </Box>
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary', mb: 0.25 }}>
+                                  {city ? `${codeMxx} ${city}` : codeMxx}
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
+                                  All locations in this city
+                                </Typography>
+                              </Box>
+                            </Box>
+                          );
+                        })()}
+                        {locationSuggestions.map((suggestion, index) => (
+                          <Box
+                            key={suggestion.code.toUpperCase().replace(/X/g, 'x')}
+                            onClick={() => handleLocationSuggestionSelect(suggestion)}
+                            sx={{
+                              px: 2,
+                              py: 1.5,
+                              cursor: 'pointer',
+                              backgroundColor: selectedSuggestionIndex === index
+                                ? (theme) => theme.palette.action.selected
+                                : 'transparent',
+                              '&:hover': {
+                                backgroundColor: (theme) => theme.palette.action.hover,
+                              },
+                              borderBottom: index < locationSuggestions.length - 1 ? '1px solid' : 'none',
+                              borderBottomColor: (theme) => theme.palette.divider,
+                              transition: 'background-color 0.15s ease',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 1.5,
+                            }}
+                          >
+                            {/* Location icon */}
+                            <Box
+                              sx={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: '50%',
+                                backgroundColor: (theme) => theme.palette.primary.main,
+                                color: 'white',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '14px',
+                                fontWeight: 'bold',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {suggestion.code.substring(0, 3).toUpperCase().replace(/X/g, 'x')}
+                            </Box>
+                            {/* Location details */}
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  fontWeight: 600,
+                                  color: 'text.primary',
+                                  mb: 0.25,
+                                }}
+                              >
+                                {(() => {
+                                  const code = suggestion.code.toUpperCase().replace(/X/g, 'x');
+                                  if (!suggestion.isPrefixAll) return code;
+                                  const city = suggestion.city || cityNameByCode3?.[code] || cityNameByCode3?.[code.toUpperCase()];
+                                  return city ? `${code} ${city}` : code;
+                                })()}
                               </Typography>
-                            ) : 'n/a'}
-                          </TableCell>
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            {switchHostname ? (() => {
-                              const hostname = String(switchHostname || '');
-                              // Split hostname in hostname Teil (vor erstem .) und Domain Teil
-                              const parts = hostname.split('.');
-                              const hostnameShort = parts[0] || hostname;
-                              const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+                              {suggestion.city && !suggestion.isPrefixAll && (
+                                <Typography
+                                  variant="caption"
+                                  sx={{
+                                    color: 'text.secondary',
+                                    fontSize: '0.75rem',
+                                  }}
+                                >
+                                  📍 {suggestion.city}
+                                </Typography>
+                              )}
+                              {suggestion.isPrefixAll && (
+                                <Typography
+                                  variant="caption"
+                                  sx={{ color: 'text.secondary', fontSize: '0.75rem' }}
+                                >
+                                  All locations in this city
+                                </Typography>
+                              )}
+                            </Box>
+                          </Box>
+                        ))}
+                      </Paper>
+                    )}
+                </Grid>
 
-                              const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
-                              const sshTitle = sshUsername
-                                ? `Connect SSH ${sshUsername}@${hostname}`
-                                : `SSH connection (SSH username not set)`;
+                {/* City Name Search */}
+                <Grid item xs={12} md={6}>
+                  <Autocomplete
+                    options={Object.values(cityNameByCode3).sort()}
+                    freeSolo={false} // Change to false for better performance
+                    openOnFocus={false} // Disable auto-open for performance
+                    // Keep popup size fixed and make options scrollable
+                    slotProps={{
+                      paper: { sx: { maxHeight: 200, overflowY: 'auto' } }, // Reduced height
+                      listbox: { sx: { maxHeight: 160, overflowY: 'auto' } },
+                    }}
+                    ListboxProps={{
+                      style: { maxHeight: 160, overflowY: 'auto' },
+                    }}
+                    limitTags={5}
+                    disableListWrap={true}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Search by City Name"
+                        placeholder="Type city name (e.g., München, Augsburg)"
+                        size="small"
+                      />
+                    )}
+                    onChange={handleCityNameChange}
+                    filterOptions={filterCityOptions}
+                    getOptionLabel={(option) => option}
+                    renderOption={(props, option) => {
+                      // Find the corresponding location code
+                      const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
+                        name === option
+                      )?.[0];
 
-                              return (
-                                <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
-                                  {/* Hostname short part - kopiert hostname Teil vor dem . */}
-                                  <Tooltip arrow placement="top" title={copyHostnameTitle}>
-                                    <Typography
-                                      variant="body2"
-                                      component="span"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        // Copy hostname short part (before first .)
-                                        copyToClipboard(hostnameShort).then(success => {
-                                          if (success) {
-                                            showCopyToast('Copied hostname', hostnameShort);
-                                          } else {
-                                            toast.error(`❌ Copy failed`, {
-                                              autoClose: 2000,
-                                              pauseOnHover: true,
-                                              pauseOnFocusLoss: false
-                                            });
-                                          }
-                                        });
-                                      }}
-                                      sx={{
-                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
-                                        cursor: 'pointer',
-                                        textDecoration: 'underline',
-                                        '&:hover': {
-                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
-                                          textDecoration: 'underline'
+                      // Extract key from props to avoid React warning
+                      const { key, ...otherProps } = props;
+
+                      return (
+                        <li key={key} {...otherProps}>
+                          <Box>
+                            <Typography variant="body2">{option}</Typography>
+                            {cityCode && (
+                              <Typography variant="caption" color="text.secondary">
+                                Code: {cityCode}
+                              </Typography>
+                            )}
+                          </Box>
+                        </li>
+                      );
+                    }}
+                  />
+                </Grid>
+              </Grid>
+
+              {locError && (
+                <Box sx={{ mb: 2 }}>
+                  <Alert severity="warning" variant="outlined">{locError}</Alert>
+                </Box>
+              )}
+
+              <Grid container spacing={2} sx={{ mb: 1 }}>
+                <Grid item xs={12} sm={6} md={3}><StatCard tone="primary" title="Total Phones" value={locStats.totalPhones} loading={locStatsLoading} /></Grid>
+                <Grid item xs={12} sm={6} md={3}><StatCard tone="info" title="Total Switches" value={locStats.totalSwitches} loading={locStatsLoading} /></Grid>
+                <Grid item xs={12} sm={6} md={3}><StatCard tone="success" title="Phones with KEM" value={locStats.phonesWithKEM} loading={locStatsLoading} /></Grid>
+              </Grid>
+
+              {/* Subtle hint when city prefix is selected */}
+              {locStats?.mode === 'prefix' && locStats?.query && (
+                <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Statistics by Location
+                  </Typography>
+                  <Chip
+                    size="small"
+                    color="default"
+                    variant="outlined"
+                    label={`All locations matching ${locStats.query}*`}
+                  />
+                </Box>
+              )}
+
+              {/* Additional per-location details */}
+              <Box sx={{ mt: 2 }}>
+                {/* Phones by Model - Full Width */}
+                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'secondary.main' }}>Phones by Model</Typography>
+                {locStatsLoading ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Skeleton key={i} variant="rectangular" height={28} />
+                    ))}
+                  </Box>
+                ) : (
+                  <Grid container spacing={2}>
+                    {/* Justice institutions Box */}
+                    {(!locSelected || locSelected.length === 3 || isJusticeLocation(locSelected)) &&
+                      (locStats.phonesByModelJustiz || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
+                        <Grid item xs={12} md={4}>
+                          <Box sx={{
+                            p: 1.5,
+                            borderRadius: 1,
+                            backgroundColor: justiceTheme.background,
+                            border: '1px solid',
+                            borderColor: justiceTheme.border,
+                            height: 'fit-content'
+                          }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, color: justiceTheme.primary, mb: 0.5 }}>
+                              Justice institutions (Justiz)
+                            </Typography>
+                            <List dense sx={{ mb: 0 }}>
+                              {(locStats.phonesByModelJustiz || [])
+                                .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                                .slice(0, 5)
+                                .map(({ model, count }) => {
+                                  const label = String(model);
+                                  const lower = label.toLowerCase();
+                                  let color = 'default';
+                                  if (lower.includes('kem')) color = 'success';
+                                  else if (lower.includes('conference')) color = 'info';
+                                  else if (lower.includes('wireless')) color = 'warning';
+                                  else color = 'primary';
+                                  return (
+                                    <ListItem key={`justiz-${model}`} sx={{ py: 0.2, px: 0 }}>
+                                      <ListItemText
+                                        primary={
+                                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                            <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                            <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                          </Box>
                                         }
-                                      }}
-                                    >
-                                      {hostnameShort}
-                                    </Typography>
-                                  </Tooltip>
+                                      />
+                                    </ListItem>
+                                  );
+                                })}
+                            </List>
+                          </Box>
+                        </Grid>
+                      )}
 
-                                  {/* Domain part - SSH Verbindung */}
-                                  {domainPart && (
-                                    <Tooltip arrow placement="top" title={sshTitle}>
+                    {/* JVA Box */}
+                    {(!locSelected || locSelected.length === 3 || isJVALocation(locSelected)) &&
+                      (locStats.phonesByModelJVA || []).filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model)).length > 0 && (
+                        <Grid item xs={12} md={4}>
+                          <Box sx={{
+                            p: 1.5,
+                            borderRadius: 1,
+                            backgroundColor: jvaTheme.background,
+                            border: '1px solid',
+                            borderColor: jvaTheme.border,
+                            height: 'fit-content'
+                          }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, color: jvaTheme.primary, mb: 0.5 }}>
+                              Correctional Facility (JVA)
+                            </Typography>
+                            <List dense>
+                              {(locStats.phonesByModelJVA || [])
+                                .filter(({ model }) => model && model !== 'Unknown' && !isMacLike(model))
+                                .slice(0, 5)
+                                .map(({ model, count }) => {
+                                  const label = String(model);
+                                  const lower = label.toLowerCase();
+                                  let color = 'default';
+                                  if (lower.includes('kem')) color = 'success';
+                                  else if (lower.includes('conference')) color = 'info';
+                                  else if (lower.includes('wireless')) color = 'error';
+                                  else color = 'warning';
+                                  return (
+                                    <ListItem key={`jva-${model}`} sx={{ py: 0.2, px: 0 }}>
+                                      <ListItemText
+                                        primary={
+                                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                            <Chip label={label} size="small" color={color} variant={color === 'default' ? 'outlined' : 'filled'} />
+                                            <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                          </Box>
+                                        }
+                                      />
+                                    </ListItem>
+                                  );
+                                })}
+                            </List>
+                          </Box>
+                        </Grid>
+                      )}
+
+                    {/* VLAN Usage Box */}
+                    {(locStats.vlanUsage || []).length > 0 && (
+                      <Grid item xs={12} md={4}>
+                        <Box sx={{
+                          p: 1.5,
+                          borderRadius: 1,
+                          backgroundColor: (theme) => alpha(theme.palette.primary.light, theme.palette.mode === 'dark' ? 0.08 : 0.05),
+                          border: '1px solid',
+                          borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
+                          height: 'fit-content'
+                        }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', mb: 0.5 }}>
+                            VLAN Usage
+                          </Typography>
+                          <List dense>
+                            {(locStats.vlanUsage || []).slice(0, 5).map(({ vlan, count }) => {
+                              const vLabel = String(vlan ?? '').trim();
+                              const lower = vLabel.toLowerCase();
+                              let color = 'default';
+                              let variant = 'outlined';
+                              if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
+                              else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
+                              else if (lower.includes('data')) { color = 'primary'; }
+                              else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
+                              else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
+                              return (
+                                <ListItem key={`vlan-${vlan}`} sx={{ py: 0.2, px: 0 }}>
+                                  <ListItemText
+                                    primary={
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                        <Chip label={vLabel} size="small" color={color} variant={variant} />
+                                        <Typography variant="body2" fontWeight={700}>{Number(count || 0).toLocaleString()}</Typography>
+                                      </Box>
+                                    }
+                                  />
+                                </ListItem>
+                              );
+                            })}
+                          </List>
+                        </Box>
+                      </Grid>
+                    )}
+                  </Grid>
+                )}
+              </Box>
+
+              <Accordion
+                disableGutters
+                elevation={0}
+                TransitionProps={fastTransitionProps}
+                sx={{
+                  border: '1px solid',
+                  borderColor: (t) => alpha(t.palette.primary.main, 0.2),
+                  borderRadius: 1,
+                  '&:before': { display: 'none' },
+                  mt: 2,
+                  mb: 1,
+                  backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
+                  '& .MuiAccordionSummary-root': { transition: 'all 0.1s ease-in-out' },
+                  '& .MuiAccordionDetails-root': { transition: 'all 0.1s ease-in-out' }
+                }}
+              >
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon />}
+                  sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}
+                >
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <RouterIcon sx={{ fontSize: '1.1rem', color: 'primary.main' }} />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                        Switches {(() => {
+                          const q = String(locStats?.query || '').toUpperCase();
+                          // Prefix mode (e.g., ABX) -> show city name with code
+                          if (locStats?.mode === 'prefix' && q.length === 3 && cityNameByCode3[q]) {
+                            return `in ${cityNameByCode3[q]} (${q})`;
+                          }
+                          // Exact location (e.g., ABX01) -> show code with city name if available
+                          if (q && q.length === 5) {
+                            const cityName = cityNameByCode3[q.slice(0, 3)] || '';
+                            return cityName ? `${q} (${cityName})` : q;
+                          }
+                          return 'at this Location';
+                        })()}
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {(() => {
+                        const total = Number(
+                          (locStats.totalSwitches ?? ((locStats.switchDetails && locStats.switchDetails.length)
+                            ? locStats.switchDetails.length
+                            : (locStats.switches || []).length)) || 0
+                        );
+                        return (
+                          <Chip
+                            label={`${total.toLocaleString()} switches`}
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                            sx={{
+                              fontSize: '0.7rem',
+                              height: '24px',
+                              fontWeight: 600,
+                              backgroundColor: (t) => alpha(t.palette.primary.main, 0.08),
+                              borderColor: (t) => t.palette.primary.main,
+                              color: (t) => t.palette.primary.main
+                            }}
+                          />
+                        );
+                      })()}
+                      {(() => {
+                        const vlanSet = new Set();
+                        const src = (locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || []);
+                        (src || []).forEach(sw => (sw.vlans || []).forEach(v => {
+                          const label = v?.vlan;
+                          if (label !== undefined && label !== null && String(label).trim() !== '') vlanSet.add(String(label).trim());
+                        }));
+                        const cnt = vlanSet.size;
+                        if (!cnt) return null;
+                        return (
+                          <Chip
+                            label={`${cnt} VLANs`}
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                            sx={{
+                              fontSize: '0.7rem',
+                              height: '24px',
+                              fontWeight: 600,
+                              backgroundColor: (t) => alpha(t.palette.primary.main, 0.08),
+                              borderColor: (t) => t.palette.primary.main,
+                              color: (t) => t.palette.primary.main
+                            }}
+                          />
+                        );
+                      })()}
+                    </Box>
+                  </Box>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {locStatsLoading ? (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <Skeleton key={i} variant="rectangular" height={24} />
+                      ))}
+                    </Box>
+                  ) : (
+                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, border: '1px solid', borderColor: (t) => alpha(t.palette.primary.main, 0.1) }}>
+                      <Table size="small" sx={{
+                        '& .MuiTableCell-root': {
+                          py: 0.8,
+                          px: 1.5,
+                          borderBottom: '1px solid',
+                          borderColor: (t) => alpha(t.palette.primary.main, 0.1)
+                        }
+                      }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Switch</TableCell>
+                            <TableCell>VLAN</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {((locStats.switchDetails && locStats.switchDetails.length > 0) ? locStats.switchDetails : (locStats.switches || [])).map((sw) => (
+                            <TableRow key={sw.hostname} hover>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                {/* Switch Hostname mit getrennten Klick-Bereichen wie in DataTable */}
+                                {(() => {
+                                  const hostname = String(sw.hostname || '');
+                                  // Split hostname in hostname Teil (vor erstem .) und Domain Teil
+                                  const parts = hostname.split('.');
+                                  const hostnameShort = parts[0] || hostname;
+                                  const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+
+                                  const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
+
+                                  const sshTitle = sshUsername
+                                    ? `Connect SSH ${sshUsername}@${hostname}`
+                                    : `SSH connection (SSH username not set)`;
+
+                                  return (
+                                    <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+                                      {/* Hostname short part - kopiert hostname Teil vor dem . */}
+                                      <Tooltip arrow placement="top" title={copyHostnameTitle}>
+                                        <Typography
+                                          variant="body2"
+                                          component="span"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            // Copy hostname short part (before first .)
+                                            copyToClipboard(hostnameShort).then(success => {
+                                              if (success) {
+                                                showCopyToast('Copied hostname', hostnameShort);
+                                              } else {
+                                                toast.error(`❌ Copy failed`, {
+                                                  autoClose: 2000,
+                                                  pauseOnHover: true,
+                                                  pauseOnFocusLoss: false
+                                                });
+                                              }
+                                            });
+                                          }}
+                                          sx={{
+                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
+                                            cursor: 'pointer',
+                                            textDecoration: 'underline',
+                                            '&:hover': {
+                                              color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
+                                              textDecoration: 'underline'
+                                            }
+                                          }}
+                                        >
+                                          {hostnameShort}
+                                        </Typography>
+                                      </Tooltip>
+
+                                      {/* Domain part - SSH Verbindung + kopiert Switch Port Cisco Format */}
+                                      {domainPart && (
+                                        <Tooltip arrow placement="top" title={sshTitle}>
+                                          <Typography
+                                            variant="body2"
+                                            component="span"
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              // SSH link functionality (no switch port copying for Statistics switches)
+                                              if (sshUsername && sshUsername.trim() !== '') {
+                                                const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                                toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                                setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                              } else {
+                                                // If no SSH username, show warning
+                                                const ToastContent = () => (
+                                                  <div>
+                                                    ⚠️ SSH username not configured!{' '}
+                                                    <span
+                                                      onClick={() => {
+                                                        try { navigateToSettings?.(); } catch { }
+                                                        try { toast.dismiss(); } catch { }
+                                                      }}
+                                                      style={{
+                                                        color: '#4f46e5',
+                                                        textDecoration: 'underline',
+                                                        cursor: 'pointer',
+                                                        fontWeight: 'bold'
+                                                      }}
+                                                    >
+                                                      Go to Settings
+                                                    </span> to set your SSH username.
+                                                  </div>
+                                                );
+                                                toast.warning(<ToastContent />, {
+                                                  autoClose: 6000,
+                                                  pauseOnHover: true,
+                                                  pauseOnFocusLoss: false
+                                                });
+                                              }
+                                            }}
+                                            sx={{
+                                              color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 0.8)' : '#689f38',
+                                              cursor: 'pointer',
+                                              textDecoration: 'underline',
+                                              '&:hover': {
+                                                color: theme => theme.palette.mode === 'dark' ? 'rgba(139, 195, 74, 1)' : '#558b2f',
+                                                textDecoration: 'underline'
+                                              }
+                                            }}
+                                          >
+                                            {domainPart}
+                                          </Typography>
+                                        </Tooltip>
+                                      )}
+
+                                      {/* SSH Icon - click opens SSH, no switch port copy */}
+                                      <Tooltip arrow placement="top" title={sshTitle}>
+                                        <TerminalIcon
+                                          className="ssh-icon"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (sshUsername && sshUsername.trim() !== '') {
+                                              const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                              toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                              setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                            } else {
+                                              const ToastContent = () => (
+                                                <div>
+                                                  ⚠️ SSH username not configured!{' '}
+                                                  <span
+                                                    onClick={() => {
+                                                      try { navigateToSettings?.(); } catch { }
+                                                      try { toast.dismiss(); } catch { }
+                                                    }}
+                                                    style={{
+                                                      color: '#4f46e5',
+                                                      textDecoration: 'underline',
+                                                      cursor: 'pointer',
+                                                      fontWeight: 'bold'
+                                                    }}
+                                                  >
+                                                    Go to Settings
+                                                  </span> to set your SSH username.
+                                                </div>
+                                              );
+                                              toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
+                                            }
+                                          }}
+                                          sx={{
+                                            color: (theme) => sshUsername
+                                              ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                                              : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                                            fontSize: '14px',
+                                            ml: 0.5,
+                                            verticalAlign: 'middle',
+                                            cursor: 'pointer'
+                                          }}
+                                        />
+                                      </Tooltip>
+                                    </Box>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell>
+                                {/* Show VLANs for this specific switch */}
+                                {sw.vlans && sw.vlans.length > 0 ? (
+                                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                    {sw.vlans.map(({ vlan, count }) => {
+                                      const label = String(vlan ?? '').trim();
+                                      const lower = label.toLowerCase();
+                                      let color = 'default';
+                                      let variant = 'outlined';
+                                      if (lower.includes('active')) { color = 'success'; variant = 'filled'; }
+                                      else if (lower.includes('voice') || lower.includes('voip')) { color = 'secondary'; }
+                                      else if (lower.includes('data')) { color = 'primary'; }
+                                      else if (lower.includes('mgmt') || lower.includes('management')) { color = 'warning'; }
+                                      else if (lower.includes('guest') || lower.includes('visitor')) { color = 'info'; }
+                                      else if (lower.includes('inactive') || lower.includes('down') || lower.includes('disabled')) { color = 'default'; variant = 'outlined'; }
+                                      return (
+                                        <Chip
+                                          key={`${sw.hostname}-vlan-${vlan}`}
+                                          size="small"
+                                          label={`${label}: ${count}`}
+                                          color={color}
+                                          variant={variant}
+                                        />
+                                      );
+                                    })}
+                                  </Box>
+                                ) : (
+                                  <Typography variant="body2" color="text.secondary">—</Typography>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </AccordionDetails>
+              </Accordion>
+
+              <Accordion
+                disableGutters
+                elevation={0}
+                TransitionProps={fastTransitionProps}
+                sx={{
+                  border: '1px solid',
+                  borderColor: (t) => alpha(t.palette.success.main, 0.2),
+                  borderRadius: 1,
+                  '&:before': { display: 'none' },
+                  backgroundColor: (t) => alpha(t.palette.success.light, t.palette.mode === 'dark' ? 0.04 : 0.03),
+                  '& .MuiAccordionSummary-root': { transition: 'all 0.1s ease-in-out' },
+                  '& .MuiAccordionDetails-root': { transition: 'all 0.1s ease-in-out' }
+                }}
+              >
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon />}
+                  sx={{ minHeight: '40px !important', '& .MuiAccordionSummary-content': { m: '8px 0 !important' } }}
+                >
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <ExtensionIcon sx={{ fontSize: '1.1rem', color: 'success.main' }} />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'success.main' }}>
+                        {(() => {
+                          const q = String(locStats?.query || '').toUpperCase();
+                          if (locStats?.mode === 'prefix' && q.length === 3 && cityNameByCode3[q]) {
+                            return `Phones with KEM in ${cityNameByCode3[q]} (${q})`;
+                          }
+                          if (q && q.length === 5) {
+                            const cityName = cityNameByCode3[q.slice(0, 3)] || '';
+                            return `Phones with KEM in ${cityName ? `${q} (${cityName})` : q}`;
+                          }
+                          return 'Phones with KEM at this Location';
+                        })()}
+                      </Typography>
+                    </Box>
+                    <Chip
+                      label={`${Number(locStats.phonesWithKEM || (locStats.kemPhones || []).length || 0).toLocaleString()} phones`}
+                      size="small"
+                      color="success"
+                      variant="outlined"
+                      sx={{
+                        fontSize: '0.7rem',
+                        height: '24px',
+                        fontWeight: 600,
+                        backgroundColor: (t) => alpha(t.palette.success.main, 0.08),
+                        borderColor: (t) => t.palette.success.main,
+                        color: (t) => t.palette.success.main
+                      }}
+                    />
+                  </Box>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {locStatsLoading ? (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <Skeleton key={i} variant="rectangular" height={24} />
+                      ))}
+                    </Box>
+                  ) : (
+                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, border: '1px solid', borderColor: (t) => alpha(t.palette.success.main, 0.1) }}>
+                      <Table size="small" sx={{
+                        '& .MuiTableCell-root': {
+                          py: 0.8,
+                          px: 1.5,
+                          borderBottom: '1px solid',
+                          borderColor: (t) => alpha(t.palette.success.main, 0.1)
+                        }
+                      }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>IP Address</TableCell>
+                            <TableCell>MAC Address</TableCell>
+                            <TableCell>Switch Hostname</TableCell>
+                            <TableCell align="right">KEMs</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {(locStats.kemPhones || []).map((p, idx) => {
+                            // Handle both old format (CSV fields) and new format (backend objects)
+                            const mac = p.mac || p['MAC Address'];
+                            const ip = p.ip || p['IP Address'];
+                            const model = p.model || p['Model Name'];
+                            const serial = p.serial || p['Serial Number'];
+                            const switchHostname = p.switch || p['Switch Hostname'];
+                            // Ensure a unique, stable key (avoid collapsing duplicates visually)
+                            const key = `${mac || 'nomac'}|${ip || 'noip'}|${serial || 'noserial'}|${switchHostname || 'nosw'}|${idx}`;
+                            // Prefer kemModules when present; else derive from CSV fields with fallback to Line Number
+                            const kemModulesVal = (typeof p.kemModules === 'number') ? p.kemModules
+                              : (p.kemModules ? parseInt(String(p.kemModules), 10) : NaN);
+                            let kemCount = Number.isFinite(kemModulesVal) ? kemModulesVal : undefined;
+                            if (!Number.isFinite(kemCount)) {
+                              const kem1 = (p['KEM'] || '').trim();
+                              const kem2 = (p['KEM 2'] || '').trim();
+                              const explicit = (kem1 ? 1 : 0) + (kem2 ? 1 : 0);
+                              if (explicit > 0) {
+                                kemCount = explicit;
+                              } else {
+                                const ln = (p['Line Number'] || '').trim();
+                                kemCount = ln.includes('KEM') ? Math.max(1, (ln.match(/KEM/g) || []).length) : 1;
+                              }
+                            }
+                            return (
+                              <TableRow key={key} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'action.hover' } }} hover>
+                                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                  {ip ? (
+                                    <Tooltip arrow placement="top" title={`Open http://${ip}`}>
                                       <Typography
                                         variant="body2"
-                                        component="span"
-                                        onClick={async (e) => {
-                                          e.stopPropagation();
-
-                                          // First: Copy Cisco port format
-                                          const ciscoFormat = p["Switch Port"] ? convertToCiscoFormat(p["Switch Port"]) : '';
-                                          if (ciscoFormat && ciscoFormat.trim() !== '') {
-                                            const copied = await copyToClipboard(ciscoFormat);
-                                            if (copied) {
-                                              showCopyToast('Copied Cisco port', ciscoFormat);
-                                            } else {
-                                              toast.error(`❌ Copy failed`, {
-                                                autoClose: 2000,
-                                                pauseOnHover: true,
-                                                pauseOnFocusLoss: false
-                                              });
-                                            }
-                                          } else {
-                                            toast.warning('No switch port available to copy', {
-                                              autoClose: 2000,
-                                              pauseOnHover: true
-                                            });
-                                          }
-
-                                          // Second: SSH link functionality
-                                          if (sshUsername && sshUsername.trim() !== '') {
-                                            const sshUrl = `ssh://${sshUsername}@${hostname}`;
-                                            toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
-                                            setTimeout(() => { window.location.href = sshUrl; }, 150);
-                                          } else {
-                                            // If no SSH username, show warning but don't copy hostname again
-                                            const ToastContent = () => (
-                                              <div>
-                                                📋 Copied Cisco port! ⚠️ SSH username not configured!{' '}
-                                                <span
-                                                  onClick={() => {
-                                                    navigateToSettings();
-                                                    toast.dismiss();
-                                                  }}
-                                                  style={{
-                                                    color: '#4f46e5',
-                                                    textDecoration: 'underline',
-                                                    cursor: 'pointer',
-                                                    fontWeight: 'bold'
-                                                  }}
-                                                >
-                                                  Go to Settings
-                                                </span>{' '}to set your SSH username.
-                                              </div>
-                                            );
-                                            toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
-                                          }
-                                        }}
+                                        component="a"
+                                        href={`http://${encodeURIComponent(ip)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
                                         sx={{
-                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 0.8)' : '#1976d2',
-                                          cursor: 'pointer',
                                           textDecoration: 'underline',
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+                                          cursor: 'pointer',
                                           '&:hover': {
-                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 1)' : '#1565c0',
+                                            color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
                                             textDecoration: 'underline'
                                           }
                                         }}
                                       >
-                                        {domainPart}
+                                        {ip}
                                       </Typography>
                                     </Tooltip>
-                                  )}
-
-                                  {/* SSH Icon - click opens SSH, no switch port copy */}
-                                  <Tooltip arrow placement="top" title={sshTitle}>
-                                    <TerminalIcon
-                                      className="ssh-icon"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (sshUsername && sshUsername.trim() !== '') {
-                                          const sshUrl = `ssh://${sshUsername}@${hostname}`;
-                                          toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
-                                          setTimeout(() => { window.location.href = sshUrl; }, 150);
-                                        } else {
-                                          const ToastContent = () => (
-                                            <div>
-                                              ⚠️ SSH username not configured!{' '}
-                                              <span
-                                                onClick={() => {
-                                                  try { navigateToSettings?.(); } catch { }
-                                                  try { toast.dismiss(); } catch { }
-                                                }}
-                                                style={{
-                                                  color: '#4f46e5',
-                                                  textDecoration: 'underline',
-                                                  cursor: 'pointer',
-                                                  fontWeight: 'bold'
-                                                }}
-                                              >
-                                                Go to Settings
-                                              </span> to set your SSH username.
-                                            </div>
-                                          );
-                                          toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
+                                  ) : 'n/a'}
+                                </TableCell>
+                                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                  {mac ? (
+                                    <Typography
+                                      variant="body2"
+                                      component="a"
+                                      href={`/search?q=${encodeURIComponent(mac)}`}
+                                      sx={{
+                                        textDecoration: 'underline',
+                                        color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+                                        cursor: 'pointer',
+                                        '&:hover': {
+                                          color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                                          textDecoration: 'underline'
                                         }
                                       }}
-                                      sx={{
-                                        color: (theme) => sshUsername
-                                          ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
-                                          : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
-                                        fontSize: '14px',
-                                        ml: 0.5,
-                                        verticalAlign: 'middle',
-                                        cursor: 'pointer'
-                                      }}
-                                    />
-                                  </Tooltip>
-                                </Box>
-                              );
-                            })() : 'n/a'}
-                          </TableCell>
-                          <TableCell align="right">{Number(kemCount) || 0}</TableCell>
-                        </TableRow>
+                                    >
+                                      {mac}
+                                    </Typography>
+                                  ) : 'n/a'}
+                                </TableCell>
+                                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                  {switchHostname ? (() => {
+                                    const hostname = String(switchHostname || '');
+                                    // Split hostname in hostname Teil (vor erstem .) und Domain Teil
+                                    const parts = hostname.split('.');
+                                    const hostnameShort = parts[0] || hostname;
+                                    const domainPart = parts.length > 1 ? '.' + parts.slice(1).join('.') : '';
+
+                                    const copyHostnameTitle = `Copy hostname: ${hostnameShort}`;
+                                    const sshTitle = sshUsername
+                                      ? `Connect SSH ${sshUsername}@${hostname}`
+                                      : `SSH connection (SSH username not set)`;
+
+                                    return (
+                                      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+                                        {/* Hostname short part - kopiert hostname Teil vor dem . */}
+                                        <Tooltip arrow placement="top" title={copyHostnameTitle}>
+                                          <Typography
+                                            variant="body2"
+                                            component="span"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              // Copy hostname short part (before first .)
+                                              copyToClipboard(hostnameShort).then(success => {
+                                                if (success) {
+                                                  showCopyToast('Copied hostname', hostnameShort);
+                                                } else {
+                                                  toast.error(`❌ Copy failed`, {
+                                                    autoClose: 2000,
+                                                    pauseOnHover: true,
+                                                    pauseOnFocusLoss: false
+                                                  });
+                                                }
+                                              });
+                                            }}
+                                            sx={{
+                                              color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.8)' : '#4caf50',
+                                              cursor: 'pointer',
+                                              textDecoration: 'underline',
+                                              '&:hover': {
+                                                color: theme => theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 1)' : '#388e3c',
+                                                textDecoration: 'underline'
+                                              }
+                                            }}
+                                          >
+                                            {hostnameShort}
+                                          </Typography>
+                                        </Tooltip>
+
+                                        {/* Domain part - SSH Verbindung */}
+                                        {domainPart && (
+                                          <Tooltip arrow placement="top" title={sshTitle}>
+                                            <Typography
+                                              variant="body2"
+                                              component="span"
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+
+                                                // First: Copy Cisco port format
+                                                const ciscoFormat = p["Switch Port"] ? convertToCiscoFormat(p["Switch Port"]) : '';
+                                                if (ciscoFormat && ciscoFormat.trim() !== '') {
+                                                  const copied = await copyToClipboard(ciscoFormat);
+                                                  if (copied) {
+                                                    showCopyToast('Copied Cisco port', ciscoFormat);
+                                                  } else {
+                                                    toast.error(`❌ Copy failed`, {
+                                                      autoClose: 2000,
+                                                      pauseOnHover: true,
+                                                      pauseOnFocusLoss: false
+                                                    });
+                                                  }
+                                                } else {
+                                                  toast.warning('No switch port available to copy', {
+                                                    autoClose: 2000,
+                                                    pauseOnHover: true
+                                                  });
+                                                }
+
+                                                // Second: SSH link functionality
+                                                if (sshUsername && sshUsername.trim() !== '') {
+                                                  const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                                  toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                                  setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                                } else {
+                                                  // If no SSH username, show warning but don't copy hostname again
+                                                  const ToastContent = () => (
+                                                    <div>
+                                                      📋 Copied Cisco port! ⚠️ SSH username not configured!{' '}
+                                                      <span
+                                                        onClick={() => {
+                                                          navigateToSettings();
+                                                          toast.dismiss();
+                                                        }}
+                                                        style={{
+                                                          color: '#4f46e5',
+                                                          textDecoration: 'underline',
+                                                          cursor: 'pointer',
+                                                          fontWeight: 'bold'
+                                                        }}
+                                                      >
+                                                        Go to Settings
+                                                      </span>{' '}to set your SSH username.
+                                                    </div>
+                                                  );
+                                                  toast.error(<ToastContent />, { autoClose: false, closeOnClick: false, hideProgressBar: true, closeButton: true, pauseOnHover: true });
+                                                }
+                                              }}
+                                              sx={{
+                                                color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 0.8)' : '#1976d2',
+                                                cursor: 'pointer',
+                                                textDecoration: 'underline',
+                                                '&:hover': {
+                                                  color: theme => theme.palette.mode === 'dark' ? 'rgba(100, 149, 237, 1)' : '#1565c0',
+                                                  textDecoration: 'underline'
+                                                }
+                                              }}
+                                            >
+                                              {domainPart}
+                                            </Typography>
+                                          </Tooltip>
+                                        )}
+
+                                        {/* SSH Icon - click opens SSH, no switch port copy */}
+                                        <Tooltip arrow placement="top" title={sshTitle}>
+                                          <TerminalIcon
+                                            className="ssh-icon"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (sshUsername && sshUsername.trim() !== '') {
+                                                const sshUrl = `ssh://${sshUsername}@${hostname}`;
+                                                toast.success(`🔗 SSH: ${sshUsername}@${hostname}`, { autoClose: 1000, pauseOnHover: false });
+                                                setTimeout(() => { window.location.href = sshUrl; }, 150);
+                                              } else {
+                                                const ToastContent = () => (
+                                                  <div>
+                                                    ⚠️ SSH username not configured!{' '}
+                                                    <span
+                                                      onClick={() => {
+                                                        try { navigateToSettings?.(); } catch { }
+                                                        try { toast.dismiss(); } catch { }
+                                                      }}
+                                                      style={{
+                                                        color: '#4f46e5',
+                                                        textDecoration: 'underline',
+                                                        cursor: 'pointer',
+                                                        fontWeight: 'bold'
+                                                      }}
+                                                    >
+                                                      Go to Settings
+                                                    </span> to set your SSH username.
+                                                  </div>
+                                                );
+                                                toast.warning(<ToastContent />, { autoClose: 6000, pauseOnHover: true, pauseOnFocusLoss: false });
+                                              }
+                                            }}
+                                            sx={{
+                                              color: (theme) => sshUsername
+                                                ? (theme.palette.mode === 'dark' ? 'rgba(76, 175, 80, 0.6)' : '#4caf50')
+                                                : (theme.palette.mode === 'dark' ? 'rgba(156, 163, 175, 0.6)' : '#9e9e9e'),
+                                              fontSize: '14px',
+                                              ml: 0.5,
+                                              verticalAlign: 'middle',
+                                              cursor: 'pointer'
+                                            }}
+                                          />
+                                        </Tooltip>
+                                      </Box>
+                                    );
+                                  })() : 'n/a'}
+                                </TableCell>
+                                <TableCell align="right">{Number(kemCount) || 0}</TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </AccordionDetails>
+              </Accordion>
+
+              {/* Location-specific timeline (last 31 days) - moved to bottom */}
+              {locSelected && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
+                    Timeline for {(() => {
+                      // If it's a 3-letter code and we have city data in prefix mode, show city name
+                      if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
+                        return `${cityNameByCode3[locSelected]} (${locSelected})`;
+                      }
+                      // If it's a 5-letter location code, show with city name
+                      if (locSelected?.length === 5) {
+                        const cityCode = locSelected.slice(0, 3);
+                        const cityName = cityNameByCode3[cityCode];
+                        return cityName ? `${locSelected} (${cityName})` : locSelected;
+                      }
+                      // Otherwise just show the location code
+                      return locSelected;
+                    })()} ({(locTimeline.series || []).length} days)
+                  </Typography>
+                  {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Chip
+                      label="Select All"
+                      size="small"
+                      color="success"
+                      variant="filled"
+                      onClick={selectAllLocKpis}
+                      icon={<DoneAllIcon fontSize="small" />}
+                      sx={{ fontWeight: 700 }}
+                    />
+                    <Chip
+                      label="Clear"
+                      size="small"
+                      color="error"
+                      variant="filled"
+                      onClick={clearAllLocKpis}
+                      icon={<ClearAllIcon fontSize="small" />}
+                      sx={{ fontWeight: 700 }}
+                    />
+                    <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+                    {KPI_DEFS_LOC.map((k) => {
+                      const selected = selectedKpisLoc.includes(k.id);
+                      return (
+                        <Chip
+                          key={k.id}
+                          label={k.label}
+                          size="small"
+                          color="default"
+                          variant={selected ? 'filled' : 'outlined'}
+                          onClick={() => toggleKpiLoc(k.id)}
+                          sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                        />
                       );
                     })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </AccordionDetails>
-        </Accordion>
+                  </Box>
+                  {locTimeline.loading ? (
+                    <Skeleton variant="rectangular" height={220} />
+                  ) : locTimeline.error ? (
+                    <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
+                  ) : (
+                    <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                      <LineChart
+                        height={240}
+                        xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
+                        series={selectedKpisLoc.length ? (
+                          KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
+                            id: k.id,
+                            label: k.label,
+                            color: k.color,
+                            data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
+                          }))
+                        ) : locEmptySeries}
+                        margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+                        yAxis={locYAxisBounds ? [{ min: locYAxisBounds.yMin, max: locYAxisBounds.yMax }] : undefined}
+                        slotProps={{
+                          legend: {
+                            position: { vertical: 'top', horizontal: 'middle' },
+                            direction: 'row',
+                            itemGap: 16,
+                          },
+                        }}
+                        sx={{ minWidth: 520 }}
+                      />
+                    </Box>
+                  )}
+                </Box>
+              )}
 
-        {/* Location-specific timeline (last 31 days) - moved to bottom */}
-        {locSelected && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700, color: 'text.secondary' }}>
-              Timeline for {(() => {
-                // If it's a 3-letter code and we have city data in prefix mode, show city name
-                if (locStats?.mode === 'prefix' && locSelected?.length === 3 && cityNameByCode3[locSelected]) {
-                  return `${cityNameByCode3[locSelected]} (${locSelected})`;
-                }
-                // If it's a 5-letter location code, show with city name
-                if (locSelected?.length === 5) {
-                  const cityCode = locSelected.slice(0, 3);
-                  const cityName = cityNameByCode3[cityCode];
-                  return cityName ? `${locSelected} (${cityName})` : locSelected;
-                }
-                // Otherwise just show the location code
-                return locSelected;
-              })()} ({(locTimeline.series || []).length} days)
-            </Typography>
-            {/* KPI selector (shares state with global timeline; excludes Locations/Cities) */}
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
-              <Chip
-                label="Select All"
-                size="small"
-                color="success"
-                variant="filled"
-                onClick={selectAllLocKpis}
-                icon={<DoneAllIcon fontSize="small" />}
-                sx={{ fontWeight: 700 }}
-              />
-              <Chip
-                label="Clear"
-                size="small"
-                color="error"
-                variant="filled"
-                onClick={clearAllLocKpis}
-                icon={<ClearAllIcon fontSize="small" />}
-                sx={{ fontWeight: 700 }}
-              />
-              <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-              {KPI_DEFS_LOC.map((k) => {
-                const selected = selectedKpisLoc.includes(k.id);
-                return (
-                  <Chip
-                    key={k.id}
-                    label={k.label}
-                    size="small"
-                    color="default"
-                    variant={selected ? 'filled' : 'outlined'}
-                    onClick={() => toggleKpiLoc(k.id)}
-                    sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
-                  />
-                );
-              })}
-            </Box>
-            {locTimeline.loading ? (
-              <Skeleton variant="rectangular" height={220} />
-            ) : locTimeline.error ? (
-              <Alert severity="info" variant="outlined">{locTimeline.error}</Alert>
-            ) : (
-              <Box sx={{ width: '100%', overflowX: 'auto' }}>
-                <LineChart
-                  height={240}
-                  xAxis={[{ data: (locTimeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-                  series={selectedKpisLoc.length ? (
-                    KPI_DEFS_LOC.filter(k => selectedKpisLoc.includes(k.id)).map((k) => ({
-                      id: k.id,
-                      label: k.label,
-                      color: k.color,
-                      data: (locTimeline.series || []).map((p) => p.metrics?.[k.id] || 0),
-                    }))
-                  ) : locEmptySeries}
-                  margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
-                  yAxis={locYAxisBounds ? [{ min: locYAxisBounds.yMin, max: locYAxisBounds.yMax }] : undefined}
-                  slotProps={{
-                    legend: {
-                      position: { vertical: 'top', horizontal: 'middle' },
-                      direction: 'row',
-                      itemGap: 16,
-                    },
-                  }}
-                  sx={{ minWidth: 520 }}
-                />
-              </Box>
-            )}
-          </Box>
-        )}
+              {/* Only summary metrics per location as requested */}
+            </Paper>
+          )}
 
-        {/* Only summary metrics per location as requested */}
-      </Paper>
+          {isTimelines && (
+            <>
+              <Paper variant="outlined" sx={{ p: 2, mt: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.primary.main}`, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+                <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 700, color: 'primary.main' }}>
+                  Global Timeline ({(timeline.series || []).length} days)
+                </Typography>
 
-      {/* Global Timeline (separate from per-location) */}
-      <Paper variant="outlined" sx={{ p: 2, mt: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.primary.main}`, backgroundColor: (t) => alpha(t.palette.primary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
-        <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 700, color: 'primary.main' }}>
-          Global Timeline ({(timeline.series || []).length} days)
-        </Typography>
+                {/* Controls row: KPI chips left, days input right */}
+                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+                    <Chip
+                      label="Select All"
+                      size="small"
+                      color="success"
+                      variant="filled"
+                      onClick={selectAllGlobalKpis}
+                      icon={<DoneAllIcon fontSize="small" />}
+                      sx={{ fontWeight: 700 }}
+                    />
+                    <Chip
+                      label="Clear"
+                      size="small"
+                      color="error"
+                      variant="filled"
+                      onClick={clearAllGlobalKpis}
+                      icon={<ClearAllIcon fontSize="small" />}
+                      sx={{ fontWeight: 700 }}
+                    />
+                    <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+                    {KPI_DEFS.map((k) => {
+                      const selected = selectedKpisGlobal.includes(k.id);
+                      return (
+                        <Chip
+                          key={k.id}
+                          label={k.label}
+                          size="small"
+                          color="default"
+                          variant={selected ? 'filled' : 'outlined'}
+                          onClick={() => toggleKpiGlobal(k.id)}
+                          sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                        />
+                      );
+                    })}
+                  </Box>
+                  <Box sx={{ ml: 'auto' }}>
+                    <TextField
+                      label="Days (0 = all)"
+                      size="small"
+                      type="number"
+                      inputProps={{ min: 0 }}
+                      value={timelineDays}
+                      onChange={(e) => {
+                        const v = Math.max(0, Number(e.target.value || 0));
+                        setTimelineDays(v);
+                      }}
+                      sx={{ width: 160 }}
+                    />
+                  </Box>
+                </Box>
 
-        {/* Controls row: KPI chips left, days input right */}
-        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
-            <Chip
-              label="Select All"
-              size="small"
-              color="success"
-              variant="filled"
-              onClick={selectAllGlobalKpis}
-              icon={<DoneAllIcon fontSize="small" />}
-              sx={{ fontWeight: 700 }}
-            />
-            <Chip
-              label="Clear"
-              size="small"
-              color="error"
-              variant="filled"
-              onClick={clearAllGlobalKpis}
-              icon={<ClearAllIcon fontSize="small" />}
-              sx={{ fontWeight: 700 }}
-            />
-            <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-            {KPI_DEFS.map((k) => {
-              const selected = selectedKpisGlobal.includes(k.id);
-              return (
-                <Chip
-                  key={k.id}
-                  label={k.label}
-                  size="small"
-                  color="default"
-                  variant={selected ? 'filled' : 'outlined'}
-                  onClick={() => toggleKpiGlobal(k.id)}
-                  sx={selected ? { bgcolor: k.color, color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
-                />
-              );
-            })}
-          </Box>
-          <Box sx={{ ml: 'auto' }}>
-            <TextField
-              label="Days (0 = all)"
-              size="small"
-              type="number"
-              inputProps={{ min: 0 }}
-              value={timelineDays}
-              onChange={(e) => {
-                const v = Math.max(0, Number(e.target.value || 0));
-                setTimelineDays(v);
-              }}
-              sx={{ width: 160 }}
-            />
-          </Box>
+                {timeline.loading ? (
+                  <Skeleton variant="rectangular" height={240} />
+                ) : timeline.error ? (
+                  <Alert severity="info" variant="outlined">{timeline.error}</Alert>
+                ) : (
+                  <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                    <LineChart
+                      height={260}
+                      xAxis={[{ data: (timeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
+                      series={selectedKpisGlobal.length ? (
+                        KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id)).map((k) => ({
+                          id: k.id,
+                          label: k.label,
+                          color: k.color,
+                          data: (timeline.series || []).map((p) => p.metrics?.[k.id] || 0),
+                        }))
+                      ) : globalEmptySeries}
+                      margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
+                      yAxis={globalYAxisBounds ? [{ min: globalYAxisBounds.yMin, max: globalYAxisBounds.yMax }] : undefined}
+                      slotProps={{
+                        legend: {
+                          position: { vertical: 'top', horizontal: 'middle' },
+                          direction: 'row',
+                          itemGap: 16,
+                        },
+                      }}
+                      sx={{ minWidth: 520 }}
+                    />
+                  </Box>
+                )}
+              </Paper>
+
+              {/* Top Locations Timeline */}
+              <Paper variant="outlined" sx={{ p: 2, mt: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
+                <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 700, color: 'secondary.main' }}>
+                  Top 10 Locations Timeline ({(topTimeline.dates || []).length} days)
+                </Typography>
+
+                {/* Controls row: actions (locations) left, KPI next, days input right */}
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+                  {/* Actions for locations selection */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+                    <Chip
+                      label="Select All"
+                      size="small"
+                      color="success"
+                      variant="filled"
+                      onClick={selectAllTopKeys}
+                      icon={<DoneAllIcon fontSize="small" />}
+                      sx={{ fontWeight: 700 }}
+                    />
+                    <Chip
+                      label="Clear"
+                      size="small"
+                      color="error"
+                      variant="filled"
+                      onClick={clearAllTopKeys}
+                      icon={<ClearAllIcon fontSize="small" />}
+                      sx={{ fontWeight: 700 }}
+                    />
+                    <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+                  </Box>
+                  {/* KPI */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                    {TOP_KPI_DEFS.map((k) => (
+                      <Chip
+                        key={k.id}
+                        label={k.label}
+                        size="small"
+                        color="default"
+                        variant={topKpi === k.id ? 'filled' : 'outlined'}
+                        onClick={() => setTopKpi(k.id)}
+                        sx={topKpi === k.id ? { bgcolor: k.color || '#1976d2', color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                      />
+                    ))}
+                  </Box>
+
+                  {/* Count chips removed (fixed to Top 10) */}
+
+                  {/* Days input (0 = all) */}
+                  <Box sx={{ ml: 'auto' }}>
+                    <TextField
+                      label="Days (0 = all)"
+                      size="small"
+                      type="number"
+                      inputProps={{ min: 0 }}
+                      value={topDays}
+                      onChange={(e) => {
+                        const v = Math.max(0, Number(e.target.value || 0));
+                        setTopDays(v);
+                      }}
+                      sx={{ width: 160 }}
+                    />
+                  </Box>
+                </Box>
+
+                {/* Keys selection (locations) */}
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+                  {sortedTopKeysForChips.map((k) => {
+                    const selected = topSelectedKeys.includes(k);
+                    const chipColor = topKeyColorMap[k];
+                    return (
+                      <Chip
+                        key={`key-${k}`}
+                        label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
+                        size="small"
+                        color="default"
+                        variant={selected ? 'filled' : 'outlined'}
+                        onClick={() => toggleTopKey(k)}
+                        sx={selected ? { bgcolor: chipColor || 'secondary.main', color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
+                      />
+                    );
+                  })}
+                </Box>
+
+                {topTimeline.loading ? (
+                  <Skeleton variant="rectangular" height={520} />
+                ) : topTimeline.error ? (
+                  <Alert severity="info" variant="outlined">{topTimeline.error}</Alert>
+                ) : (
+                  <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                    <LineChart
+                      height={520}
+                      xAxis={[{ data: (topTimeline.dates || []).map((d) => (d ? String(d).slice(5) : d)), scaleType: 'point' }]}
+                      series={topSeriesPerKey.length ? topSeriesPerKey : topEmptySeries}
+                      margin={{ left: 52, right: 20, top: 120, bottom: 28 }}
+                      yAxis={topYAxisBounds ? [{ min: topYAxisBounds.yMin, max: topYAxisBounds.yMax, ticks: topYAxisBounds.ticks }] : undefined}
+                      slotProps={{
+                        legend: {
+                          position: { vertical: 'top', horizontal: 'middle' },
+                          direction: 'row',
+                          itemGap: 20,
+                        },
+                      }}
+                      sx={{ minWidth: 520 }}
+                    />
+                  </Box>
+                )}
+              </Paper>
+            </>
+          )}
         </Box>
-
-        {timeline.loading ? (
-          <Skeleton variant="rectangular" height={240} />
-        ) : timeline.error ? (
-          <Alert severity="info" variant="outlined">{timeline.error}</Alert>
-        ) : (
-          <Box sx={{ width: '100%', overflowX: 'auto' }}>
-            <LineChart
-              height={260}
-              xAxis={[{ data: (timeline.series || []).map((p) => (p.date ? String(p.date).slice(5) : p.file)), scaleType: 'point' }]}
-              series={selectedKpisGlobal.length ? (
-                KPI_DEFS.filter(k => selectedKpisGlobal.includes(k.id)).map((k) => ({
-                  id: k.id,
-                  label: k.label,
-                  color: k.color,
-                  data: (timeline.series || []).map((p) => p.metrics?.[k.id] || 0),
-                }))
-              ) : globalEmptySeries}
-              margin={{ left: 52, right: 20, top: 56, bottom: 20 }}
-              yAxis={globalYAxisBounds ? [{ min: globalYAxisBounds.yMin, max: globalYAxisBounds.yMax }] : undefined}
-              slotProps={{
-                legend: {
-                  position: { vertical: 'top', horizontal: 'middle' },
-                  direction: 'row',
-                  itemGap: 16,
-                },
-              }}
-              sx={{ minWidth: 520 }}
-            />
-          </Box>
-        )}
-      </Paper>
-
-      {/* Top Locations Timeline */}
-      <Paper variant="outlined" sx={{ p: 2, mt: 2, borderRadius: 2, borderTop: (t) => `4px solid ${t.palette.secondary.main}`, backgroundColor: (t) => alpha(t.palette.secondary.light, t.palette.mode === 'dark' ? 0.08 : 0.05) }}>
-        <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 700, color: 'secondary.main' }}>
-          Top 10 Locations Timeline ({(topTimeline.dates || []).length} days)
-        </Typography>
-
-        {/* Controls row: actions (locations) left, KPI next, days input right */}
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
-          {/* Actions for locations selection */}
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
-            <Chip
-              label="Select All"
-              size="small"
-              color="success"
-              variant="filled"
-              onClick={selectAllTopKeys}
-              icon={<DoneAllIcon fontSize="small" />}
-              sx={{ fontWeight: 700 }}
-            />
-            <Chip
-              label="Clear"
-              size="small"
-              color="error"
-              variant="filled"
-              onClick={clearAllTopKeys}
-              icon={<ClearAllIcon fontSize="small" />}
-              sx={{ fontWeight: 700 }}
-            />
-            <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-          </Box>
-          {/* KPI */}
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {TOP_KPI_DEFS.map((k) => (
-              <Chip
-                key={k.id}
-                label={k.label}
-                size="small"
-                color="default"
-                variant={topKpi === k.id ? 'filled' : 'outlined'}
-                onClick={() => setTopKpi(k.id)}
-                sx={topKpi === k.id ? { bgcolor: k.color || '#1976d2', color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
-              />
-            ))}
-          </Box>
-
-          {/* Count chips removed (fixed to Top 10) */}
-
-          {/* Days input (0 = all) */}
-          <Box sx={{ ml: 'auto' }}>
-            <TextField
-              label="Days (0 = all)"
-              size="small"
-              type="number"
-              inputProps={{ min: 0 }}
-              value={topDays}
-              onChange={(e) => {
-                const v = Math.max(0, Number(e.target.value || 0));
-                setTopDays(v);
-              }}
-              sx={{ width: 160 }}
-            />
-          </Box>
-        </Box>
-
-        {/* Keys selection (locations) */}
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-          {sortedTopKeysForChips.map((k) => {
-            const selected = topSelectedKeys.includes(k);
-            const chipColor = topKeyColorMap[k];
-            return (
-              <Chip
-                key={`key-${k}`}
-                label={(topTimeline.labels && topTimeline.labels[k]) ? topTimeline.labels[k] : k}
-                size="small"
-                color="default"
-                variant={selected ? 'filled' : 'outlined'}
-                onClick={() => toggleTopKey(k)}
-                sx={selected ? { bgcolor: chipColor || 'secondary.main', color: '#fff', '& .MuiChip-label': { fontWeight: 700 } } : undefined}
-              />
-            );
-          })}
-        </Box>
-
-        {topTimeline.loading ? (
-          <Skeleton variant="rectangular" height={520} />
-        ) : topTimeline.error ? (
-          <Alert severity="info" variant="outlined">{topTimeline.error}</Alert>
-        ) : (
-          <Box sx={{ width: '100%', overflowX: 'auto' }}>
-            <LineChart
-              height={520}
-              xAxis={[{ data: (topTimeline.dates || []).map((d) => (d ? String(d).slice(5) : d)), scaleType: 'point' }]}
-              series={topSeriesPerKey.length ? topSeriesPerKey : topEmptySeries}
-              margin={{ left: 52, right: 20, top: 120, bottom: 28 }}
-              yAxis={topYAxisBounds ? [{ min: topYAxisBounds.yMin, max: topYAxisBounds.yMax, ticks: topYAxisBounds.ticks }] : undefined}
-              slotProps={{
-                legend: {
-                  position: { vertical: 'top', horizontal: 'middle' },
-                  direction: 'row',
-                  itemGap: 20,
-                },
-              }}
-              sx={{ minWidth: 520 }}
-            />
-          </Box>
-        )}
-      </Paper>
+      </Box>
     </Box>
   );
 });
