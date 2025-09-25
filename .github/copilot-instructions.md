@@ -261,7 +261,7 @@ When adding new fields to location statistics (like VLAN usage, switches, KEM ph
 
 ### Volume Mount Issues
 - Real data location is controlled by `CSV_FILES_DIR` in environment files
-- Do not assume `/app/data` contains test data - it might be production data
+- Do not assume `/app/data` contains test data - it is production data
 - Always verify data source with: `docker exec -it csv-viewer-backend-dev ls -la /app/data/`
 - Volume mount: `${CSV_FILES_DIR}:/app/data` means host `CSV_FILES_DIR` maps to container `/app/data`
 

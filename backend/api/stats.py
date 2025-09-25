@@ -1751,10 +1751,23 @@ async def get_stats_by_location_fast(q: str) -> Dict:
         if not query:
             return {"success": False, "message": "Location query is required"}
 
-        # Determine mode based on query length
-        mode = "code" if len(query) == 5 else ("prefix" if len(query) == 3 else "invalid")
+        # Determine mode based on query pattern
+        # Supported now:
+        #  - Full code: 3 letters + 2 digits (e.g. ABC01)
+        #  - Prefixes: 1 or 2 letters (A, AB) -> broad search
+        #  - City prefix: 3 letters (ABC)
+        #  - Partial location: 3 letters + 1 digit (ABC0)
+        import re
+        if re.fullmatch(r"[A-Z]{3}[0-9]{2}", query):
+            mode = "code"
+        elif re.fullmatch(r"[A-Z]{3}[0-9]", query):
+            mode = "prefix"  # 4-char partial code
+        elif re.fullmatch(r"[A-Z]{1,3}", query):
+            mode = "prefix"  # 1-3 letter prefix
+        else:
+            mode = "invalid"
         if mode == "invalid":
-            return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)"}
+            return {"success": False, "message": "Query must be one of: full code ABC01, 1-3 letter prefix (A / AB / ABC), or partial code ABC0"}
 
         # Check if location stats index exists
         if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
@@ -1776,10 +1789,17 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 }
             }
 
-        # Determine mode based on query length
-        mode = "code" if len(query) == 5 else ("prefix" if len(query) == 3 else "invalid")
+        # Re-evaluate mode (defensive – query may be reused later)
+        if re.fullmatch(r"[A-Z]{3}[0-9]{2}", query):
+            mode = "code"
+        elif re.fullmatch(r"[A-Z]{3}[0-9]", query):
+            mode = "prefix"
+        elif re.fullmatch(r"[A-Z]{1,3}", query):
+            mode = "prefix"
+        else:
+            mode = "invalid"
         if mode == "invalid":
-            return {"success": False, "message": "Query must be a 5-char code (AAA01) or 3-letter prefix (AAA)"}
+            return {"success": False, "message": "Query must be one of: full code ABC01, 1-3 letter prefix (A / AB / ABC), or partial code ABC0"}
 
         if mode == "code":
             # For model details, always use today's data (current netspeed.csv)
@@ -1862,7 +1882,7 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 except Exception:
                     pass
 
-        else:  # prefix mode - aggregate all locations starting with this prefix
+        else:  # prefix mode - aggregate all locations starting with this prefix (1-4 chars)
             # Optimized: Only fetch necessary fields and use smaller payloads
             body = {
                 "size": 0,
@@ -1870,7 +1890,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                     "locations": {
                         "terms": {
                             "field": "key",
-                            "size": 1000
+                            # Broader prefixes (1-2 letters) can match many entries – cap size higher but reasonable
+                            "size": 2000 if len(query) <= 2 else 1500 if len(query) == 3 else 1200
                         },
                         "aggs": {
                             "latest": {

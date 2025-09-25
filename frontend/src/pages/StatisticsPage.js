@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, ListItemButton, ListItemIcon, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress } from '@mui/material';
+import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, ListItemButton, ListItemIcon, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress, IconButton } from '@mui/material';
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
@@ -433,6 +433,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   });
   const [locStatsLoading, setLocStatsLoading] = React.useState(false);
 
+  const locationActionLoading = isSearchingLocations || locStatsLoading;
+
   // Switch Port Cache für Statistics Switches
   const [switchPortCache, setSwitchPortCache] = React.useState({});
 
@@ -451,6 +453,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       return '';
     }
   });
+  const [citySearchInput, setCitySearchInput] = React.useState('');
+  const [cityAutocompleteOpen, setCityAutocompleteOpen] = React.useState(false);
   // Uncontrolled input ref to keep typing instant
   const locInputRef = React.useRef(null);
 
@@ -462,13 +466,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       startTransition(() => setShowLocationDropdown(false));
       return;
     }
-
-    // Require at least 2 characters to avoid heavy prefix searches
-    if (q.length < 2) {
-      setLocationSuggestions([]);
-      setShowLocationDropdown(false);
-      return;
-    }
+    // Now allow 1+ characters; backend handles broad prefixes efficiently
 
     // Helper: prepend city prefix option (e.g., Mxx München) as the first item when user typed exactly 3 letters
     const withCityPrefixOption = (qStr, arr) => {
@@ -554,107 +552,161 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   // Timeout ref for debouncing suggestions only
   const timeoutRef = React.useRef();             // suggestions debounce
 
-  // Debounced search for performance
-  const debouncedLocationSearch = React.useMemo(
-    () => {
-      return (query) => {
-        clearTimeout(timeoutRef.current);
-        // Longer debounce to avoid interrupting typing and reduce network churn
-        timeoutRef.current = setTimeout(() => {
-          searchLocationSuggestions(query);
-        }, 500);
-      };
-    },
-    [searchLocationSuggestions]
-  );
+  const debouncedLocationSearch = React.useCallback((query) => {
+    clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      searchLocationSuggestions(query);
+    }, 180);
+  }, [searchLocationSuggestions]);
+
+  const clearLocationSelection = React.useCallback(() => {
+    setLocSelected(null);
+    setLocInput('');
+    setLocalInput('');
+    setLocStats({
+      totalPhones: 0,
+      totalSwitches: 0,
+      phonesWithKEM: 0,
+      phonesByModel: [],
+      phonesByModelJustiz: [],
+      phonesByModelJVA: [],
+      vlanUsage: [],
+      switches: [],
+      kemPhones: [],
+    });
+    setLocStatsLoading(false);
+    setLocError(null);
+    setLocationSuggestions([]);
+    setShowLocationDropdown(false);
+    setSelectedSuggestionIndex(-1);
+    if (locInputRef.current) {
+      try { locInputRef.current.value = ''; } catch { /* ignore */ }
+    }
+    saveStatisticsPrefs?.({ lastSelectedLocation: null });
+  }, [saveStatisticsPrefs]);
 
   const handleLocationInputChange = React.useCallback((e) => {
-    const val = e.target.value;
+    const val = e.target.value || '';
+    setLocInput(val);
 
     // Clear selection if input is empty
     if (!val || val.trim() === '') {
-      startTransition(() => setLocSelected(null));
-      startTransition(() => setLocationSuggestions([]));
-      startTransition(() => setShowLocationDropdown(false));
-      startTransition(() => setLocStats({
-        totalPhones: 0,
-        totalSwitches: 0,
-        phonesWithKEM: 0,
-        phonesByModel: [],
-        phonesByModelJustiz: [],
-        phonesByModelJVA: [],
-        vlanUsage: [],
-        switches: [],
-        kemPhones: [],
-      }));
-      startTransition(() => setLocStatsLoading(false));
-      // no idle commit timer; search only on Enter or suggestion select
+      startTransition(() => {
+        clearLocationSelection();
+      });
     } else {
       const trimmed = val.trim();
-      // Trigger search suggestions only after 3+ chars and debounce
-      if (trimmed.length >= 3) {
-        debouncedLocationSearch(trimmed);
-      } else {
-        // Under 3 chars: avoid unnecessary re-renders; only clear if something is shown
-        if (showLocationDropdown || (locationSuggestions && locationSuggestions.length)) {
-          startTransition(() => {
-            setLocationSuggestions([]);
-            setShowLocationDropdown(false);
-          });
-        }
+      if (trimmed) {
+        setLocError(null);
+        debouncedLocationSearch(trimmed.toUpperCase());
       }
-      // no idle auto-search; user confirms with Enter
     }
-  }, [debouncedLocationSearch, showLocationDropdown, locationSuggestions, startTransition]);
+  }, [clearLocationSelection, debouncedLocationSearch, setLocError, startTransition]);
 
-  const selectLocationSuggestion = React.useCallback((suggestion) => {
-    // Format code: Nxx01
-    // Format: All X are lowercase, all other letters uppercase
-    const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
-    setLocSelected(formattedCode);
-    // Gracefully handle missing display on synthetic items
-    let newDisplay = suggestion.display;
-    if (!newDisplay) {
-      const cityName = suggestion.city || cityNameByCode3?.[formattedCode.slice(0, 3)] || cityNameByCode3?.[formattedCode.slice(0, 3).toUpperCase()];
-      newDisplay = cityName ? `${formattedCode} (${cityName})` : formattedCode;
-    } else {
-      try { newDisplay = newDisplay.replace(suggestion.code, formattedCode); } catch { newDisplay = formattedCode; }
+  const triggerLocationSearch = React.useCallback((rawValue) => {
+    try { suggestionsControllerRef.current?.abort(); } catch { /* ignore */ }
+    const source = typeof rawValue === 'string' ? rawValue : (locInputRef.current?.value || '');
+    const valRaw = (source || '').trim();
+    if (!valRaw) return false;
+    let val = valRaw.toUpperCase();
+    const parenIdx = val.indexOf('(');
+    if (parenIdx > 0) {
+      val = val.slice(0, parenIdx);
     }
-    setLocalInput(newDisplay);
-    if (locInputRef.current) {
-      try { locInputRef.current.value = newDisplay; } catch { /* ignore */ }
+    val = val.trim();
+    if (!val) return false;
+    const firstToken = val.split(/\s+/)[0];
+    val = firstToken.replace(/[^A-Z0-9]/g, '');
+    if (!val) return false;
+    const isFull = /^[A-Z]{3}[0-9]{2}$/.test(val);
+    const isPartial4 = /^[A-Z]{3}[0-9]$/.test(val);
+    const isPrefix1to3 = /^[A-Z]{1,3}$/.test(val);
+    if (!isFull && !isPartial4 && !isPrefix1to3) return false;
+
+    let stored = val;
+    if (!isFull) {
+      if (stored.length <= 3) {
+        stored = stored.replace(/X/g, 'x');
+      } else {
+        const head = stored.slice(0, 3).replace(/X/g, 'x');
+        stored = head + stored.slice(3);
+      }
     }
-    setLocInput(formattedCode);
+
+    const code3 = stored.slice(0, 3);
+    const cityName = cityNameByCode3?.[code3] || cityNameByCode3?.[code3.toUpperCase()];
+    const display = cityName ? `${stored} (${cityName})` : stored;
+
+    setLocSelected(stored);
+    setLocInput(stored);
+    setLocalInput(display);
     setShowLocationDropdown(false);
     setLocationSuggestions([]);
     setSelectedSuggestionIndex(-1);
-  }, []);
+    setLocError(null);
+    try {
+      if (locInputRef.current) locInputRef.current.value = display;
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }, [cityNameByCode3, locInputRef]);
+
+  const selectLocationSuggestion = React.useCallback((suggestion) => {
+    const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
+    triggerLocationSearch(formattedCode);
+    setLocationSuggestions([]);
+    setShowLocationDropdown(false);
+    setSelectedSuggestionIndex(-1);
+  }, [triggerLocationSearch]);
+
+  const handleLocationSuggestionSelect = React.useCallback((suggestion) => {
+    if (suggestion && suggestion.isPrefixAll) {
+      const code3 = String(suggestion.code || '').substring(0, 3).toUpperCase().replace(/X/g, 'x');
+      setLocSelected(code3);
+      const display = suggestion.city ? `${code3} (${suggestion.city})` : code3;
+      setLocalInput(display);
+      setLocError(null);
+      if (locInputRef.current) {
+        try { locInputRef.current.value = display; } catch { /* ignore */ }
+      }
+      setLocInput(code3);
+      setShowLocationDropdown(false);
+      setLocationSuggestions([]);
+      setSelectedSuggestionIndex(-1);
+      return;
+    }
+    selectLocationSuggestion(suggestion);
+    setLocError(null);
+  }, [selectLocationSuggestion, setLocError]);
+
+  const handleLocationSearchAction = React.useCallback(() => {
+    const rawValue = locInputRef.current?.value ?? '';
+    if (!rawValue.trim()) {
+      setLocError('Bitte gib einen Standortcode ein');
+      return;
+    }
+    try { suggestionsControllerRef.current?.abort(); } catch { /* ignore */ }
+    setLocationSuggestions([]);
+    setShowLocationDropdown(false);
+    setSelectedSuggestionIndex(-1);
+    const succeeded = triggerLocationSearch(rawValue);
+    if (!succeeded) {
+      setLocError('Unbekannter Standortcode');
+    } else {
+      setLocError(null);
+    }
+  }, [triggerLocationSearch]);
 
   const handleLocationKeyDown = React.useCallback((e) => {
     if (!showLocationDropdown || locationSuggestions.length === 0) {
-      // No dropdown - handle Enter for direct search
       if (e.key === 'Enter') {
-        e.preventDefault();
-        const val = (e.target.value || '').trim().toUpperCase();
-        if (!val) return;
-        const isFull = /^[A-Z]{3}[0-9]{2}$/.test(val);
-        const isPrefix = /^[A-Z]{3}$/.test(val);
-        if (isFull) {
-          setLocSelected(val);
-          setLocInput(val);
-          setShowLocationDropdown(false);
-        } else if (isPrefix) {
-          const code3Mxx = val.replace(/X/g, 'x');
-          setLocSelected(code3Mxx);
-          setLocInput(code3Mxx);
-          setShowLocationDropdown(false);
-          // Show "Mxx (City)" instantly if city map is known
-          const cityName = cityNameByCode3?.[code3Mxx] || cityNameByCode3?.[val];
-          const display = cityName ? `${code3Mxx} (${cityName})` : code3Mxx;
-          try {
-            if (locInputRef.current) locInputRef.current.value = display;
-          } catch { }
-          setLocalInput(display);
+        const success = triggerLocationSearch(e.target.value);
+        if (success) {
+          setLocError(null);
+          e.preventDefault();
+        } else {
+          setLocError('Unbekannter Standortcode');
         }
       }
       return;
@@ -680,26 +732,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       setShowLocationDropdown(false);
       setSelectedSuggestionIndex(-1);
     }
-  }, [showLocationDropdown, locationSuggestions, selectedSuggestionIndex, selectLocationSuggestion]);
-
-  // Handler for clicking on dropdown suggestions
-  const handleLocationSuggestionSelect = React.useCallback((suggestion) => {
-    if (suggestion && suggestion.isPrefixAll) {
-      const code3 = String(suggestion.code || '').substring(0, 3).toUpperCase().replace(/X/g, 'x');
-      setLocSelected(code3);
-      const display = suggestion.city ? `${code3} (${suggestion.city})` : code3;
-      setLocalInput(display);
-      if (locInputRef.current) {
-        try { locInputRef.current.value = display; } catch { /* ignore */ }
-      }
-      setLocInput(code3);
-      setShowLocationDropdown(false);
-      setLocationSuggestions([]);
-      setSelectedSuggestionIndex(-1);
-      return;
-    }
-    selectLocationSuggestion(suggestion);
-  }, [selectLocationSuggestion]);
+  }, [showLocationDropdown, locationSuggestions, selectedSuggestionIndex, triggerLocationSearch, handleLocationSuggestionSelect, setLocError]);
 
   // Cleanup abort controller on unmount
   React.useEffect(() => {
@@ -768,19 +801,55 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   }, [handleLocationKeyDown]);
 
   const handleCityNameChange = React.useCallback((_, value) => {
-    if (value) {
-      // Find location code for this city name
-      const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
-        name.toLowerCase() === value.toLowerCase()
-      )?.[0];
-
-      if (cityCode) {
-        setLocSelected(cityCode);
-        setLocalInput(`${cityCode} (${value})`); // Show city name in input
-        setLocInput(cityCode);
-      }
+    if (!value) {
+      setCitySearchInput('');
+      setLocError(null);
+      return;
     }
-  }, [cityNameByCode3]);
+
+    setCitySearchInput(value);
+    const entry = Object.entries(cityNameByCode3 || {}).find(([, name]) =>
+      String(name).toLowerCase() === String(value).toLowerCase()
+    );
+
+    if (entry) {
+      triggerLocationSearch(entry[0]);
+      setLocError(null);
+      setCityAutocompleteOpen(false);
+    }
+  }, [cityNameByCode3, setLocError, triggerLocationSearch, setCityAutocompleteOpen]);
+
+  const clearCitySearchInput = React.useCallback(() => {
+    setCitySearchInput('');
+    setLocError(null);
+    setCityAutocompleteOpen(false);
+  }, [setLocError, setCityAutocompleteOpen]);
+
+  const handleCitySearchAction = React.useCallback(() => {
+    const term = String(citySearchInput || '').trim();
+    if (!term) {
+      setLocError('Bitte gib einen Stadtnamen ein');
+      setCityAutocompleteOpen(false);
+      return;
+    }
+
+    const entries = Object.entries(cityNameByCode3 || {});
+    const lower = term.toLowerCase();
+    const exact = entries.find(([, name]) => String(name).toLowerCase() === lower);
+    const partial = entries.find(([, name]) => String(name).toLowerCase().includes(lower));
+    const match = exact || partial;
+
+    if (match) {
+      const [code, name] = match;
+      setCitySearchInput(name);
+      triggerLocationSearch(code);
+      setLocError(null);
+      setCityAutocompleteOpen(false);
+    } else {
+      setLocError('Keine Stadt gefunden');
+      setCityAutocompleteOpen(false);
+    }
+  }, [cityNameByCode3, citySearchInput, setLocError, triggerLocationSearch, setCityAutocompleteOpen]);
 
   const filterCityOptions = React.useCallback((options, { inputValue }) => {
     // If no input, show fewer cities
@@ -2720,7 +2789,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                     onChange={handleLocationInputChange}
                     onKeyDown={handleKeyDown}
                     error={!!locError}
-                    helperText={locError || (locInput && !locSelected ? "Press Enter or pause to search" : "")}
+                    helperText={locError || (locInput && !locSelected ? "Drücke Enter oder tippe auf das Suchsymbol" : "")}
                     InputProps={{
                       startAdornment: (
                         <InputAdornment position="start">
@@ -2728,53 +2797,66 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                         </InputAdornment>
                       ),
                       endAdornment: (
-                        <>
-                          {isSearchingLocations && (
-                            <InputAdornment position="end">
-                              <CircularProgress size={20} />
-                            </InputAdornment>
-                          )}
-                          {locStatsLoading && (
-                            <InputAdornment position="end">
-                              <CircularProgress size={20} />
-                            </InputAdornment>
-                          )}
-                          {locSelected && (
-                            <InputAdornment position="end">
-                              <CloseIcon
-                                fontSize="small"
-                                onClick={() => {
-                                  setLocSelected(null);
-                                  setLocalInput('');
-                                  if (locInputRef.current) {
-                                    try { locInputRef.current.value = ''; } catch { /* ignore */ }
-                                  }
-                                  setShowLocationDropdown(false);
-                                  setSelectedSuggestionIndex(-1);
-                                  setLocStats({
-                                    totalPhones: 0,
-                                    totalSwitches: 0,
-                                    phonesWithKEM: 0,
-                                    phonesByModel: [],
-                                    phonesByModelJustiz: [],
-                                    phonesByModelJVA: [],
-                                    vlanUsage: [],
-                                    switches: [],
-                                    kemPhones: [],
-                                  });
-                                  setLocStatsLoading(false);
-                                  if (saveStatisticsPrefs) {
-                                    saveStatisticsPrefs({ lastSelectedLocation: null });
-                                  }
-                                }}
-                                sx={{
-                                  cursor: 'pointer',
-                                  '&:hover': { color: 'primary.main' }
-                                }}
-                              />
-                            </InputAdornment>
-                          )}
-                        </>
+                        <InputAdornment position="end">
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -0.5 }}>
+                            {locSelected && (
+                              <Tooltip title="Auswahl löschen">
+                                <IconButton
+                                  aria-label="Clear location selection"
+                                  size="small"
+                                  edge="end"
+                                  onClick={clearLocationSelection}
+                                  sx={{
+                                    width: 32,
+                                    height: 32,
+                                    color: 'text.secondary',
+                                    '&:hover': {
+                                      color: 'primary.main',
+                                      backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.2 : 0.08),
+                                    }
+                                  }}
+                                >
+                                  <CloseIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                            <Tooltip title="Standort suchen">
+                              <span>
+                                <IconButton
+                                  aria-label="Search location"
+                                  size="small"
+                                  edge="end"
+                                  color="primary"
+                                  onClick={handleLocationSearchAction}
+                                  disabled={locationActionLoading}
+                                  sx={{
+                                    width: 34,
+                                    height: 34,
+                                    borderRadius: 1.5,
+                                    backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.32 : 0.14),
+                                    color: 'primary.main',
+                                    transition: 'background-color 120ms ease, transform 120ms ease',
+                                    '&:hover': {
+                                      backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.38 : 0.2),
+                                      transform: 'translateY(-1px)'
+                                    },
+                                    '&.Mui-disabled': {
+                                      backgroundColor: (theme) => alpha(theme.palette.action.disabledBackground, 0.9),
+                                      color: (theme) => theme.palette.action.disabled,
+                                      transform: 'none'
+                                    }
+                                  }}
+                                >
+                                  {locationActionLoading ? (
+                                    <CircularProgress size={18} thickness={5} sx={{ color: 'inherit' }} />
+                                  ) : (
+                                    <SearchIcon fontSize="small" />
+                                  )}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Box>
+                        </InputAdornment>
                       ),
                     }}
                   />
@@ -2949,51 +3031,119 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                 <Grid item xs={12} md={6}>
                   <Autocomplete
                     options={Object.values(cityNameByCode3).sort()}
-                    freeSolo={false} // Change to false for better performance
-                    openOnFocus={false} // Disable auto-open for performance
-                    // Keep popup size fixed and make options scrollable
-                    slotProps={{
-                      paper: { sx: { maxHeight: 200, overflowY: 'auto' } }, // Reduced height
-                      listbox: { sx: { maxHeight: 160, overflowY: 'auto' } },
+                    freeSolo={false}
+                    openOnFocus={false}
+                    disableClearable
+                    forcePopupIcon={false}
+                    disableListWrap
+                    sx={{ width: '100%' }}
+                    inputValue={citySearchInput}
+                    onInputChange={(event, value, reason) => {
+                      if (reason === 'input' || reason === 'clear' || reason === 'reset') {
+                        setCitySearchInput(value || '');
+                        if (!value) {
+                          setLocError(null);
+                        }
+                      }
+                      if (reason === 'input') {
+                        setCityAutocompleteOpen(Boolean(value));
+                      } else if (reason === 'clear' || reason === 'reset') {
+                        setCityAutocompleteOpen(false);
+                      }
                     }}
-                    ListboxProps={{
-                      style: { maxHeight: 160, overflowY: 'auto' },
-                    }}
-                    limitTags={5}
-                    disableListWrap={true}
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label="Search by City Name"
-                        placeholder="Type city name (e.g., München, Augsburg)"
-                        size="small"
-                      />
-                    )}
                     onChange={handleCityNameChange}
                     filterOptions={filterCityOptions}
                     getOptionLabel={(option) => option}
+                    open={cityAutocompleteOpen}
+                    onOpen={() => setCityAutocompleteOpen(true)}
+                    onClose={() => setCityAutocompleteOpen(false)}
+                    slotProps={{
+                      paper: { sx: { maxHeight: 200, overflowY: 'auto' } },
+                      listbox: { sx: { maxHeight: 160, overflowY: 'auto' } },
+                    }}
+                    ListboxProps={{ style: { maxHeight: 160, overflowY: 'auto' } }}
                     renderOption={(props, option) => {
-                      // Find the corresponding location code
-                      const cityCode = Object.entries(cityNameByCode3).find(([code, name]) =>
-                        name === option
-                      )?.[0];
-
-                      // Extract key from props to avoid React warning
+                      const cityCode = Object.entries(cityNameByCode3).find(([code, name]) => name === option)?.[0];
                       const { key, ...otherProps } = props;
-
                       return (
                         <li key={key} {...otherProps}>
                           <Box>
                             <Typography variant="body2">{option}</Typography>
                             {cityCode && (
-                              <Typography variant="caption" color="text.secondary">
-                                Code: {cityCode}
-                              </Typography>
+                              <Typography variant="caption" color="text.secondary">Code: {cityCode}</Typography>
                             )}
                           </Box>
                         </li>
                       );
                     }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Search by City Name"
+                        placeholder="Type city name"
+                        size="small"
+                        fullWidth
+                        onFocus={() => setCityAutocompleteOpen(true)}
+                        InputProps={{
+                          ...params.InputProps,
+                          endAdornment: (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -0.5 }}>
+                              {citySearchInput && (
+                                <Tooltip title="Eingabe löschen">
+                                  <IconButton
+                                    aria-label="Clear city search"
+                                    size="small"
+                                    edge="end"
+                                    onClick={clearCitySearchInput}
+                                    sx={{
+                                      width: 32,
+                                      height: 32,
+                                      color: 'text.secondary',
+                                      '&:hover': {
+                                        color: 'primary.main',
+                                        backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.2 : 0.08),
+                                      }
+                                    }}
+                                  >
+                                    <CloseIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              <Tooltip title="Stadt suchen">
+                                <span>
+                                  <IconButton
+                                    aria-label="Search by city"
+                                    size="small"
+                                    edge="end"
+                                    color="primary"
+                                    onClick={handleCitySearchAction}
+                                    sx={{
+                                      width: 34,
+                                      height: 34,
+                                      borderRadius: 1.5,
+                                      backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.32 : 0.14),
+                                      color: 'primary.main',
+                                      transition: 'background-color 120ms ease, transform 120ms ease',
+                                      '&:hover': {
+                                        backgroundColor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.38 : 0.2),
+                                        transform: 'translateY(-1px)'
+                                      },
+                                      '&.Mui-disabled': {
+                                        backgroundColor: (theme) => alpha(theme.palette.action.disabledBackground, 0.9),
+                                        color: (theme) => theme.palette.action.disabled,
+                                        transform: 'none'
+                                      }
+                                    }}
+                                  >
+                                    <SearchIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            </Box>
+                          ),
+                        }}
+                      />
+                    )}
                   />
                 </Grid>
               </Grid>
