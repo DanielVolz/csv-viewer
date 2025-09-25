@@ -178,6 +178,20 @@ function CSVSearch() {
     prevRef.current = { ...current, __initialized: true };
   }, [previewLoading, previewData, missingPreview, searchBlocked, previewError, searchTerm, hasSearched, searchLoading]);
 
+  // Remove all whitespace characters from a value
+  const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
+
+  // Normalize input MACs (handles optional SEP/sep prefix) to canonical condensed 12-hex (uppercase), e.g., AABBCCDDEEFF
+  const normalizeMacInput = useCallback((v) => {
+    if (!v) return null;
+    let s = stripAllWhitespace(String(v));
+    // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
+    s = s.replace(/^sep[-_:]?/i, '');
+    const hex = s.replace(/[^0-9A-Fa-f]/g, '');
+    if (hex.length !== 12) return null;
+    return hex.toUpperCase();
+  }, [stripAllWhitespace]);
+
   useEffect(() => {
     console.debug('[CSVSearch] mounted');
     mountedRef.current = true;
@@ -207,21 +221,7 @@ function CSVSearch() {
         clearTimeout(sanitizeTimeoutRef.current);
       }
     };
-  }, []);
-
-  // Remove all whitespace characters from a value
-  const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
-
-  // Normalize input MACs (handles optional SEP/sep prefix) to canonical condensed 12-hex (uppercase), e.g., AABBCCDDEEFF
-  const normalizeMacInput = useCallback((v) => {
-    if (!v) return null;
-    let s = stripAllWhitespace(String(v));
-    // strip optional Cisco SEP prefix (case-insensitive), with optional separator after it
-    s = s.replace(/^sep[-_:]?/i, '');
-    const hex = s.replace(/[^0-9A-Fa-f]/g, '');
-    if (hex.length !== 12) return null;
-    return hex.toUpperCase();
-  }, [stripAllWhitespace]);
+  }, [normalizeMacInput]);
 
   // If there is an initial query (?q=...), trigger search once not blocked
   useEffect(() => {
@@ -244,7 +244,7 @@ function CSVSearch() {
         } catch { }
       });
     }
-  }, [searchBlocked, includeHistorical, recordMac, searchAll, normalizeMacInput, stripAllWhitespace]);
+  }, [searchBlocked, includeHistorical, missingPreview, recordMac, searchAll, normalizeMacInput, stripAllWhitespace]);
 
   // No stuck timer needed anymore
 
@@ -341,7 +341,7 @@ function CSVSearch() {
         setHasSearched(true);
       }
     });
-  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac, includeHistorical]);
+  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac, includeHistorical, missingPreview]);
 
   const handleSwitchPortClick = useCallback((switchPort) => {
     // Currently just copies to clipboard, but could trigger search

@@ -269,7 +269,6 @@ const FileInfoBox = React.memo(({ compact = false }) => {
               } catch { }
               const dateOut = raw ? (timeStr ? `${raw} ${timeStr}` : raw) : '-';
               const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
-              const fallbackUsing = Boolean(fileInfo?.using_fallback);
               return (
                 <>
                   Current File: <strong>netspeed.csv</strong> • Created: <strong><Box component="span" sx={{ color: isToday ? 'success.main' : 'inherit' }}>{dateOut}</Box></strong> • Records: <strong>{fileInfo?.line_count?.toLocaleString() || '0'}</strong>

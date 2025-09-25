@@ -1,6 +1,6 @@
 import React from 'react';
-import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, ListItemButton, ListItemIcon, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Snackbar, Divider, InputAdornment, CircularProgress, IconButton } from '@mui/material';
-import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { Box, Card, CardContent, Grid, Typography, List, ListItem, ListItemText, ListItemButton, ListItemIcon, Paper, Skeleton, Alert, Autocomplete, TextField, Chip, Accordion, AccordionSummary, AccordionDetails, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Button, Divider, InputAdornment, CircularProgress, IconButton } from '@mui/material';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LineChart } from '@mui/x-charts';
 import { alpha } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -8,7 +8,6 @@ import CloseIcon from '@mui/icons-material/Close';
 import SearchIcon from '@mui/icons-material/Search';
 import PhoneIcon from '@mui/icons-material/Phone';
 import RouterIcon from '@mui/icons-material/Router';
-import LocationOnIcon from '@mui/icons-material/LocationOn';
 import LocationCityIcon from '@mui/icons-material/LocationCity';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
@@ -276,11 +275,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const statsHydratedRef = React.useRef(false);
   // Timeline state (configurable days)
   const [timeline, setTimeline] = React.useState({ loading: false, error: null, series: [] });
-  const [backfillInfo, setBackfillInfo] = React.useState(null);
   const [timelineDays, setTimelineDays] = React.useState(0); // 0 = all days by default
   const timelineLimitRef = React.useRef(0);
   // Top locations aggregate timeline state
-  const [topCount, setTopCount] = React.useState(10);
   const [topExtras, setTopExtras] = React.useState('');
   const [topDays, setTopDays] = React.useState(() => {
     try {
@@ -418,8 +415,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       return null;
     }
   }); // Debounced version for API calls
-  const [snackbar, setSnackbar] = React.useState({ open: false, message: '' });
-  const [isUiPending, startTransition] = React.useTransition();
+  const [, startTransition] = React.useTransition();
   const [locStats, setLocStats] = React.useState({
     query: '',
     mode: '',
@@ -436,8 +432,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const locationActionLoading = isSearchingLocations || locStatsLoading;
 
   // Switch Port Cache für Statistics Switches
-  const [switchPortCache, setSwitchPortCache] = React.useState({});
-
   // Location-specific timeline state
   const [locTimeline, setLocTimeline] = React.useState({ loading: false, error: null, series: [] });
   const locTimelineLoadedKeyRef = React.useRef('');
@@ -744,29 +738,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     };
   }, []);
 
-  // Simple handlers for the new TextField approach
-  const handleLocationInputChangeOld = React.useCallback((e) => {
-    const val = e.target.value;
-    setLocalInput(val);
-
-    // Clear selection if input is empty
-    if (!val || val.trim() === '') {
-      setLocSelected(null);
-      setLocStats({
-        totalPhones: 0,
-        totalSwitches: 0,
-        phonesWithKEM: 0,
-        phonesByModel: [],
-        phonesByModelJustiz: [],
-        phonesByModelJVA: [],
-        vlanUsage: [],
-        switches: [],
-        kemPhones: [],
-      });
-      setLocStatsLoading(false);
-    }
-  }, []);
-
   // Update localInput display when city names are loaded or location changes
   React.useEffect(() => {
     if (locSelected && cityNameByCode3) {
@@ -863,10 +834,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     return filtered.slice(0, 50); // Limit for performance
   }, []);
 
-  const handleSnackbarClose = React.useCallback(() => {
-    setSnackbar(prev => ({ ...prev, open: false }));
-  }, []);
-
   React.useEffect(() => {
     // Rehydrate saved statistics preferences on first render
     try {
@@ -944,48 +911,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     // Keep Top Locations fixed to Top 10; don't persist topCount
     saveStatisticsPrefs?.({ topExtras, topDays, topKpi });
   }, [topExtras, topDays, topKpi, saveStatisticsPrefs]);
-
-  // Funktion um Switch Port für einen Hostname zu holen
-  const getSwitchPortForHostname = React.useCallback(async (hostname) => {
-    if (!hostname) return null;
-
-    // Prüfe Cache zuerst
-    if (switchPortCache[hostname]) {
-      return switchPortCache[hostname];
-    }
-
-    try {
-      // Suche nach dem Hostname um Switch Port Daten zu bekommen
-      const response = await fetch(`/api/search/?query=${encodeURIComponent(hostname)}&field=Switch Hostname&include_historical=false`);
-      if (!response.ok) return null;
-
-      const result = await response.json();
-      if (result.success && result.data && result.data.length > 0) {
-        // Finde den ersten Eintrag mit Switch Port Daten
-        const entry = result.data.find(row => row && row["Switch Port"]);
-        if (entry && entry["Switch Port"]) {
-          const switchPort = entry["Switch Port"];
-          // Cache das Ergebnis
-          setSwitchPortCache(prev => ({
-            ...prev,
-            [hostname]: switchPort
-          }));
-          return switchPort;
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to fetch switch port for hostname:', hostname, error);
-    }
-
-    // Cache auch negative Ergebnisse um wiederholte Anfragen zu vermeiden
-    setSwitchPortCache(prev => ({
-      ...prev,
-      [hostname]: null
-    }));
-
-    return null;
-  }, [switchPortCache]);
-
   React.useEffect(() => {
     if (!statsHydratedRef.current) return;
     // Persist selected keys but throttle to avoid excessive writes
@@ -1126,7 +1051,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     const keys = topTimeline.keys || [];
     const labels = topTimeline.labels || {};
     const byKey = topTimeline.seriesByKey || {};
-    const dates = topTimeline.dates || [];
     const getVal = (k) => {
       const arr = byKey[k]?.[topKpi] || [];
       return Number(arr.length ? arr[arr.length - 1] : 0);
@@ -1176,20 +1100,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     })();
     return () => { abort = true; controller.abort(); };
   }, [timelineDays]);
-
-  const triggerBackfill = React.useCallback(async () => {
-    try {
-      setBackfillInfo('Starting snapshot backfill…');
-      // Fire-and-forget both; errors are non-fatal here
-      await Promise.allSettled([
-        fetch('/api/search/index/backfill-stats', { method: 'POST' }),
-        fetch('/api/search/index/backfill-locations', { method: 'POST' }),
-      ]);
-      setBackfillInfo('Backfill started. Data will appear shortly.');
-    } catch (_) {
-      setBackfillInfo('Failed to trigger backfill. Check backend logs.');
-    }
-  }, []);
 
   // Apply locSelected immediately (changed only by Enter or suggestion click)
   React.useEffect(() => {
@@ -1307,7 +1217,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       }
     })();
     return () => { abort = true; controller.abort(); };
-  }, [debouncedLocSelected, locTimelineExpanded]);
+  }, [debouncedLocSelected, locTimelineExpanded, locTimeline.series]);
 
   // Placeholder series to keep charts stable when no KPI is selected (Global/Per-location)
   const globalEmptySeries = React.useMemo(() => (
@@ -3716,7 +3626,6 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                             // Handle both old format (CSV fields) and new format (backend objects)
                             const mac = p.mac || p['MAC Address'];
                             const ip = p.ip || p['IP Address'];
-                            const model = p.model || p['Model Name'];
                             const serial = p.serial || p['Serial Number'];
                             const switchHostname = p.switch || p['Switch Hostname'];
                             // Ensure a unique, stable key (avoid collapsing duplicates visually)
