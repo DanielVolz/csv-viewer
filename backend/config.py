@@ -13,6 +13,8 @@ class Settings(BaseSettings):
 
     # File Settings
     CSV_FILES_DIR: str = "/app/data"  # Default, can be overridden by environment variable
+    NETSPEED_CURRENT_DIR: str = "/app/data"
+    NETSPEED_HISTORY_DIR: str = "/app/data"
 
     # Database Settings
     REDIS_URL: str = "redis://redis:{REDIS_PORT}"
@@ -54,6 +56,29 @@ def get_settings() -> Settings:
     # Dynamic ports / paths
     s.PORT = int(os.environ.get("BACKEND_PORT", 8000))
     s.CSV_FILES_DIR = "/app/data"
+    # Optional split layout from env (host paths). If unset, fallback to CSV_FILES_DIR.
+    s.NETSPEED_CURRENT_DIR = os.environ.get("NETSPEED_CURRENT_DIR", s.CSV_FILES_DIR)
+    s.NETSPEED_HISTORY_DIR = os.environ.get("NETSPEED_HISTORY_DIR", s.CSV_FILES_DIR)
+
+    # Normalize host-style paths to container paths if necessary.
+    # We assume CSV_FILES_DIR (host) is mounted at /app/data inside container.
+    try:
+        import pathlib
+        host_base = os.environ.get("CSV_FILES_DIR", s.CSV_FILES_DIR)
+        container_base = "/app/data"
+        def _normalize(p: str) -> str:
+            pp = pathlib.Path(p)
+            if pp.exists():
+                return str(pp)
+            if host_base and p.startswith(host_base):
+                candidate = container_base + p[len(host_base):]
+                if pathlib.Path(candidate).exists():
+                    return candidate
+            return p
+        s.NETSPEED_CURRENT_DIR = _normalize(s.NETSPEED_CURRENT_DIR)
+        s.NETSPEED_HISTORY_DIR = _normalize(s.NETSPEED_HISTORY_DIR)
+    except Exception:
+        pass
 
     # Compose service URLs
     redis_port = os.environ.get("REDIS_PORT", 6379)

@@ -173,11 +173,14 @@ Usage:
 # Default (uses test-data/netspeed.csv)
 python3 scripts/analytics/count_cities.py
 
-# Specify a different file (e.g. production mounted path)
-python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/netspeed.csv
+# Specify a different file (e.g. production mounted path - new layout current file)
+python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/data/netspeed/netspeed.csv
+
+# Historical snapshot example (.0 = yesterday in new layout)
+python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/data/history/netspeed/netspeed.csv.0
 
 # Show top 10 cities by occurrence
-python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/netspeed.csv --top 10
+python3 scripts/analytics/count_cities.py --file /usr/scripts/netspeed/data/netspeed/netspeed.csv --top 10
 ```
 
 The script auto-detects the delimiter (`;` or `,`) and attempts several likely column positions or a fallback scan to find the switch hostname, then extracts the city code (substring before the first `-`).

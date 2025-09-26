@@ -795,33 +795,33 @@ def index_all_csv_files(self, directory_path: str) -> dict:
     # Protection against concurrent indexing tasks
     try:
         index_state = load_state()
-
-        # Fix: Nach Reindex explizit snapshot_current_with_details für aktuelle Datei ausführen (Location-Statistiken)
-        current_file_path = Path(directory_path) / "netspeed.csv"
-        if current_file_path.exists():
+        # Determine current file path (support nested layout /<root>/netspeed/netspeed.csv first)
+        current_candidates = [
+            Path(directory_path) / "netspeed" / "netspeed.csv",
+            Path(directory_path) / "netspeed.csv",
+        ]
+        current_file_path = None
+        for cand in current_candidates:
+            if cand.exists():
+                current_file_path = cand
+                break
+        if current_file_path is not None:
             try:
-                logger.info("Executing snapshot_current_with_details for current netspeed.csv after reindex (location stats fix)")
+                logger.info("Executing snapshot_current_with_details for detected current netspeed.csv before bulk indexing (location stats fix)")
                 from tasks.tasks import snapshot_current_with_details
-                from datetime import datetime
-                # Schreibe Location-Daten mit aktuellem Datum
-                today_str = datetime.now().strftime('%Y-%m-%d')
-
-                # Execute inline to ensure it completes immediately
+                from datetime import datetime as _dt
+                today_str = _dt.now().strftime('%Y-%m-%d')
                 result = snapshot_current_with_details(file_path=str(current_file_path), force_date=today_str)
-                logger.info(f"snapshot_current_with_details result: {result}")
-
-                # Invalidate caches immediately after creating location stats
+                logger.info(f"Pre-index snapshot_current_with_details result: {result}")
                 try:
                     from api.stats import invalidate_caches as _invalidate
-                    _invalidate("post-reindex location stats creation")
-                    logger.info("Invalidated stats caches after location stats creation")
+                    _invalidate("pre-index location stats creation")
                 except Exception as cache_e:
-                    logger.debug(f"Cache invalidation failed: {cache_e}")
-
+                    logger.debug(f"Cache invalidation failed (pre-index): {cache_e}")
             except Exception as e:
-                logger.error(f"snapshot_current_with_details for current netspeed.csv failed: {e}")
-                # This is critical for location stats, so we should still return success but warn
-                logger.warning("Location statistics may be incomplete - manual reindex recommended")
+                logger.warning(f"Pre-index snapshot_current_with_details failed: {e}")
+        else:
+            logger.info("No current netspeed.csv detected in candidates before indexing")
         active_task = index_state.get("active_task", {})
         if active_task.get("status") == "running":
             existing_task_id = active_task.get("task_id")
@@ -840,24 +840,54 @@ def index_all_csv_files(self, directory_path: str) -> dict:
 
     try:
         path = Path(directory_path)
+        scanned_dirs: List[Path] = [path]
+        nested_current_dir = path / "netspeed"
+        nested_history_dir = path / "history" / "netspeed"
+        for d in (nested_current_dir, nested_history_dir):
+            if d.exists() and d.is_dir():
+                scanned_dirs.append(d)
         patterns = ["netspeed.csv", "netspeed.csv.*", "netspeed.csv_bak"]
-        files: List[Path] = []
-        for pattern in patterns:
-            files.extend(sorted(path.glob(pattern), key=lambda x: str(x)))
+        files_set: dict[str, Path] = {}
+        def _add(p: Path):
+            try:
+                rp = str(p.resolve())
+                if rp not in files_set:
+                    files_set[rp] = p
+            except Exception:
+                pass
+        for d in scanned_dirs:
+            for pattern in patterns:
+                for p in d.glob(pattern):
+                    if p.is_file() and p.name.startswith("netspeed.csv"):
+                        _add(p)
+        all_found_files = list(files_set.values())
+        netspeed_files = [f for f in all_found_files if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))]
+        backup_files = [f for f in all_found_files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
 
-        netspeed_files = [f for f in files if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))]
-        backup_files = [f for f in files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
-        base_files = [f for f in netspeed_files if f.name == "netspeed.csv"]
+        # Separate current vs historical (support multiple current candidates – dedupe by resolved path)
+        current_files = [f for f in netspeed_files if f.name == "netspeed.csv"]
         historical_files_all = [f for f in netspeed_files if f.name != "netspeed.csv"]
-        files = base_files + historical_files_all + backup_files
 
-        logger.info(f"Found {len(files)} files matching patterns {patterns} and archive: {[str(f.relative_to(path)) for f in files]}")
+        # Sort historical numerically by suffix netspeed.csv.N
+        def _hist_key(p: Path):
+            name = p.name
+            if name.startswith("netspeed.csv."):
+                suf = name.split("netspeed.csv.", 1)[1]
+                if suf.isdigit():
+                    return int(suf)
+            return 1_000_000  # large number to push unexpected names to end
+        historical_files_all.sort(key=_hist_key)
+        files = historical_files_all + current_files + backup_files
+
+        logger.info(
+            "Discovered %d netspeed-related files (hist=%d, current=%d, backups=%d) in directories: %s",
+            len(files), len(historical_files_all), len(current_files), len(backup_files),
+            ", ".join(str(d) for d in scanned_dirs)
+        )
         if not files:
-            return {"status": "warning", "message": f"No CSV files found in {directory_path}", "directory": directory_path, "files_processed": 0, "total_documents": 0}
+            return {"status": "warning", "message": f"No CSV files found in {directory_path} (scanned nested dirs)", "directory": directory_path, "files_processed": 0, "total_documents": 0}
 
-        current_files = [f for f in files if f.name == "netspeed.csv"]
-        other_files = [f for f in files if f.name != "netspeed.csv"]
-        ordered_files = sorted(other_files, key=lambda x: x.name) + current_files
+        ordered_files = files  # already ordered: historical numeric -> current -> backups
 
         results: List[Dict] = []
         total_documents = 0
@@ -1060,8 +1090,17 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             logger.warning(f"Failed saving index state: {e}")
 
         # Post-index data repair & final snapshots for current file
-        current_file_path = Path(directory_path) / "netspeed.csv"
-        if current_file_path.exists():
+        # Detect current file in nested or flat layout
+        current_candidates_final = [
+            Path(directory_path) / "netspeed" / "netspeed.csv",
+            Path(directory_path) / "netspeed.csv",
+        ]
+        current_file_path = None
+        for cand in current_candidates_final:
+            if cand.exists():
+                current_file_path = cand
+                break
+        if current_file_path and current_file_path.exists():
             from datetime import datetime as _dt
             today_str = _dt.now().strftime('%Y-%m-%d')
             try:

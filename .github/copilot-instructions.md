@@ -159,6 +159,10 @@ The `utils/file_watcher.py` automatically triggers reindexing:
 Core settings in `.env`:
 ```bash
 CSV_FILES_DIR=/app/data  # Always use absolute path
+# Optional split layout (if current and historical netspeed files are stored separately)
+# If unset they fall back to CSV_FILES_DIR
+NETSPEED_CURRENT_DIR=/usr/scripts/netspeed/data/netspeed
+NETSPEED_HISTORY_DIR=/usr/scripts/netspeed/data/history/netspeed
 FRONTEND_DEV_PORT=3001   # Dev port differs from prod
 BACKEND_PORT=8000
 OPENSEARCH_PORT=9200

@@ -25,6 +25,60 @@ router = APIRouter(
     tags=["files"]
 )
 
+@router.get("/health")
+async def files_health():
+    """Diagnostic endpoint: reports environment paths, resolved container paths,
+    existence, size, and basic permission bits for current & history netspeed files.
+    """
+    try:
+        from config import settings as _settings
+        import os, stat
+        cur_env = _settings.NETSPEED_CURRENT_DIR
+        hist_env = _settings.NETSPEED_HISTORY_DIR
+        mount_env = _settings.CSV_FILES_DIR
+        # Inside container expected mapping
+        container_mount = Path("/app/data")
+        current_expected = container_mount / "netspeed" / "netspeed.csv"
+        history_dir_expected = container_mount / "history" / "netspeed"
+        history_files = []
+        if history_dir_expected.exists():
+            for p in sorted(history_dir_expected.glob("netspeed.csv.*")):
+                try:
+                    st = p.stat()
+                    history_files.append({
+                        "name": p.name,
+                        "size": st.st_size,
+                        "mtime": st.st_mtime
+                    })
+                except Exception:
+                    pass
+        def _file_info(p: Path):
+            if not p.exists():
+                return {"exists": False}
+            try:
+                st = p.stat()
+                mode = stat.S_IMODE(st.st_mode)
+                return {
+                    "exists": True,
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                    "perm_octal": oct(mode),
+                    "readable": os.access(p, os.R_OK)
+                }
+            except Exception as e:
+                return {"exists": True, "error": str(e)}
+        return {
+            "mountEnv": mount_env,
+            "currentEnv": cur_env,
+            "historyEnv": hist_env,
+            "containerMount": str(container_mount),
+            "currentFile": _file_info(current_expected),
+            "historyCount": len(history_files),
+            "historyFilesSample": history_files[:10]
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 @router.get("/", response_model=List[dict])
 async def list_files():
@@ -34,43 +88,66 @@ async def list_files():
     Also includes line count for each file.
     """
     try:
-        # Get path to CSV files directory
-        csv_dir = Path("/app/data")
+        from config import settings as _settings
+        roots: list[Path] = []
+        roots_set = {Path('/app/data')}
+        # Add nested mount variations if they exist
+        for r in list(roots_set):
+            if (r / 'data').exists():
+                roots_set.add(r / 'data')
+        roots = [p for p in roots_set if p.exists()]
 
-        # List all netspeed CSV files
-        files = []
-        if csv_dir.exists():
-            for file_path in csv_dir.glob("netspeed.csv*"):
-                file_model = FileModel.from_path(str(file_path))
+        files: list[dict] = []
+        seen: set[str] = set()
 
-                # Count lines in the file (subtract 1 for header if file has content)
-                line_count = 0
+        def add_file(p: Path):
+            real = str(p.resolve())
+            if real in seen:
+                return
+            seen.add(real)
+            try:
+                file_model = FileModel.from_path(str(p))
+            except Exception:
+                return
+            # Count lines
+            line_count = 0
+            try:
+                with open(p, 'r') as f:
+                    line_count = sum(1 for _ in f)
+                    if line_count > 0:
+                        line_count -= 1
+            except Exception:
+                pass
+            file_dict = file_model.dict()
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                mtime = p.stat().st_mtime
+                file_dict['date'] = _dt.fromtimestamp(mtime).strftime('%Y-%m-%d')
+                file_dict['mtime'] = mtime
+                file_dict['datetime'] = _dt.fromtimestamp(mtime, tz=_tz.utc).isoformat()
                 try:
-                    with open(file_path, 'r') as f:
-                        line_count = sum(1 for _ in f)
-                        # Subtract 1 for header if file has content
-                        if line_count > 0:
-                            line_count -= 1
-                except Exception as e:
-                    logger.error(f"Error counting lines in {file_path}: {e}")
-
-                # Convert to dict and add line count
-                file_dict = file_model.dict()
-                # Always use the actual file's timestamp for shown date to avoid suffix-based drift
-                try:
-                    from datetime import datetime as _dt, timezone as _tz
-                    mtime = file_path.stat().st_mtime
-                    file_dict["date"] = _dt.fromtimestamp(mtime).strftime('%Y-%m-%d')
-                    file_dict["mtime"] = mtime
-                    file_dict["datetime"] = _dt.fromtimestamp(mtime, tz=_tz.utc).isoformat()
-                    try:
-                        file_dict["time"] = _dt.fromtimestamp(mtime).strftime('%H:%M')
-                    except Exception:
-                        pass
+                    file_dict['time'] = _dt.fromtimestamp(mtime).strftime('%H:%M')
                 except Exception:
-                    file_dict["date"] = None
-                file_dict["line_count"] = line_count
-                files.append(file_dict)
+                    pass
+            except Exception:
+                file_dict['date'] = None
+            file_dict['line_count'] = line_count
+            files.append(file_dict)
+
+        for root in roots:
+            # flat current + history in same root
+            for p in root.glob('netspeed.csv*'):
+                add_file(p)
+            # nested current
+            nc = root / 'netspeed'
+            if nc.exists():
+                for p in nc.glob('netspeed.csv*'):
+                    add_file(p)
+            # nested history
+            nh = root / 'history' / 'netspeed'
+            if nh.exists():
+                for p in nh.glob('netspeed.csv.*'):
+                    add_file(p)
 
         # Sort files: netspeed.csv first, then netspeed.csv.0, netspeed.csv.1, etc.
         def sort_key(f):
@@ -113,7 +190,12 @@ async def get_netspeed_info():
     try:
         # Get path to current CSV file
         csv_dir = Path("/app/data")
-        current_file = csv_dir / "netspeed.csv"
+        # Candidate current file paths (nested preferred)
+        current_candidates = [
+            csv_dir / "netspeed" / "netspeed.csv",
+            csv_dir / "netspeed.csv",
+        ]
+        current_file = next((c for c in current_candidates if c.exists()), current_candidates[0])
         # We'll pick the latest available historical file if current is missing
         fallback_file: Optional[Path] = None
 
@@ -122,17 +204,23 @@ async def get_netspeed_info():
 
         # If current is missing, try historical files in order: .0, .1, .2, ...
         if not current_file.exists():
-            # Build ordered list of netspeed.csv.N files
-            candidates = []
-            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
-                name = p.name
-                try:
-                    suf = name.split("netspeed.csv.", 1)[1]
-                    if suf.isdigit():
-                        candidates.append(p)
-                except Exception:
-                    continue
-            # Choose the first available (smallest N = most recent after today)
+            # Collect historical candidates from nested history and flat layout
+            hist_dirs = [
+                csv_dir / "history" / "netspeed",
+                csv_dir
+            ]
+            candidates: list[Path] = []
+            for hd in hist_dirs:
+                if hd.exists():
+                    for p in hd.glob("netspeed.csv.*"):
+                        name = p.name
+                        try:
+                            suf = name.split("netspeed.csv.", 1)[1]
+                            if suf.isdigit():
+                                candidates.append(p)
+                        except Exception:
+                            continue
+            # Pick smallest numeric suffix (= most recent following current)
             for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
                 if cand.exists():
                     fallback_file = cand
@@ -251,24 +339,38 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
     try:
         # Get path to CSV file
         csv_dir = Path("/app/data")
-        file_path = csv_dir / filename
+        # Resolve filename across nested structure
+        if filename == "netspeed.csv":
+            for c in [csv_dir / "netspeed" / "netspeed.csv", csv_dir / "netspeed.csv"]:
+                if c.exists():
+                    file_path = c
+                    break
+            else:
+                file_path = csv_dir / "netspeed" / "netspeed.csv"  # default candidate
+        else:
+            # Historical may reside under history/netspeed or flat
+            direct = csv_dir / filename
+            nested_hist = csv_dir / "history" / "netspeed" / filename
+            file_path = nested_hist if nested_hist.exists() else direct
 
         using_fallback = False
         actual_filename = filename
 
         # If requesting netspeed.csv but it doesn't exist, try fallback
         if filename == "netspeed.csv" and not file_path.exists():
-            # Try the most recent historical netspeed.csv.N, preferring .0, then .1, ...
-            candidates = []
-            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
-                name = p.name
-                try:
-                    suf = name.split("netspeed.csv.", 1)[1]
-                    if suf.isdigit():
-                        candidates.append(p)
-                except Exception:
-                    continue
-            # Choose smallest suffix (0 first)
+            # Collect historical candidates from nested history and flat
+            hist_dirs = [csv_dir / "history" / "netspeed", csv_dir]
+            candidates: list[Path] = []
+            for hd in hist_dirs:
+                if hd.exists():
+                    for p in hd.glob("netspeed.csv.*"):
+                        name = p.name
+                        try:
+                            suf = name.split("netspeed.csv.", 1)[1]
+                            if suf.isdigit():
+                                candidates.append(p)
+                        except Exception:
+                            continue
             chosen = None
             for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
                 if cand.exists():
@@ -480,8 +582,19 @@ async def reindex_current_file():
             pass
         from utils.opensearch import OpenSearchConfig
 
-        # Get path to current CSV file
-        csv_file = "/app/data/netspeed.csv"
+        # Determine path to current CSV file (support nested layout /app/data/netspeed/netspeed.csv first)
+        candidates = [
+            Path("/app/data/netspeed/netspeed.csv"),
+            Path("/app/data/netspeed.csv"),
+        ]
+        csv_file_path = None
+        for c in candidates:
+            if c.exists():
+                csv_file_path = c
+                break
+        if not csv_file_path:
+            raise HTTPException(status_code=404, detail="netspeed.csv file not found in expected locations")
+        csv_file = str(csv_file_path)
 
         # Check if file exists
         if not Path(csv_file).exists():
@@ -522,7 +635,6 @@ async def reindex_current_file():
             # Trigger a fresh snapshot WITH details (global & per-location) so Statistics has up-to-date details
             try:
                 from tasks.tasks import snapshot_current_with_details as _snap
-                # Try Celery first
                 queued = False
                 try:
                     _snap.delay(csv_file)
@@ -530,14 +642,12 @@ async def reindex_current_file():
                     logger.info("Queued snapshot_current_with_details after fast reindex")
                 except Exception as e:
                     logger.debug(f"Could not queue snapshot_current_with_details (will run inline): {e}")
-                # Fallback: run inline to guarantee details in dev even if Celery lacks the task
                 if not queued:
                     try:
                         logger.info("Running snapshot_current_with_details inline (dev fallback)")
                         _ = _snap(csv_file)
                     except Exception as e:
                         logger.warning(f"Inline snapshot_current_with_details failed: {e}")
-                # Additionally, in development always run inline to avoid stale worker task registry
                 if os.environ.get("NODE_ENV") == "development":
                     try:
                         logger.info("Development mode: also executing snapshot_current_with_details inline for determinism")
@@ -549,15 +659,12 @@ async def reindex_current_file():
 
             return {
                 "success": True,
-                "message": f"Successfully reindexed netspeed.csv with {count} documents{repair_message}",
-                "file": csv_file,
+                "message": f"Indexed current file {csv_file_path.name} with {count} documents" + repair_message,
+                "file": csv_file_path.name,
                 "documents_indexed": count
             }
         else:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to reindex netspeed.csv"
-            )
+            raise HTTPException(status_code=500, detail=f"Indexing failed for {csv_file_path.name}")
 
     except Exception as e:
         logger.error(f"Error reindexing current file: {e}")

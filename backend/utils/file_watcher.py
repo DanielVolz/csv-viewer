@@ -18,7 +18,12 @@ class CSVFileHandler(FileSystemEventHandler):
 
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
-        self.current_csv_path = self.data_dir / "netspeed.csv"
+        # Prefer nested layout (/app/data/netspeed/netspeed.csv) then flat fallback
+        candidates = [
+            self.data_dir / "netspeed" / "netspeed.csv",
+            self.data_dir / "netspeed.csv",
+        ]
+        self.current_csv_path = next((c for c in candidates if c.exists()), candidates[0])
         self.last_reindex_time = 0
         self.reindex_cooldown = 30  # 30 seconds cooldown between reindexing
 
@@ -222,9 +227,10 @@ class FileWatcher:
             # Ensure the data directory exists
             Path(self.data_dir).mkdir(parents=True, exist_ok=True)
 
-            self.observer.schedule(self.handler, self.data_dir, recursive=False)
+            # Watch base directory recursively so nested netspeed/ and history/netspeed are captured
+            self.observer.schedule(self.handler, self.data_dir, recursive=True)
             self.observer.start()
-            logger.info(f"File watcher started for directory: {self.data_dir}")
+            logger.info(f"File watcher started (recursive) for directory: {self.data_dir}")
 
         except Exception as e:
             logger.error(f"Error starting file watcher: {e}")

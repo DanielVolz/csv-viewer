@@ -926,13 +926,26 @@ class OpenSearchConfig:
         # Import DESIRED_ORDER for consistent column filtering
         from utils.csv_utils import DESIRED_ORDER
 
-        for row in rows:
+        for idx, row in enumerate(rows, start=1):
             # Clean up data as needed (handle nulls, etc.)
             doc = {k: (v if v else "") for k, v in row.items()}
 
             # Use the pre-calculated file creation date
-            if "Creation Date" in doc and file_creation_date:
+            if file_creation_date:
                 doc["Creation Date"] = file_creation_date
+
+            # Ensure File Name field exists (not part of original CSV headers)
+            if "File Name" not in doc:
+                doc["File Name"] = Path(file_path).name
+            else:
+                # Overwrite to be sure it's consistent
+                doc["File Name"] = Path(file_path).name
+
+            # Add sequential row number column '#'
+            try:
+                doc["#"] = str(idx)
+            except Exception:
+                doc["#"] = str(idx)
 
             # Index all available columns (no filtering at index level)
             final_doc = {k: str(v) for k, v in doc.items()}
@@ -2001,6 +2014,18 @@ class OpenSearchConfig:
                     logger.info(f"[MAC-first] indices={curr_indices_first} body={targeted_first}")
                     resp_first = self.client.search(index=curr_indices_first, body=targeted_first)
                     docs_first = [h.get('_source', {}) for h in resp_first.get('hits', {}).get('hits', [])]
+                    # Fallback: older indices might lack 'File Name' field – retry without MUST clause
+                    if not docs_first:
+                        try:
+                            fallback_body = targeted_first.copy()
+                            fb_query = fallback_body.get('query', {}).get('bool', {})
+                            if isinstance(fb_query, dict) and 'must' in fb_query:
+                                fb_query.pop('must', None)
+                                logger.info("[MAC-first] primary query empty, retrying without File Name must-clause")
+                                resp_fb = self.client.search(index=curr_indices_first, body=fallback_body)
+                                docs_first = [h.get('_source', {}) for h in resp_fb.get('hits', {}).get('hits', [])]
+                        except Exception as _fb_e:
+                            logger.debug(f"[MAC-first] fallback without must failed: {_fb_e}")
                     if docs_first:
                         documents.extend(docs_first)
                         logger.info(f"[MAC-first] seeded {len(docs_first)} docs from current index")
