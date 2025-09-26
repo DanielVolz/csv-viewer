@@ -49,9 +49,9 @@ The application consists of a React 18 frontend with Material-UI, a FastAPI back
    ./app.sh start arm
    ```
 
-4. **Access the application:**
-   - Frontend: [http://localhost:3000](http://localhost:3000)
-   - Backend API: [http://localhost:8000](http://localhost:8000)
+4. **Access the application (dev):**
+   - Frontend: [http://localhost:5000](http://localhost:5000)
+   - Backend API: [http://localhost:8002](http://localhost:8002)
    - OpenSearch Dashboards: [http://localhost:5601](http://localhost:5601)
 
 ### Development Setup
@@ -106,8 +106,8 @@ cd frontend && npm test            # Frontend tests
 ### Debugging Commands
 
 ```bash
-# Check service health
-curl http://localhost:8000/api/files/
+# Check service health (dev host backend: 8002)
+curl http://localhost:8002/api/files/
 
 # OpenSearch cluster health
 curl -X GET "localhost:9200/_cluster/health"

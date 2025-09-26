@@ -1604,8 +1604,28 @@ async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
             query = raw.upper()
             norm_query = _norm_txt(raw)
 
-        # Check if location stats index exists
-        if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
+        # Check if location stats index exists; if missing, try a one-off backfill (path layout changed)
+        idx_exists = False
+        try:
+            idx_exists = opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index)
+        except Exception:
+            idx_exists = False
+        if not idx_exists:
+            try:
+                from tasks.tasks import backfill_location_snapshots
+                backfill_location_snapshots("/app/data")
+                try:
+                    opensearch_config.client.indices.refresh(index=opensearch_config.stats_loc_index)
+                except Exception:
+                    pass
+                # Re-check existence after best-effort backfill
+                try:
+                    idx_exists = opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index)
+                except Exception:
+                    idx_exists = False
+            except Exception:
+                idx_exists = False
+        if not idx_exists:
             return {"success": False, "message": "Location index not found", "suggestions": []}
 
         suggestions: list[dict] = []

@@ -11,8 +11,8 @@ This is a dockerized full-stack CSV search application designed for viewing, sea
 - Download and preview CSV data through a web interface
 
 ### Key Components
-- **Frontend**: React 18 + Material-UI (MUI) 6, served on port 3000
-- **Backend**: FastAPI + Pydantic + Uvicorn, served on port 8000
+- **Frontend**: React 18 + Material-UI (MUI) 6, served on port 3000 (exposed as 5000 in dev)
+- **Backend**: FastAPI + Pydantic + Uvicorn, container listens on 8000 (exposed as 8002 in dev)
 - **Search**: OpenSearch cluster on port 9200
 - **Queue**: Redis for Celery task management on port 6379
 - **File Monitoring**: Watchdog monitors `/app/data` for CSV changes
@@ -41,29 +41,31 @@ Startup behavior update
 - Both services auto-restart on file changes
 
 ### Critical Port Information
-- **Frontend Dev**: Port 5000 (FRONTEND_DEV_PORT in .env.dev) - NOT 3000!
-- **Backend Dev**: Port 8000 (BACKEND_DEV_PORT in .env.dev)
-- **OpenSearch**: Port 9200
-- **Redis**: Port 6379
-- Frontend container internally runs on port 3000, but is exposed on port 5000 in development
+- Frontend Dev (host): 5000 (FRONTEND_DEV_PORT in .env.dev) - NOT 3000!
+- Backend Dev (host): 8002 (BACKEND_DEV_PORT in .env.dev) -> container 8000
+- OpenSearch: 9200
+- Redis: 6379
+Notes:
+- Frontend container runs on 3000, exposed on 5000 in development
+- Backend container listens on 8000, exposed on 8002 in development
 
 ### Testing Endpoints
-Use `curl` instead of browser for endpoint validation:
+Use `curl` instead of browser for endpoint validation (dev host backend is on 8002):
 ```bash
 # Health check
-curl http://localhost:8000/api/files/
+curl http://localhost:8002/api/files/
 
 # Search test
-curl "http://localhost:8000/api/search/?query=test&include_historical=true"
+curl "http://localhost:8002/api/search/?query=test&include_historical=true"
 
 # Location statistics (requires query parameter)
-curl "http://localhost:8000/api/stats/fast/by_location?q=ABX01"
+curl "http://localhost:8002/api/stats/fast/by_location?q=ABX01"
 
 # Reindex netspeed.csv only (fast, for development testing)
-curl http://localhost:8000/api/files/reindex/current
+curl http://localhost:8002/api/files/reindex/current
 
 # Reindex all CSV files (slower, comprehensive)
-curl http://localhost:8000/api/files/reindex
+curl http://localhost:8002/api/files/reindex
 
 # OpenSearch debugging
 curl -X GET "localhost:9200/_cluster/health"
@@ -156,15 +158,16 @@ The `utils/file_watcher.py` automatically triggers reindexing:
 ## Configuration Management
 
 ### Environment Variables
-Core settings in `.env`:
+Core settings in `.env` (dev host ports shown):
 ```bash
 CSV_FILES_DIR=/app/data  # Always use absolute path
 # Optional split layout (if current and historical netspeed files are stored separately)
 # If unset they fall back to CSV_FILES_DIR
 NETSPEED_CURRENT_DIR=/usr/scripts/netspeed/data/netspeed
 NETSPEED_HISTORY_DIR=/usr/scripts/netspeed/data/history/netspeed
-FRONTEND_DEV_PORT=3001   # Dev port differs from prod
-BACKEND_PORT=8000
+FRONTEND_DEV_PORT=5000   # Dev host port for frontend
+BACKEND_DEV_PORT=8002    # Dev host port for backend
+BACKEND_PORT=8000        # Backend container listen port
 OPENSEARCH_PORT=9200
 OPENSEARCH_TRANSPORT_PORT=9300
 OPENSEARCH_DASHBOARDS_PORT=5601
@@ -258,10 +261,10 @@ When adding new fields to location statistics (like VLAN usage, switches, KEM ph
 ## Critical Lessons Learned
 
 ### Port Configuration Errors
-- **NEVER assume frontend runs on port 3000 in development**
-- Frontend development port is configured as `FRONTEND_DEV_PORT=5000` in `.env.dev`
-- Container internally runs on port 3000, but host mapping is to port 5000
-- Always check `.env.dev` for actual port configurations
+- NEVER assume frontend runs on port 3000 in development
+- Frontend dev host port: `FRONTEND_DEV_PORT=5000` in `.env.dev`
+- Backend dev host port: `BACKEND_DEV_PORT=8002` in `.env.dev` (container 8000)
+- Always check `.env.dev` for actual port configurations and mappings
 
 ### Volume Mount Issues
 - Real data location is controlled by `CSV_FILES_DIR` in environment files
@@ -309,13 +312,13 @@ When adding new fields to location statistics (like VLAN usage, switches, KEM ph
   - **Performance**: Slower, comprehensive processing
   - **Use Case**: Production deployments, major schema changes
 
-**Development Workflow**: Use `/reindex/current` for rapid iteration when testing:
+**Development Workflow**: Use `/reindex/current` for rapid iteration when testing (dev host backend on 8002):
 ```bash
 # 1. Make code changes to statistics/counting logic
 # 2. Quick reindex for testing
-curl http://localhost:8000/api/files/reindex/current
+curl http://localhost:8002/api/files/reindex/current
 # 3. Verify results
-curl "http://localhost:8000/api/stats/fast/by_location?q=ABX01"
+curl "http://localhost:8002/api/stats/fast/by_location?q=ABX01"
 ```
 
 ## Useful Debugging Commands
@@ -340,7 +343,7 @@ docker exec -it csv-viewer-backend celery -A tasks.tasks inspect active
 curl -X GET "localhost:9200/stats_netspeed_loc/_search" -H 'Content-Type: application/json' -d '{"query": {"term": {"key": "ABX01"}}, "size": 1}'
 
 # Test single file indexing (development)
-docker exec -it csv-viewer-backend-dev python -c "from tasks.tasks import index_csv; print(index_csv('/app/data/netspeed.csv'))"
+docker exec -it csv-viewer-backend-dev python -c "from tasks.tasks import index_csv; print(index_csv('/app/data/netspeed/netspeed.csv'))"
 
 # Check environment variables and volume mounts
 docker exec -it csv-viewer-backend-dev env | grep CSV_FILES_DIR
