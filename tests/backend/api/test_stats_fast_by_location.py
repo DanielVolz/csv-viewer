@@ -34,6 +34,8 @@ def patch_opensearch(monkeypatch):
                                                         'phonesByModelJustiz': [],
                                                         'phonesByModelJVA': [],
                                                         'vlanUsage': [{'vlan': '10', 'count': 5}],
+                                                        'topVLANs': [{'vlan': '10', 'count': 5}],
+                                                        'uniqueVLANCount': 1,
                                                         'switches': [{'hostname': 'sw1', 'vlans': [{'vlan': '10', 'count': 5}]}],
                                                         'kemPhones': ['P1', 'P2']
                                                     }
@@ -56,6 +58,8 @@ def patch_opensearch(monkeypatch):
                                                         'phonesByModelJustiz': [],
                                                         'phonesByModelJVA': [],
                                                         'vlanUsage': [{'vlan': '10', 'count': 3}],
+                                                        'topVLANs': [{'vlan': '10', 'count': 3}],
+                                                        'uniqueVLANCount': 1,
                                                         'switches': [{'hostname': 'sw2', 'vlans': [{'vlan': '10', 'count': 3}]}],
                                                         'kemPhones': ['P3']
                                                     }
@@ -73,7 +77,7 @@ def patch_opensearch(monkeypatch):
                 return {'hits': {'hits': [{'_source': {
                     'key': 'ABC01', 'date': '2099-01-01', 'totalPhones': 7, 'totalSwitches': 1,
                     'phonesWithKEM': 1, 'phonesByModel': [{'model':'M2','count':7}],
-                    'phonesByModelJustiz': [], 'phonesByModelJVA': [], 'vlanUsage': [], 'switches': [], 'kemPhones': ['K1']
+                    'phonesByModelJustiz': [], 'phonesByModelJVA': [], 'vlanUsage': [], 'topVLANs': [], 'uniqueVLANCount': 0, 'switches': [], 'kemPhones': ['K1']
                 }}]}}
     class DummyConfig:
         def __init__(self):
@@ -95,6 +99,10 @@ def test_fast_by_location_prefix_variants(query, mode):
     data = r.json()
     assert data['success'] is True, data
     assert data['data']['mode'] == 'prefix'
+    assert 'uniqueVLANCount' in data['data']
+    assert 'topVLANs' in data['data']
+    assert isinstance(data['data']['uniqueVLANCount'], int)
+    assert isinstance(data['data']['topVLANs'], list)
 
 
 def test_fast_by_location_code():
@@ -103,6 +111,10 @@ def test_fast_by_location_code():
     body = r.json()
     assert body['success'] is True
     assert body['data']['query'] == 'ABC01'
+    assert 'uniqueVLANCount' in body['data']
+    assert 'topVLANs' in body['data']
+    assert isinstance(body['data']['uniqueVLANCount'], int)
+    assert isinstance(body['data']['topVLANs'], list)
 
 
 def test_fast_by_location_invalid():

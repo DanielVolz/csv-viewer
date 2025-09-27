@@ -260,6 +260,32 @@ async def list_files():
         for candidate in ordered_paths:
             add_file(candidate)
 
+        if not files:
+            snapshot = _latest_opensearch_snapshot()
+            if snapshot:
+                creation_date = _format_snapshot_date(snapshot)
+                file_name = snapshot.get("file_name") or snapshot.get("index") or "OpenSearch snapshot"
+                creation_mtime = None
+                creation_ms = snapshot.get("creation_date_ms")
+                if isinstance(creation_ms, (int, float)) and creation_ms > 0:
+                    creation_mtime = creation_ms / 1000.0
+                files.append({
+                    "name": file_name,
+                    "path": f"opensearch://{snapshot.get('index')}",
+                    "is_current": True,
+                    "date": creation_date,
+                    "datetime": creation_date,
+                    "time": None,
+                    "mtime": creation_mtime,
+                    "line_count": snapshot.get("documents", 0) or 0,
+                    "using_fallback": True,
+                    "fallback_file": file_name,
+                    "source": "opensearch",
+                    "index": snapshot.get("index"),
+                    "message": "Displaying latest data available in OpenSearch (filesystem export missing).",
+                    "downloadable": False,
+                })
+
         return files
 
     except Exception as e:
@@ -664,15 +690,24 @@ async def reindex_current_file():
         # Initialize OpenSearch and index the single file
         opensearch_config = OpenSearchConfig()
 
-        try:
-            opensearch_config.wait_for_availability(
-                timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
-                interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
-                reason="reindex_current",
-            )
-        except OpenSearchUnavailableError as exc:
-            logger.warning(f"OpenSearch unavailable for fast reindex: {exc}")
-            raise HTTPException(status_code=503, detail="OpenSearch is not ready. Please try again shortly.") from exc
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if should_wait:
+            try:
+                opensearch_config.wait_for_availability(
+                    timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+                    interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+                    reason="reindex_current",
+                )
+            except OpenSearchUnavailableError as exc:
+                logger.warning(f"OpenSearch unavailable for fast reindex: {exc}")
+                raise HTTPException(status_code=503, detail="OpenSearch is not ready. Please try again shortly.") from exc
+        else:
+            if not opensearch_config.quick_ping():
+                logger.warning("OpenSearch unavailable and wait disabled; skipping reindex_current")
+                raise HTTPException(
+                    status_code=503,
+                    detail="OpenSearch is unavailable and waits are disabled; skipping reindex.",
+                )
 
         # Delete the current index first
         index_name = opensearch_config.get_index_name(csv_file)

@@ -486,12 +486,25 @@ def index_csv(self, file_path: str) -> dict:
     logger.info(f"Indexing CSV file at {file_path}")
 
     try:
-        # Ensure OpenSearch is ready before attempting a heavy index run
-        opensearch_config.wait_for_availability(
-            timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
-            interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
-            reason=f"index_csv:{Path(file_path).name}",
-        )
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if should_wait:
+            opensearch_config.wait_for_availability(
+                timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+                interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+                reason=f"index_csv:{Path(file_path).name}",
+            )
+        else:
+            if not opensearch_config.quick_ping():
+                logger.warning(
+                    "OpenSearch unavailable and wait disabled; skipping index for %s",
+                    file_path,
+                )
+                return {
+                    "status": "skipped",
+                    "message": "Skipped indexing because OpenSearch is unavailable (wait disabled)",
+                    "file_path": file_path,
+                    "count": 0,
+                }
 
         success, count = opensearch_config.index_csv_file(file_path)
 
@@ -524,6 +537,14 @@ def index_csv(self, file_path: str) -> dict:
                 "file_path": file_path,
                 "count": count
             }
+        elif not should_wait:
+            logger.warning("Indexing reported failure; treating as skipped because waits are disabled")
+            return {
+                "status": "skipped",
+                "message": f"Skipped indexing {file_path} because OpenSearch is unavailable",
+                "file_path": file_path,
+                "count": 0,
+            }
         else:
             return {
                 "status": "error",
@@ -532,6 +553,20 @@ def index_csv(self, file_path: str) -> dict:
                 "count": 0
             }
     except OpenSearchUnavailableError as exc:
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if not should_wait:
+            logger.warning(
+                "OpenSearch unavailable during wait (disabled); skipping index for %s: %s",
+                file_path,
+                exc,
+            )
+            return {
+                "status": "skipped",
+                "message": f"Skipped indexing {file_path}: OpenSearch unavailable",
+                "file_path": file_path,
+                "count": 0,
+            }
+
         attempt = getattr(self.request, "retries", 0)
         max_attempts = self.max_retries if getattr(self, "max_retries", None) is not None else getattr(settings, "OPENSEARCH_RETRY_MAX_ATTEMPTS", 5)
         if max_attempts is not None and attempt >= max_attempts:
@@ -550,6 +585,20 @@ def index_csv(self, file_path: str) -> dict:
         )
         raise self.retry(exc=exc, countdown=delay)
     except OpenSearchConnectionError as exc:
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if not should_wait:
+            logger.warning(
+                "OpenSearch connection error with wait disabled; skipping index for %s: %s",
+                file_path,
+                exc,
+            )
+            return {
+                "status": "skipped",
+                "message": f"Skipped indexing {file_path}: OpenSearch unavailable",
+                "file_path": file_path,
+                "count": 0,
+            }
+
         attempt = getattr(self.request, "retries", 0)
         max_attempts = self.max_retries if getattr(self, "max_retries", None) is not None else getattr(settings, "OPENSEARCH_RETRY_MAX_ATTEMPTS", 5)
         if max_attempts is not None and attempt >= max_attempts:
@@ -584,6 +633,17 @@ def backfill_location_snapshots(directory_path: str | None = None) -> dict:
     Useful if stats_netspeed_loc is empty or partially populated.
     """
     try:
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if should_wait:
+            opensearch_config.wait_for_availability(
+                timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+                interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+                reason="backfill_location_snapshots",
+            )
+        elif not opensearch_config.quick_ping():
+            logger.warning("OpenSearch unavailable and wait disabled; skipping backfill_location_snapshots")
+            return {"status": "skipped", "message": "Skipped location backfill: OpenSearch unavailable"}
+
         extras = [directory_path] if directory_path else None
         ordered_files = netspeed_files_ordered(extras, include_backups=False)
         files: List[Path] = []
@@ -758,16 +818,23 @@ def backfill_location_snapshots(directory_path: str | None = None) -> dict:
                     # Get additional details for this location
                     details = location_details.get(k, {"vlans": {}, "switches": set(), "kem_phones": []})
 
-                    # Format VLAN usage
-                    vlan_usage = [{"vlan": v, "count": c} for v, c in details["vlans"].items()]
-                    # Sort VLANs numerically
+                    # Format VLAN usage and derive summary stats
+                    vlans_dict = details.get("vlans", {}) or {}
+                    raw_vlan_usage = [{"vlan": v, "count": c} for v, c in vlans_dict.items()]
+
+                    # Sort VLANs numerically for full usage list
                     def vlan_key(item):
                         v = item["vlan"]
                         try:
                             return (0, int(v))
                         except:
                             return (1, v)
-                    vlan_usage.sort(key=vlan_key)
+
+                    vlan_usage = sorted(raw_vlan_usage, key=vlan_key)
+
+                    # Determine top three VLANs by count (desc) with numeric tie-breaker
+                    top_vlans = sorted(raw_vlan_usage, key=lambda item: (-item["count"], vlan_key(item)))[:3]
+                    unique_vlan_count = len(vlans_dict)
 
                     # Format switches
                     switches = [{"hostname": sw} for sw in sorted(details["switches"])]
@@ -783,6 +850,8 @@ def backfill_location_snapshots(directory_path: str | None = None) -> dict:
                         "phonesByModelJustiz": loc_justiz_models,
                         "phonesByModelJVA": loc_jva_models,
                         "vlanUsage": vlan_usage,
+                        "topVLANs": top_vlans,
+                        "uniqueVLANCount": int(unique_vlan_count),
                         "switches": switches,
                         "kemPhones": details["kem_phones"]
                     })
@@ -806,6 +875,17 @@ def backfill_stats_snapshots(directory_path: str | None = None) -> dict:
     phonesWithKEM = unique phones with >=1 KEM; totalKEMs = number of modules.
     """
     try:
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if should_wait:
+            opensearch_config.wait_for_availability(
+                timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+                interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+                reason="backfill_stats_snapshots",
+            )
+        elif not opensearch_config.quick_ping():
+            logger.warning("OpenSearch unavailable and wait disabled; skipping backfill_stats_snapshots")
+            return {"status": "skipped", "message": "Skipped stats backfill: OpenSearch unavailable"}
+
         extras = [directory_path] if directory_path else None
         ordered_files = netspeed_files_ordered(extras, include_backups=False)
         files: List[Path] = []
@@ -895,6 +975,34 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
     extras = [directory_path] if directory_path else None
     directory_label = directory_path or str(get_data_root())
     logger.info(f"Indexing all CSV files (base={directory_label})")
+
+    should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+    if should_wait:
+        try:
+            opensearch_config.wait_for_availability(
+                timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+                interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+                reason="index_all_csv_files",
+            )
+        except OpenSearchUnavailableError as exc:
+            logger.error(f"OpenSearch unavailable for index_all_csv_files: {exc}")
+            return {
+                "status": "error",
+                "message": f"OpenSearch unavailable: {exc}",
+                "directory": directory_label,
+                "files_processed": 0,
+                "total_documents": 0,
+            }
+    else:
+        if not opensearch_config.quick_ping():
+            logger.warning("OpenSearch unavailable and wait disabled; skipping full indexing run")
+            return {
+                "status": "skipped",
+                "message": "Skipped index_all_csv_files because OpenSearch is unavailable (wait disabled)",
+                "directory": directory_label,
+                "files_processed": 0,
+                "total_documents": 0,
+            }
 
     # Protection against concurrent indexing tasks
     try:

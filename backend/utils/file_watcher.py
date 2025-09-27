@@ -4,8 +4,9 @@ import logging
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from config import settings
 from tasks.tasks import index_csv, index_all_csv_files
-from utils.opensearch import opensearch_config
+from utils.opensearch import opensearch_config, OpenSearchUnavailableError
 from utils.archiver import archive_current_netspeed
 from utils.path_utils import resolve_current_file, NETSPEED_TIMESTAMP_PATTERN
 
@@ -135,6 +136,19 @@ class CSVFileHandler(FileSystemEventHandler):
                     logger.debug(f"Archive skipped or failed: {arch}")
             except Exception as e:
                 logger.debug(f"Archival step failed: {e}")
+
+            wait_timeout = max(60.0, float(getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45)))
+            wait_interval = float(getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0))
+
+            try:
+                opensearch_config.wait_for_availability(
+                    timeout=wait_timeout,
+                    interval=wait_interval,
+                    reason="file_watcher_actions",
+                )
+            except OpenSearchUnavailableError as exc:
+                logger.warning(f"OpenSearch unavailable during file watcher processing: {exc}")
+                return
 
             # Step 0: Quickly snapshot today's stats from current netspeed.csv (best-effort)
             try:

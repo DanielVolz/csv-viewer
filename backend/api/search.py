@@ -6,7 +6,11 @@ from tasks.tasks import search_opensearch
 from tasks.tasks import backfill_location_snapshots
 from tasks.tasks import backfill_stats_snapshots
 from celery.result import AsyncResult
-from utils.opensearch import opensearch_config
+from utils.opensearch import (
+    opensearch_config,
+    OpenSearchConfig,
+    OpenSearchUnavailableError,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -225,9 +229,29 @@ async def index_all_csv_files(
             pass
         # Cleanup existing netspeed_* indices BEFORE starting a full rebuild to prevent duplicates
         try:
-            from utils.opensearch import OpenSearchConfig as _OSC
-            _cfg = _OSC()
-            deleted = _cfg.cleanup_indices_by_pattern("netspeed_*")
+            cfg = OpenSearchConfig()
+            should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+            if should_wait:
+                cfg.wait_for_availability(
+                    timeout=max(60.0, float(getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45))),
+                    interval=float(getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0)),
+                    reason="index_all_pre_cleanup",
+                )
+            elif not cfg.quick_ping():
+                logger.warning("OpenSearch unavailable and wait disabled; skipping index/all trigger")
+                raise HTTPException(
+                    status_code=503,
+                    detail="OpenSearch is unavailable and waits are disabled; skipping index/all run.",
+                )
+        except OpenSearchUnavailableError as exc:
+            logger.warning(f"OpenSearch unavailable for index/all request: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail="OpenSearch is not ready yet. Please wait a moment and retry."
+            ) from exc
+
+        try:
+            deleted = cfg.cleanup_indices_by_pattern("netspeed_*")
             logger.info(f"Pre-rebuild cleanup removed {deleted} netspeed_* indices")
         except Exception as _e:
             logger.warning(f"Pre-rebuild cleanup skipped/failed: {_e}")
@@ -328,7 +352,28 @@ async def rebuild_indices(include_historical: bool = True):
         include_historical: kept for forward compatibility (currently always deletes all netspeed_* )
     """
     try:
-        # Delete indices
+        try:
+            should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+            if should_wait:
+                opensearch_config.wait_for_availability(
+                    timeout=max(60.0, float(getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45))),
+                    interval=float(getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0)),
+                    reason="rebuild_indices",
+                )
+            elif not opensearch_config.quick_ping():
+                logger.warning("OpenSearch unavailable and wait disabled; skipping rebuild request")
+                raise HTTPException(
+                    status_code=503,
+                    detail="OpenSearch is unavailable and waits are disabled; skipping rebuild.",
+                )
+        except OpenSearchUnavailableError as exc:
+            logger.warning(f"OpenSearch unavailable for rebuild request: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail="OpenSearch is not ready yet. Please retry once the search service is up."
+            ) from exc
+
+        # Delete indices (best effort)
         deleted = opensearch_config.cleanup_indices_by_pattern("netspeed_*")
         logger.info(f"Rebuild requested: deleted {deleted} indices")
 

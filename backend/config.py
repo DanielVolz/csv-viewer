@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     OPENSEARCH_RETRY_BASE_SECONDS: int = 5
     OPENSEARCH_RETRY_MAX_SECONDS: int = 60
     OPENSEARCH_RETRY_MAX_ATTEMPTS: int = 5
+    OPENSEARCH_WAIT_FOR_AVAILABILITY: bool = True
 
     # Server Settings
     HOST: str = "0.0.0.0"
@@ -60,6 +61,13 @@ def get_settings() -> Settings:
 
     # Dynamic ports / paths
     s.PORT = int(os.environ.get("BACKEND_PORT", 8000))
+    env_wait = os.environ.get("OPENSEARCH_WAIT_FOR_AVAILABILITY")
+    if env_wait is not None:
+        try:
+            s.OPENSEARCH_WAIT_FOR_AVAILABILITY = str(env_wait).strip().lower() not in {"0", "false", "no"}
+        except Exception:
+            s.OPENSEARCH_WAIT_FOR_AVAILABILITY = True
+
     container_base_str = "/app/data"
     s.CSV_FILES_DIR = container_base_str
     env_current = os.environ.get("NETSPEED_CURRENT_DIR")

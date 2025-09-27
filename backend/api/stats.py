@@ -1799,6 +1799,77 @@ async def get_stats_by_location_fast(q: str) -> Dict:
         opensearch_config = OpenSearchConfig()
 
         query = q.strip().upper()
+
+        def _safe_int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                try:
+                    return int(float(value))
+                except (TypeError, ValueError):
+                    return 0
+
+        def _vlan_sort_key_from_value(value: str) -> tuple[int, Any]:
+            try:
+                return (0, int(value))
+            except Exception:
+                return (1, value)
+
+        def _normalize_vlan_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
+            usage = doc.get("vlanUsage") or []
+            aggregated: Dict[str, int] = {}
+            for item in usage:
+                if not isinstance(item, dict):
+                    continue
+                vlan = str(item.get("vlan", "")).strip()
+                if not vlan:
+                    continue
+                count = max(_safe_int(item.get("count", 0)), 0)
+                aggregated[vlan] = aggregated.get(vlan, 0) + count
+
+            sanitized_usage = [{"vlan": vlan, "count": count} for vlan, count in aggregated.items()]
+            sanitized_usage.sort(key=lambda entry: _vlan_sort_key_from_value(entry["vlan"]))
+
+            stored_top = doc.get("topVLANs") or []
+            sanitized_top: List[Dict[str, Any]] = []
+            for entry in stored_top:
+                if not isinstance(entry, dict):
+                    continue
+                vlan = str(entry.get("vlan", "")).strip()
+                if not vlan:
+                    continue
+                count = aggregated.get(vlan, _safe_int(entry.get("count", 0)))
+                sanitized_top.append({"vlan": vlan, "count": count})
+
+            if not sanitized_top:
+                sanitized_top = sorted(
+                    [{"vlan": vlan, "count": count} for vlan, count in aggregated.items()],
+                    key=lambda entry: (-_safe_int(entry.get("count", 0)), _vlan_sort_key_from_value(str(entry.get("vlan", ""))))
+                )[:3]
+            else:
+                sanitized_top.sort(key=lambda entry: (-_safe_int(entry.get("count", 0)), _vlan_sort_key_from_value(str(entry.get("vlan", "")))))
+                sanitized_top = sanitized_top[:3]
+
+            doc["topVLANs"] = sanitized_top
+
+            if aggregated or not sanitized_top:
+                doc["vlanUsage"] = sanitized_usage
+            else:
+                fallback_usage = [
+                    {"vlan": entry.get("vlan", ""), "count": _safe_int(entry.get("count", 0))}
+                    for entry in sanitized_top if isinstance(entry, dict)
+                ]
+                fallback_usage.sort(key=lambda entry: _vlan_sort_key_from_value(str(entry["vlan"])) )
+                doc["vlanUsage"] = fallback_usage
+
+            if aggregated:
+                unique_count = len(aggregated)
+            else:
+                unique_count = len({entry["vlan"] for entry in sanitized_top if isinstance(entry, dict) and entry.get("vlan")})
+            doc["uniqueVLANCount"] = unique_count
+
+            return doc
+
         if not query:
             return {"success": False, "message": "Location query is required"}
 
@@ -1835,6 +1906,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                     "phonesByModelJustiz": [],
                     "phonesByModelJVA": [],
                     "vlanUsage": [],
+                    "topVLANs": [],
+                    "uniqueVLANCount": 0,
                     "switches": [],
                     "kemPhones": [],
                 }
@@ -1883,6 +1956,7 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                         location_doc["kemPhonesCount"] = len(kem_list)
                 except Exception:
                     pass
+                location_doc = _normalize_vlan_summary(location_doc)
             else:
                 # Fallback: get latest available data but model details will be empty
                 body_latest = {
@@ -1913,6 +1987,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                             "phonesByModelJustiz": [],
                             "phonesByModelJVA": [],
                             "vlanUsage": [],
+                            "topVLANs": [],
+                            "uniqueVLANCount": 0,
                             "switches": [],
                             "kemPhones": [],
                         }
@@ -1932,6 +2008,7 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                         location_doc["kemPhonesCount"] = len(kem_list)
                 except Exception:
                     pass
+                location_doc = _normalize_vlan_summary(location_doc)
 
         else:  # prefix mode - aggregate all locations starting with this prefix (1-4 chars)
             # Optimized: Only fetch necessary fields and use smaller payloads
@@ -1984,6 +2061,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                         "phonesByModelJustiz": [],
                         "phonesByModelJVA": [],
                         "vlanUsage": [],
+                        "topVLANs": [],
+                        "uniqueVLANCount": 0,
                         "switches": [],
                         "kemPhones": [],
                     }
@@ -2071,6 +2150,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 "phonesByModelJustiz": [{"model": m, "count": c} for m, c in phones_by_model_justiz.items()],
                 "phonesByModelJVA": [{"model": m, "count": c} for m, c in phones_by_model_jva.items()],
                 "vlanUsage": [{"vlan": v, "count": c} for v, c in vlan_usage.items()],
+                "topVLANs": [],
+                "uniqueVLANCount": 0,
                 "switches": [],
                 "kemPhones": kem_phones,
                 "kemPhonesCount": len(kem_phones),
@@ -2101,6 +2182,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 })
             location_doc["switches"] = sorted(switch_list, key=lambda x: x["hostname"])
 
+        location_doc = _normalize_vlan_summary(location_doc)
+
         # Check if we have sufficient detail data for the UI - NO FALLBACKS
         if not _has_sufficient_detail_data(location_doc):
             logger.warning(f"OpenSearch data for {query} lacks detail information. Please trigger reindex.")
@@ -2128,6 +2211,8 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                 "phonesByModelJustiz": [],
                 "phonesByModelJVA": [],
                 "vlanUsage": [],
+                "topVLANs": [],
+                "uniqueVLANCount": 0,
                 "switches": [],
                 "kemPhones": [],
             }

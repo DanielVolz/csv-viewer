@@ -122,6 +122,12 @@ docker compose logs -f opensearch
 docker exec -it csv-viewer-backend celery -A tasks.tasks inspect active
 ```
 
+### OpenSearch availability in development
+
+- The backend now honors an `OPENSEARCH_WAIT_FOR_AVAILABILITY` flag (default `false` in `.env.dev`).
+- When disabled, the API and Celery tasks perform a single best-effort ping and gracefully skip indexing if OpenSearch is unreachable instead of retrying for minutes.
+- Set the flag to `true` if you prefer the backend to block until OpenSearch responds (for production-like behavior).
+
 ## Architecture
 
 ### System Components

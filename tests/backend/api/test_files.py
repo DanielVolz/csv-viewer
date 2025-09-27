@@ -56,13 +56,36 @@ class TestFilesAPI:
         assert data[1]["name"] == historical_mock.name
         assert data[1]["is_current"] is False
 
+    @patch('api.files._latest_opensearch_snapshot', return_value=None)
     @patch('api.files.collect_netspeed_files')
-    def test_list_files_empty(self, mock_collect_files):
+    def test_list_files_empty(self, mock_collect_files, mock_snapshot):
         mock_collect_files.return_value = ([], None, [])
 
         response = client.get("/api/files/")
         assert response.status_code == 200
         assert response.json() == []
+
+    @patch('api.files._latest_opensearch_snapshot')
+    @patch('api.files.collect_netspeed_files')
+    def test_list_files_opensearch_fallback(self, mock_collect_files, mock_snapshot):
+        mock_collect_files.return_value = ([], None, [])
+        mock_snapshot.return_value = {
+            "index": "netspeed_netspeed_csv",
+            "file_name": "netspeed.csv",
+            "documents": 321,
+            "creation_date": "2025-01-01",
+            "creation_date_ms": 1735689600000,
+        }
+
+        response = client.get("/api/files/")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["source"] == "opensearch"
+        assert item["line_count"] == 321
+        assert item["downloadable"] is False
+        assert item["using_fallback"] is True
 
     @patch('api.files.collect_netspeed_files')
     def test_list_files_exception(self, mock_collect_files):

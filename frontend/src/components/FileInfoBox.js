@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, Typography, Box, CircularProgress, IconButton, Skeleton, Paper, Tooltip, Chip } from '@mui/material';
-import { Refresh, Warning, CheckCircleRounded } from '@mui/icons-material';
+import { Refresh, Warning, CheckCircleRounded, CloudQueue } from '@mui/icons-material';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
@@ -286,10 +286,26 @@ const FileInfoBox = React.memo(({ compact = false }) => {
             {(() => {
               const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
               const fallbackUsing = Boolean(fileInfo?.using_fallback);
-              if (empty || fallbackUsing) {
+              if (empty) {
                 return (
-                  <Tooltip title={empty ? "No up-to-date data available (current file is empty). Searches will use historical files." : "Current file missing; using historical netspeed.csv.*"} arrow placement="top">
-                    <Chip label={empty ? "No data today" : "Using historical"} color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                  <Tooltip title="No up-to-date data available (current file is empty). Searches will use historical files." arrow placement="top">
+                    <Chip label="No data today" color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                  </Tooltip>
+                );
+              }
+              if (fallbackUsing) {
+                const fallbackSource = fileInfo?.source;
+                const label = fallbackSource === 'opensearch' ? 'Using OpenSearch' : 'Using historical';
+                const tooltip = fallbackSource === 'opensearch'
+                  ? 'Filesystem export missing; showing latest indexed data from OpenSearch.'
+                  : 'Current file missing; using historical netspeed.csv.*';
+                const color = fallbackSource === 'opensearch' ? 'info' : 'warning';
+                const icon = fallbackSource === 'opensearch'
+                  ? <CloudQueue sx={{ fontSize: 18 }} />
+                  : <Warning sx={{ fontSize: 18 }} />;
+                return (
+                  <Tooltip title={tooltip} arrow placement="top">
+                    <Chip label={label} color={color} size="small" variant="filled" sx={{ cursor: 'help' }} icon={icon} />
                   </Tooltip>
                 );
               }
@@ -361,10 +377,26 @@ const FileInfoBox = React.memo(({ compact = false }) => {
                 {(() => {
                   const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
                   const fallbackUsing = Boolean(fileInfo?.using_fallback);
-                  if (empty || fallbackUsing) {
+                  if (empty) {
                     return (
-                      <Tooltip title={empty ? "No up-to-date data available (current file is empty). Searches will use historical files." : "Current file missing; using historical netspeed.csv.*"} arrow placement="top">
-                        <Chip label={empty ? "No data today" : "Using historical"} color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                      <Tooltip title="No up-to-date data available (current file is empty). Searches will use historical files." arrow placement="top">
+                        <Chip label="No data today" color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                      </Tooltip>
+                    );
+                  }
+                  if (fallbackUsing) {
+                    const fallbackSource = fileInfo?.source;
+                    const label = fallbackSource === 'opensearch' ? 'Using OpenSearch' : 'Using historical';
+                    const tooltip = fallbackSource === 'opensearch'
+                      ? 'Filesystem export missing; displaying latest indexed data from OpenSearch.'
+                      : 'Current file missing; using historical netspeed.csv.*';
+                    const color = fallbackSource === 'opensearch' ? 'info' : 'warning';
+                    const icon = fallbackSource === 'opensearch'
+                      ? <CloudQueue sx={{ fontSize: 18 }} />
+                      : <Warning sx={{ fontSize: 18 }} />;
+                    return (
+                      <Tooltip title={tooltip} arrow placement="top">
+                        <Chip label={label} color={color} size="small" variant="filled" sx={{ cursor: 'help' }} icon={icon} />
                       </Tooltip>
                     );
                   }

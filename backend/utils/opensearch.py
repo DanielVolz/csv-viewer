@@ -269,6 +269,14 @@ class OpenSearchConfig:
                             "count": {"type": "long"}
                         }
                     },
+                    "topVLANs": {
+                        "type": "nested",
+                        "properties": {
+                            "vlan": {"type": "keyword"},
+                            "count": {"type": "long"}
+                        }
+                    },
+                    "uniqueVLANCount": {"type": "long"},
                     "switches": {
                         "type": "nested",
                         "properties": {
@@ -384,6 +392,19 @@ class OpenSearchConfig:
     # ------------------------------------------------------------------
     # Availability helpers
     # ------------------------------------------------------------------
+    def quick_ping(self) -> bool:
+        """Check OpenSearch availability once without retrying.
+
+        Returns:
+            bool: True if ping succeeds, otherwise False.
+        """
+
+        try:
+            return bool(self.client.ping())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Quick OpenSearch ping failed: {exc}")
+            return False
+
     def wait_for_availability(
         self,
         *,
@@ -401,12 +422,20 @@ class OpenSearchConfig:
             reason: Context string for logging.
 
         Returns:
-            bool: True if OpenSearch responded before timeout, else False.
+            bool: True if OpenSearch responded before timeout. When waiting is
+            disabled via settings.OPENSEARCH_WAIT_FOR_AVAILABILITY, returns
+            False immediately without performing a ping.
 
         Raises:
             OpenSearchUnavailableError: When OpenSearch does not respond within
                 the timeout window.
         """
+
+        ctx = f" ({reason})" if reason else ""
+        should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+        if not should_wait:
+            logger.info(f"Skipping OpenSearch availability wait{ctx}: disabled via configuration")
+            return False
 
         max_wait = timeout if timeout is not None else float(getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45))
         poll_delay = interval if interval is not None else float(getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0))
@@ -415,7 +444,6 @@ class OpenSearchConfig:
         deadline = time.monotonic() + max_wait
         attempts = 0
         last_exc: Optional[Exception] = None
-        ctx = f" ({reason})" if reason else ""
 
         while True:
             attempts += 1
@@ -508,45 +536,49 @@ class OpenSearchConfig:
             # Log the found indices for debugging
             logger.info(f"Available indices: {indices}")
 
+            def _dedupe(sequence: list[str]) -> list[str]:
+                seen: set[str] = set()
+                ordered_unique: list[str] = []
+                for item in sequence:
+                    if not item:
+                        continue
+                    if item in seen:
+                        continue
+                    seen.add(item)
+                    ordered_unique.append(item)
+                return ordered_unique
+
+            # Prefer canonical current indices when present
+            current_candidates: list[str] = []
+            for name in ("netspeed_netspeed_csv", "netspeed_netspeed"):
+                if name in indices:
+                    current_candidates.append(name)
+
+            netspeed_entries = self.list_netspeed_indices()
+            netspeed_ordered = [entry.get("index") for entry in netspeed_entries if entry.get("index")]
+
             if include_historical:
-                # If including historical files, prefer the current index first (if present)
-                # and then include all netspeed_* indices. This guarantees the current file
-                # (netspeed.csv) is part of the search even if wildcard expansion behaves unexpectedly
-                # in some environments.
-                current_index = "netspeed_netspeed_csv"
-                legacy_index = "netspeed_netspeed"  # backward-compat older naming
-                ordered: list[str] = []
-                if current_index in indices:
-                    ordered.append(current_index)
-                elif legacy_index in indices:
-                    ordered.append(legacy_index)
-
-                # Add all historical netspeed indices explicitly (not just wildcard)
-                # This ensures MAC address searches find data in netspeed.csv.0, netspeed.csv.1, etc.
-                historical_indices = [idx for idx in indices if idx.startswith("netspeed_netspeed_csv_") and idx != current_index]
-                ordered.extend(sorted(historical_indices))
-
-                # Also add wildcard as fallback for any missed indices
-                ordered.append("netspeed_netspeed_csv_*")
-
-                logger.info(f"Historical search indices: {ordered}")
-                return ordered
+                combined: list[str] = []
+                combined.extend(current_candidates)
+                combined.extend(netspeed_ordered)
+                # Always provide wildcard fallback to catch any indices created after discovery
+                combined.append("netspeed_*")
+                result = _dedupe(combined)
+                if result:
+                    logger.info(f"Historical search indices: {result}")
+                    return result
             else:
-                # If not including historical files, search only the current netspeed file index
-                # A netspeed.csv file should be indexed as "netspeed_netspeed_csv"
-                current_index = "netspeed_netspeed_csv"
+                # Without historical data we just want the freshest index available
+                if current_candidates:
+                    return [current_candidates[0]]
+                if netspeed_ordered:
+                    logger.info(f"Using latest netspeed index without filesystem current: {netspeed_ordered[0]}")
+                    return [netspeed_ordered[0]]
 
-                # Check if the current index exists
-                if current_index in indices:
-                    return [current_index]
-                elif "netspeed_netspeed" in indices:
-                    # Backward compatibility for older index naming
-                    return ["netspeed_netspeed"]
-                else:
-                    # If no appropriate index is found, log a warning but don't default to all indices
-                    logger.warning("No current netspeed index found. Search results may be empty.")
-                    # Return a non-existent index name to ensure no results rather than wrong results
-                    return ["netspeed_current_only"]
+            # If we reach here, no netspeed index could be determined
+            logger.warning("No current netspeed index found. Search results may be empty.")
+            # Return a non-existent index name to ensure no results rather than wrong results
+            return ["netspeed_current_only"]
         except Exception as e:
             logger.error(f"Error getting search indices: {e}")
             return ["netspeed_*"] if include_historical else ["netspeed_current_only"]
@@ -813,6 +845,8 @@ class OpenSearchConfig:
                     "phonesByModelJustiz": d.get('phonesByModelJustiz', []),
                     "phonesByModelJVA": d.get('phonesByModelJVA', []),
                     "vlanUsage": d.get('vlanUsage', []),
+                    "topVLANs": d.get('topVLANs', []),
+                    "uniqueVLANCount": int(d.get('uniqueVLANCount', 0) or 0),
                     "switches": d.get('switches', []),
                     "kemPhones": d.get('kemPhones', []),
                 }

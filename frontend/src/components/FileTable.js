@@ -16,7 +16,7 @@ import {
   Snackbar,
   Tooltip
 } from '@mui/material';
-import { Download, Replay, CheckCircleRounded, HistoryRounded, Inventory2Rounded, WarningRounded } from '@mui/icons-material';
+import { Download, Replay, CheckCircleRounded, HistoryRounded, Inventory2Rounded, WarningRounded, CloudQueue } from '@mui/icons-material';
 import axios from 'axios';
 import useFiles from '../hooks/useFiles';
 import useIndexingProgress from '../hooks/useIndexingProgress';
@@ -84,6 +84,14 @@ function FileTable() {
   // removed unused formatFileSize helper
 
   const getFileStatus = (file) => {
+    if (file?.source === 'opensearch') {
+      return {
+        label: 'OpenSearch',
+        color: 'info',
+        icon: <CloudQueue sx={{ fontSize: 18 }} />,
+        tooltip: 'Latest indexed snapshot from OpenSearch (filesystem export missing).'
+      };
+    }
     const empty = typeof file?.line_count === 'number' ? file.line_count <= 0 : !file?.line_count;
     const isNetspeed = file?.name?.startsWith('netspeed.csv');
     if (file.name === 'netspeed.csv') {
@@ -251,31 +259,43 @@ function FileTable() {
                   files.map((file, index) => {
                     const status = getFileStatus(file);
                     const isActiveFile = file.name === 'netspeed.csv';
+                    const isDownloadable = file?.downloadable !== false && file?.source !== 'opensearch';
                     const indexStatusText = statusLabel(idxStatus);
                     return (
                       <TableRow key={index} hover>
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
-                          <Typography
-                            variant="body2"
-                            fontWeight={500}
-                            component="a"
-                            href={`/api/files/download/${encodeURIComponent(file.name)}`}
-                            onClick={makeHandleDownload(file.name)}
-                            sx={{
-                              textDecoration: 'underline',
-                              color: 'primary.main',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 0.5,
-                              '&:hover': {
-                                color: 'primary.dark'
-                              }
-                            }}
-                          >
-                            <Download fontSize="small" />
-                            {file.name}
-                          </Typography>
+                          {isDownloadable ? (
+                            <Typography
+                              variant="body2"
+                              fontWeight={500}
+                              component="a"
+                              href={`/api/files/download/${encodeURIComponent(file.name)}`}
+                              onClick={makeHandleDownload(file.name)}
+                              sx={{
+                                textDecoration: 'underline',
+                                color: 'primary.main',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 0.5,
+                                '&:hover': {
+                                  color: 'primary.dark'
+                                }
+                              }}
+                            >
+                              <Download fontSize="small" />
+                              {file.name}
+                            </Typography>
+                          ) : (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Typography variant="body2" fontWeight={500} color="text.secondary">
+                                {file.name}
+                              </Typography>
+                              {file?.source === 'opensearch' && (
+                                <Chip label="Preview only" size="small" color="info" variant="outlined" />
+                              )}
+                            </Box>
+                          )}
                         </TableCell>
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
                           {(() => {
