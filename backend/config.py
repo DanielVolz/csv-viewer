@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, Tuple
 
 
 class Settings(BaseSettings):
@@ -55,30 +55,65 @@ def get_settings() -> Settings:
 
     # Dynamic ports / paths
     s.PORT = int(os.environ.get("BACKEND_PORT", 8000))
-    s.CSV_FILES_DIR = "/app/data"
-    # Optional split layout from env (host paths). If unset, fallback to CSV_FILES_DIR.
-    s.NETSPEED_CURRENT_DIR = os.environ.get("NETSPEED_CURRENT_DIR", s.CSV_FILES_DIR)
-    s.NETSPEED_HISTORY_DIR = os.environ.get("NETSPEED_HISTORY_DIR", s.CSV_FILES_DIR)
+    container_base_str = "/app/data"
+    s.CSV_FILES_DIR = container_base_str
+    env_current = os.environ.get("NETSPEED_CURRENT_DIR")
+    env_history = os.environ.get("NETSPEED_HISTORY_DIR")
 
     # Normalize host-style paths to container paths if necessary.
-    # We assume CSV_FILES_DIR (host) is mounted at /app/data inside container.
+    # We prefer explicit NETSPEED_* env values and fall back to known container layout.
     try:
         import pathlib
-        host_base = os.environ.get("CSV_FILES_DIR", s.CSV_FILES_DIR)
-        container_base = "/app/data"
-        def _normalize(p: str) -> str:
-            pp = pathlib.Path(p)
-            if pp.exists():
-                return str(pp)
-            if host_base and p.startswith(host_base):
-                candidate = container_base + p[len(host_base):]
-                if pathlib.Path(candidate).exists():
-                    return candidate
-            return p
-        s.NETSPEED_CURRENT_DIR = _normalize(s.NETSPEED_CURRENT_DIR)
-        s.NETSPEED_HISTORY_DIR = _normalize(s.NETSPEED_HISTORY_DIR)
+        from pathlib import PurePosixPath
+
+        container_base = pathlib.Path(container_base_str)
+
+        def _normalize_path(raw_value: Optional[str], fallbacks: list[pathlib.Path]) -> Tuple[str, pathlib.Path]:
+            """Convert a potentially host-style path to the container layout.
+
+            Returns a tuple of (normalized_path, container_parent).
+            """
+            if raw_value:
+                raw_path = pathlib.Path(raw_value)
+                if raw_path.exists():
+                    return str(raw_path), raw_path.parent
+
+                raw_pure = PurePosixPath(str(raw_value))
+                for fallback in fallbacks:
+                    try:
+                        rel = PurePosixPath(fallback.relative_to(container_base))
+                    except Exception:
+                        rel = PurePosixPath()
+                    rel_parts = rel.parts
+                    if not rel_parts:
+                        continue
+                    if len(raw_pure.parts) >= len(rel_parts) and raw_pure.parts[-len(rel_parts):] == rel_parts:
+                        normalized = container_base.joinpath(*rel_parts)
+                        return str(normalized), normalized.parent
+
+            primary = fallbacks[0] if fallbacks else container_base
+            return str(primary), primary.parent if primary != container_base else container_base
+
+        current_defaults = [container_base / "netspeed", container_base]
+        history_defaults = [
+            container_base / "history" / "netspeed",
+            container_base / "history",
+            container_base,
+        ]
+
+        normalized_current, current_parent = _normalize_path(env_current, current_defaults)
+        normalized_history, history_parent = _normalize_path(env_history, history_defaults)
+
+        s.NETSPEED_CURRENT_DIR = normalized_current
+        s.NETSPEED_HISTORY_DIR = normalized_history
+
+        # Derive base data directory from available parents (prefer current parent)
+        base_parent = current_parent or history_parent or container_base
+        s.CSV_FILES_DIR = str(base_parent)
     except Exception:
-        pass
+        s.NETSPEED_CURRENT_DIR = f"{container_base_str}/netspeed"
+        s.NETSPEED_HISTORY_DIR = f"{container_base_str}/history/netspeed"
+        s.CSV_FILES_DIR = container_base_str
 
     # Compose service URLs
     redis_port = os.environ.get("REDIS_PORT", 6379)

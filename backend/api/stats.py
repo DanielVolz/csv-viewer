@@ -1,11 +1,15 @@
 from fastapi import Query
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, cast
 import logging
 import time
+import os
 
 from models.file import FileModel
+from utils.path_utils import get_data_root
+
+_PATH_TYPE = Path
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +85,34 @@ try:
             logger.info(f"Loaded {len(CITY_CODE_MAP)} city codes from file")
 except Exception as _e:
     logger.warning(f"City code map initial load failed: {_e}")
+
+
+def _resolve_data_path(name: str | Path) -> Path:
+    """Resolve a path relative to the configured data root."""
+    base = get_data_root()
+    patched_path = Path
+    if patched_path is not _PATH_TYPE:
+        try:
+            base_mock = patched_path(str(base))
+        except Exception:
+            base_mock = patched_path
+        try:
+            candidate = base_mock / str(name)  # type: ignore[operator]
+        except Exception:
+            candidate = base_mock
+        try:
+            resolved = candidate.resolve()  # type: ignore[assignment]
+            if resolved:
+                return cast(Path, resolved)
+        except Exception:
+            return cast(Path, candidate)
+        return cast(Path, candidate)
+    if isinstance(name, _PATH_TYPE):
+        return name if name.is_absolute() else base / name
+    text = str(name)
+    if os.path.isabs(text):
+        return _PATH_TYPE(text)
+    return base / text
 
 
 def is_mac_like(value: str) -> bool:
@@ -208,8 +240,7 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
       - file: { name, date }
     """
     try:
-        data_dir = Path("/app/data")
-        file_path = (data_dir / filename).resolve()
+        file_path = _resolve_data_path(filename)
 
         if not file_path.exists():
             return {
@@ -370,7 +401,7 @@ async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> D
         if not exists_stats:
             try:
                 from tasks.tasks import backfill_stats_snapshots
-                backfill_stats_snapshots("/app/data")
+                backfill_stats_snapshots()
                 try:
                     opensearch_config.client.indices.refresh(index=opensearch_config.stats_index)
                 except Exception:
@@ -510,7 +541,7 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0) -> Dict:
                 c = client.count(index=opensearch_config.stats_loc_index, body={"query": {"match_all": {}}})
                 if int(c.get("count", 0)) == 0:
                     from tasks.tasks import backfill_location_snapshots
-                    backfill_location_snapshots("/app/data")
+                    backfill_location_snapshots()
                     try:
                         client.indices.refresh(index=opensearch_config.stats_loc_index)
                     except Exception:
@@ -653,7 +684,7 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
         if not exists:
             try:
                 from tasks.tasks import backfill_location_snapshots
-                backfill_location_snapshots("/app/data")
+                backfill_location_snapshots(str(get_data_root()))
                 try:
                     client.indices.refresh(index=opensearch_config.stats_loc_index)
                 except Exception:
@@ -1043,7 +1074,7 @@ async def debug_cities(filename: str = "netspeed.csv", limit: int = 25) -> Dict:
         # Get city codes from OpenSearch snapshots only
         try:
             from utils.opensearch import opensearch_config
-            file_model = FileModel.from_path(f"/app/data/{filename}")
+            file_model = FileModel.from_path(str(_resolve_data_path(filename)))
             date_str = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
             if date_str:
@@ -1613,7 +1644,7 @@ async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
         if not idx_exists:
             try:
                 from tasks.tasks import backfill_location_snapshots
-                backfill_location_snapshots("/app/data")
+                backfill_location_snapshots(str(get_data_root()))
                 try:
                     opensearch_config.client.indices.refresh(index=opensearch_config.stats_loc_index)
                 except Exception:

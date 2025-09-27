@@ -7,6 +7,12 @@ from utils.opensearch import opensearch_config
 from datetime import datetime
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
 from utils.csv_utils import read_csv_file_normalized
+from utils.path_utils import (
+    get_data_root,
+    resolve_current_file,
+    netspeed_files_ordered,
+    collect_netspeed_files,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,14 +82,28 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
         if env_dir:
             directory_path = env_dir
         data_dir = Path(directory_path)
-        file_path = data_dir / "netspeed.csv"
-        if not file_path.exists():
-            # Fallback real path
-            alt = Path("/usr/scripts/netspeed/netspeed.csv")
-            if alt.exists():
-                file_path = alt
-        if not file_path.exists():
-            return {"status": "warning", "message": f"Current file not found: {file_path}"}
+
+        extras: List[Path | str] = [data_dir]
+        file_path: Optional[Path] = None
+        try:
+            candidate = resolve_current_file(extras)
+            if candidate and candidate.exists():
+                file_path = candidate
+        except Exception:
+            file_path = None
+
+        if file_path is None:
+            fallback_candidates = [
+                data_dir / "netspeed.csv",
+                Path("/usr/scripts/netspeed/netspeed.csv"),
+            ]
+            for cand in fallback_candidates:
+                if cand.exists():
+                    file_path = cand
+                    break
+
+        if file_path is None:
+            return {"status": "warning", "message": f"Current file not found near {directory_path}"}
 
         fm = _FM.from_path(str(file_path))
         date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
@@ -208,7 +228,7 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
 
 
 @app.task(name='tasks.snapshot_current_with_details')
-def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv", force_date: Optional[str] = None) -> dict:
+def snapshot_current_with_details(file_path: Optional[str] = None, force_date: Optional[str] = None) -> dict:
     """Compute and persist stats snapshot with detailed per-location documents.
 
     - Writes stats_netspeed (global) incl. Justiz/JVA model breakdown + details arrays
@@ -216,22 +236,38 @@ def snapshot_current_with_details(file_path: str = "/app/data/netspeed.csv", for
     - force_date allows overriding the file date (UI expects today's date for details)
     """
     try:
-        # ENV override
-        if file_path.endswith("netspeed.csv") and not Path(file_path).exists():
-            env_dir = os.environ.get("NETSPEED_DATA_DIR")
-            if env_dir:
-                candidate = Path(env_dir) / "netspeed.csv"
-                if candidate.exists():
-                    file_path = str(candidate)
-        p = Path(file_path)
-        if not p.exists():
-            # Fallback to real prod path
-            alt = Path("/usr/scripts/netspeed/netspeed.csv")
-            if alt.exists():
-                p = alt
-                file_path = str(alt)
-        if not p.exists():
-            return {"status": "warning", "message": f"File not found: {file_path}"}
+        env_dir = os.environ.get("NETSPEED_DATA_DIR")
+        extras: List[Path | str] = []
+        if env_dir:
+            extras.append(Path(env_dir))
+        extras.append(Path("/app/data"))
+
+        p: Optional[Path] = Path(file_path) if file_path else None
+        if p and not p.exists():
+            p = None
+
+        if p is None:
+            try:
+                candidate = resolve_current_file(extras)
+                if candidate and candidate.exists():
+                    p = candidate
+            except Exception:
+                p = None
+
+        if p is None:
+            fallback_candidates = [
+                Path("/app/data/netspeed.csv"),
+                Path("/usr/scripts/netspeed/netspeed.csv"),
+            ]
+            for cand in fallback_candidates:
+                if cand.exists():
+                    p = cand
+                    break
+
+        if p is None:
+            return {"status": "warning", "message": "File not found for snapshot"}
+
+        file_path = str(p)
         from models.file import FileModel as _FM
         fm = _FM.from_path(str(p))
         date_str = force_date or (fm.date.strftime('%Y-%m-%d') if fm.date else None)
@@ -484,18 +520,22 @@ def index_csv(file_path: str) -> dict:
 
 
 @app.task(name='tasks.backfill_location_snapshots')
-def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
+def backfill_location_snapshots(directory_path: str | None = None) -> dict:
     """Backfill per-location snapshots (stats_netspeed_loc) for all netspeed files.
 
     Useful if stats_netspeed_loc is empty or partially populated.
     """
     try:
-        path = Path(directory_path)
-        files = []
-        for p in sorted(path.glob("netspeed.csv*"), key=lambda x: x.name):
+        extras = [directory_path] if directory_path else None
+        ordered_files = netspeed_files_ordered(extras, include_backups=False)
+        files: List[Path] = []
+        for p in ordered_files:
             name = p.name
             if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.replace("netspeed.csv.", "").isdigit()):
                 files.append(p)
+        if not files:
+            base_dir = Path(directory_path) if directory_path else get_data_root()
+            return {"status": "warning", "message": f"No netspeed files found under {base_dir}", "files": 0, "loc_docs": 0}
         processed = 0
         total_loc_docs = 0
         for f in files:
@@ -701,19 +741,23 @@ def backfill_location_snapshots(directory_path: str = "/app/data") -> dict:
 
 
 @app.task(name='tasks.backfill_stats_snapshots')
-def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
+def backfill_stats_snapshots(directory_path: str | None = None) -> dict:
     """Backfill global stats snapshots (stats_netspeed) for all netspeed files.
 
     Computes from CSV only; does not touch netspeed_* search indices.
     phonesWithKEM = unique phones with >=1 KEM; totalKEMs = number of modules.
     """
     try:
-        path = Path(directory_path)
+        extras = [directory_path] if directory_path else None
+        ordered_files = netspeed_files_ordered(extras, include_backups=False)
         files: List[Path] = []
-        for p in sorted(path.glob("netspeed.csv*"), key=lambda x: x.name):
+        for p in ordered_files:
             name = p.name
             if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.replace("netspeed.csv.", "").isdigit()):
                 files.append(p)
+        if not files:
+            base_dir = Path(directory_path) if directory_path else get_data_root()
+            return {"status": "warning", "message": f"No netspeed files found under {base_dir}", "files": 0}
         processed = 0
         for f in files:
             try:
@@ -783,28 +827,21 @@ def backfill_stats_snapshots(directory_path: str = "/app/data") -> dict:
 
 
 @app.task(bind=True, name='tasks.index_all_csv_files')
-def index_all_csv_files(self, directory_path: str) -> dict:
+def index_all_csv_files(self, directory_path: str | None = None) -> dict:
     """Index all CSV files and persist snapshots with correct KEM semantics.
 
     - Index historical first, then current file
     - phonesWithKEM = unique phones; totalKEMs = modules
     - Also writes per-location snapshots with unique KEM phone counting
     """
-    logger.info(f"Indexing all CSV files in {directory_path}")
+    extras = [directory_path] if directory_path else None
+    directory_label = directory_path or str(get_data_root())
+    logger.info(f"Indexing all CSV files (base={directory_label})")
 
     # Protection against concurrent indexing tasks
     try:
-        index_state = load_state()
-        # Determine current file path (support nested layout /<root>/netspeed/netspeed.csv first)
-        current_candidates = [
-            Path(directory_path) / "netspeed" / "netspeed.csv",
-            Path(directory_path) / "netspeed.csv",
-        ]
-        current_file_path = None
-        for cand in current_candidates:
-            if cand.exists():
-                current_file_path = cand
-                break
+        pre_state = load_state()
+        current_file_path = resolve_current_file(extras)
         if current_file_path is not None:
             try:
                 logger.info("Executing snapshot_current_with_details for detected current netspeed.csv before bulk indexing (location stats fix)")
@@ -822,7 +859,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                 logger.warning(f"Pre-index snapshot_current_with_details failed: {e}")
         else:
             logger.info("No current netspeed.csv detected in candidates before indexing")
-        active_task = index_state.get("active_task", {})
+        active_task = pre_state.get("active_task", {})
         if active_task.get("status") == "running":
             existing_task_id = active_task.get("task_id")
             current_task_id = getattr(self.request, 'id', 'unknown')
@@ -831,71 +868,45 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                 return {
                     "status": "aborted",
                     "message": f"Another indexing task {existing_task_id} is already running",
-                    "directory": directory_path,
+                    "directory": directory_label,
                     "files_processed": 0,
                     "total_documents": 0,
                 }
     except Exception as e:
         logger.warning(f"Failed to check for concurrent tasks: {e}")
 
+    historical_files, current_file_candidate, backup_files = collect_netspeed_files(extras, include_backups=True)
+    ordered_files: List[Path] = []
+    ordered_files.extend(historical_files)
+    if current_file_candidate:
+        ordered_files.append(current_file_candidate)
+    ordered_files.extend(backup_files)
+
+    scanned_dirs = sorted({str(p.parent) for p in ordered_files})
+
+    logger.info(
+        "Discovered %d netspeed-related files (hist=%d, current=%d, backups=%d) across: %s",
+        len(ordered_files), len(historical_files), 1 if current_file_candidate else 0, len(backup_files),
+        ", ".join(scanned_dirs) if scanned_dirs else directory_label,
+    )
+    if not ordered_files:
+        return {
+            "status": "warning",
+            "message": f"No CSV files found under {directory_label}",
+            "directory": directory_label,
+            "files_processed": 0,
+            "total_documents": 0,
+        }
+
+    index_state: dict[str, Any] = {}
     try:
-        path = Path(directory_path)
-        scanned_dirs: List[Path] = [path]
-        nested_current_dir = path / "netspeed"
-        nested_history_dir = path / "history" / "netspeed"
-        for d in (nested_current_dir, nested_history_dir):
-            if d.exists() and d.is_dir():
-                scanned_dirs.append(d)
-        patterns = ["netspeed.csv", "netspeed.csv.*", "netspeed.csv_bak"]
-        files_set: dict[str, Path] = {}
-        def _add(p: Path):
-            try:
-                rp = str(p.resolve())
-                if rp not in files_set:
-                    files_set[rp] = p
-            except Exception:
-                pass
-        for d in scanned_dirs:
-            for pattern in patterns:
-                for p in d.glob(pattern):
-                    if p.is_file() and p.name.startswith("netspeed.csv"):
-                        _add(p)
-        all_found_files = list(files_set.values())
-        netspeed_files = [f for f in all_found_files if (f.name.startswith("netspeed.csv") and f.name != "netspeed.csv_bak" and not f.name.endswith("_bak"))]
-        backup_files = [f for f in all_found_files if f.name.endswith("_bak") or f.name == "netspeed.csv_bak"]
-
-        # Separate current vs historical (support multiple current candidates – dedupe by resolved path)
-        current_files = [f for f in netspeed_files if f.name == "netspeed.csv"]
-        historical_files_all = [f for f in netspeed_files if f.name != "netspeed.csv"]
-
-        # Sort historical numerically by suffix netspeed.csv.N
-        def _hist_key(p: Path):
-            name = p.name
-            if name.startswith("netspeed.csv."):
-                suf = name.split("netspeed.csv.", 1)[1]
-                if suf.isdigit():
-                    return int(suf)
-            return 1_000_000  # large number to push unexpected names to end
-        historical_files_all.sort(key=_hist_key)
-        files = historical_files_all + current_files + backup_files
-
-        logger.info(
-            "Discovered %d netspeed-related files (hist=%d, current=%d, backups=%d) in directories: %s",
-            len(files), len(historical_files_all), len(current_files), len(backup_files),
-            ", ".join(str(d) for d in scanned_dirs)
-        )
-        if not files:
-            return {"status": "warning", "message": f"No CSV files found in {directory_path} (scanned nested dirs)", "directory": directory_path, "files_processed": 0, "total_documents": 0}
-
-        ordered_files = files  # already ordered: historical numeric -> current -> backups
-
         results: List[Dict] = []
         total_documents = 0
         index_state = load_state()
 
         # Start progress
+        task_id = getattr(self.request, 'id', os.environ.get('CELERY_TASK_ID', 'manual'))
         try:
-            task_id = getattr(self.request, 'id', os.environ.get('CELERY_TASK_ID', 'manual'))
             start_active(index_state, task_id, len(ordered_files))
             save_state(index_state)
             try:
@@ -970,7 +981,6 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                 is_jva = is_jva_switch(sh)
                             except Exception:
                                 is_jva = False
-                            # (Kein finaler Snapshot innerhalb der Loop – verschoben ans Ende)
 
                         model = (r.get("Model Name") or "").strip() or "Unknown"
                         if model != "Unknown":
@@ -991,10 +1001,14 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                             except Exception:
                                 justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
 
-                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]; phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
-                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
-                    total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
+                    phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
+                    phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
+                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
+                    phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
+                    phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+                    total_justiz_phones = sum(justiz_model_counts.values())
+                    total_jva_phones = sum(jva_model_counts.values())
 
                     metrics = {
                         "totalPhones": total_phones,
@@ -1028,19 +1042,23 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                         per_loc_switches: Dict[str, set] = {}
                         for r in _rows:
                             sh2 = (r.get("Switch Hostname") or "").strip()
-                            if not sh2: continue
+                            if not sh2:
+                                continue
                             try:
                                 from api.stats import extract_location as _extract_location
                                 loc2 = _extract_location(sh2)
                             except Exception:
                                 loc2 = None
-                            if not loc2: continue
+                            if not loc2:
+                                continue
                             plc = per_loc_counts.setdefault(loc2, {"totalPhones": 0, "phonesWithKEM": 0, "totalSwitches": 0})
                             plc["totalPhones"] += 1
                             sset = per_loc_switches.setdefault(loc2, set())
                             if sh2 not in sset:
-                                sset.add(sh2); plc["totalSwitches"] += 1
-                            kem1 = (r.get("KEM") or "").strip(); kem2 = (r.get("KEM 2") or "").strip()
+                                sset.add(sh2)
+                                plc["totalSwitches"] += 1
+                            kem1 = (r.get("KEM") or "").strip()
+                            kem2 = (r.get("KEM 2") or "").strip()
                             has_kem = bool(kem1) or bool(kem2)
                             if not has_kem:
                                 ln = (r.get("Line Number") or "").strip()
@@ -1048,7 +1066,16 @@ def index_all_csv_files(self, directory_path: str) -> dict:
                                     has_kem = True
                             if has_kem:
                                 plc["phonesWithKEM"] += 1
-                        loc_docs = [{"key": k, "mode": "code", "totalPhones": agg["totalPhones"], "totalSwitches": agg["totalSwitches"], "phonesWithKEM": agg["phonesWithKEM"]} for k, agg in per_loc_counts.items()]
+                        loc_docs = [
+                            {
+                                "key": k,
+                                "mode": "code",
+                                "totalPhones": agg["totalPhones"],
+                                "totalSwitches": agg["totalSwitches"],
+                                "phonesWithKEM": agg["phonesWithKEM"],
+                            }
+                            for k, agg in per_loc_counts.items()
+                        ]
                         if loc_docs:
                             opensearch_config.index_stats_location_snapshots(file=fm.name, date=date_str, loc_docs=loc_docs)
                     except Exception as _e:
@@ -1090,17 +1117,12 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             logger.warning(f"Failed saving index state: {e}")
 
         # Post-index data repair & final snapshots for current file
-        # Detect current file in nested or flat layout
-        current_candidates_final = [
-            Path(directory_path) / "netspeed" / "netspeed.csv",
-            Path(directory_path) / "netspeed.csv",
-        ]
-        current_file_path = None
-        for cand in current_candidates_final:
-            if cand.exists():
-                current_file_path = cand
-                break
-        if current_file_path and current_file_path.exists():
+        current_file_path = current_file_candidate
+        if current_file_path is None or not current_file_path.exists():
+            current_file_path = resolve_current_file(extras)
+
+        if current_file_path and Path(current_file_path).exists():
+            current_file_path = Path(current_file_path)
             from datetime import datetime as _dt
             today_str = _dt.now().strftime('%Y-%m-%d')
             try:
@@ -1126,7 +1148,8 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             try:
                 from tasks.tasks import snapshot_current_stats as _snap_min
                 logger.info("Running minimal snapshot (snapshot_current_stats) for safety")
-                min_snap_res = _snap_min(directory_path=directory_path)
+                fallback_dir = directory_path or "/app/data"
+                min_snap_res = _snap_min(directory_path=fallback_dir)
                 logger.info(f"Minimal snapshot result: {min_snap_res}")
             except Exception as e:
                 logger.debug(f"Minimal snapshot failed: {e}")
@@ -1157,7 +1180,7 @@ def index_all_csv_files(self, directory_path: str) -> dict:
         return {
             "status": "success",
             "message": f"Processed {len(ordered_files)} files, indexed {total_documents} documents",
-            "directory": directory_path,
+            "directory": directory_label,
             "files_processed": len(ordered_files),
             "total_documents": total_documents,
             "results": results,
@@ -1165,10 +1188,10 @@ def index_all_csv_files(self, directory_path: str) -> dict:
             "finished_at": last_success_ts,
         }
     except Exception as e:
-        logger.error(f"Error indexing directory {directory_path}: {e}")
+        logger.error(f"Error indexing directory {directory_label}: {e}")
         try:
             clear_active(index_state, 'failed')
             save_state(index_state)
         except Exception:
             pass
-        return {"status": "error", "message": f"Error processing directory: {str(e)}", "directory": directory_path, "files_processed": 0, "total_documents": 0}
+        return {"status": "error", "message": f"Error processing directory: {str(e)}", "directory": directory_label, "files_processed": 0, "total_documents": 0}

@@ -33,16 +33,11 @@ class TestFilesExtraAPI:
         assert r.status_code == 400
         assert 'Invalid filename' in r.json()['detail']
 
-    @patch('api.files.Path')
-    def test_download_file_not_found(self, mock_path):
-        # Simulate /app/data/netspeed.csv.9 not existing
-        fake_dir = MagicMock()
-        fake_path = MagicMock()
-        fake_dir.resolve.return_value = Path('/app/data')
-        fake_path.resolve.return_value = Path('/app/data/netspeed.csv.9')
-        fake_path.exists.return_value = False
-        # Configure Path mocks
-        mock_path.side_effect = [fake_dir, fake_path]
+    @patch('api.files._collect_inventory')
+    @patch('api.files._extra_search_paths')
+    def test_download_file_not_found(self, mock_extra_paths, mock_collect_inventory):
+        mock_extra_paths.return_value = [Path('/app/data')]
+        mock_collect_inventory.return_value = ({}, [], None, [])
         r = client.get('/api/files/download/netspeed.csv.9')
         assert r.status_code == 404
 
@@ -71,8 +66,20 @@ class TestFilesExtraAPI:
             def __str__(self):
                 return str(self._p)
 
-        # Patch Path inside api.files to return our FakePath
-        with patch('api.files.Path', side_effect=lambda p: FakePath(p)):
+        fake_current = FakePath('/app/data/netspeed.csv')
+
+        # Patch helpers inside api.files to return our FakePath objects
+        with patch('api.files.Path', side_effect=lambda p: FakePath(p)), \
+             patch('api.files._collect_inventory', return_value=(
+                 {
+                     'netspeed.csv': fake_current,
+                     fake_current._p.name: fake_current,
+                 },
+                 [],
+                 fake_current,
+                 [],
+             )), \
+             patch('api.files._extra_search_paths', return_value=[FakePath('/app/data')]):
             # Mock FileResponse to return a real Response with headers
             mock_fileresponse.return_value = Response(
                 content=b'',

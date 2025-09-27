@@ -857,71 +857,44 @@ class OpenSearchConfig:
         # Get file creation date ONCE per file, not per row
         file_creation_date = None
         try:
-            # Use FileModel to get the proper date calculation
+            from models.file import FileModel
+            file_model = FileModel.from_path(file_path)
+            if file_model.date:
+                file_creation_date = file_model.date.strftime('%Y-%m-%d')
+                logger.info(f"Using FileModel date for {file_path}: {file_creation_date}")
+        except Exception as model_error:
+            logger.warning(f"FileModel unavailable for {file_path}: {model_error}")
+
+        if not file_creation_date:
             try:
-                from models.file import FileModel
-                file_model = FileModel.from_path(file_path)
-
-                if file_model.date:
-                    file_creation_date = file_model.date.strftime('%Y-%m-%d')
-                    logger.info(f"Using FileModel date for {file_path}: {file_creation_date}")
-                else:
-                    raise ValueError("FileModel returned no date")
-            except (ImportError, ValueError) as model_error:
-                logger.warning(f"FileModel not available for {file_path}: {model_error}, using fallback calculation")
-                # Fallback to manual calculation if FileModel fails
-                file_name = Path(file_path).name.lower()
-                if file_name.startswith("netspeed.csv"):
-                    from datetime import datetime, timedelta
-
-                    # Get today's date
-                    today = datetime.now().date()
-
-                    if file_name == "netspeed.csv":
-                        # Current file = today
-                        file_creation_date = today.strftime('%Y-%m-%d')
-                    elif file_name.startswith("netspeed.csv."):
-                        try:
-                            # Extract number after the dot (e.g., "netspeed.csv.1" -> 1)
-                            suffix = file_name.split("netspeed.csv.")[1]
-                            days_back = int(suffix)
-
-                            # Special handling for .0 file - it should be 1 day back (yesterday)
-                            if days_back == 0:
-                                days_back = 1
-                            else:
-                                # For .1, .2, etc. add 1 more day since .0 is already yesterday
-                                days_back = days_back + 1
-
-                            # Calculate date: today minus days_back
-                            file_date = today - timedelta(days=days_back)
-                            file_creation_date = file_date.strftime('%Y-%m-%d')
-                            logger.info(f"Calculated fallback date for {file_path}: {file_creation_date} (today - {days_back} days)")
-                        except (IndexError, ValueError) as e:
-                            logger.warning(f"Error parsing netspeed file suffix '{file_name}': {e}")
-                            # Final fallback to filesystem timestamp
-                            file_path_obj = Path(file_path)
-                            creation_timestamp = file_path_obj.stat().st_mtime
-                            file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
-                else:
-                    # For non-netspeed files, use filesystem timestamp
-                    from datetime import datetime
-                    file_path_obj = Path(file_path)
-                    creation_timestamp = file_path_obj.stat().st_mtime
-                    file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
-
-        except Exception as e:
-            logger.warning(f"Error getting file creation date for {file_path}: {e}, using filesystem fallback")
-            try:
-                # Final fallback to filesystem timestamp
                 from datetime import datetime
+                import subprocess
                 file_path_obj = Path(file_path)
-                creation_timestamp = file_path_obj.stat().st_mtime
-                file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
-            except Exception as inner_e:
-                logger.warning(f"Error getting fallback date: {inner_e}")
-                from datetime import datetime
-                file_creation_date = datetime.now().strftime('%Y-%m-%d')
+                if file_path_obj.exists():
+                    try:
+                        process = subprocess.run(
+                            ["stat", "-c", "%w", str(file_path_obj)],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        creation_time_str = process.stdout.strip()
+                        if creation_time_str and creation_time_str != "-":
+                            file_creation_date = creation_time_str.split()[0]
+                            logger.info(f"Using filesystem creation date for {file_path}: {file_creation_date}")
+                    except (subprocess.CalledProcessError, ValueError, IndexError):
+                        pass
+
+                    if not file_creation_date:
+                        creation_timestamp = file_path_obj.stat().st_mtime
+                        file_creation_date = datetime.fromtimestamp(creation_timestamp).strftime('%Y-%m-%d')
+                        logger.info(f"Using modification time for {file_path}: {file_creation_date}")
+            except Exception as fallback_error:
+                logger.warning(f"Error deriving creation date for {file_path}: {fallback_error}")
+
+        if not file_creation_date:
+            from datetime import datetime
+            file_creation_date = datetime.now().strftime('%Y-%m-%d')
 
         # Import DESIRED_ORDER for consistent column filtering
         from utils.csv_utils import DESIRED_ORDER

@@ -3,18 +3,26 @@ from datetime import datetime
 from typing import Optional
 import logging
 
+from utils.csv_utils import NEW_NETSPEED_HEADERS
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+try:
+    from utils.path_utils import resolve_current_file, NETSPEED_TIMESTAMP_PATTERN
+except Exception:  # Avoid hard failure on import cycles during startup
+    resolve_current_file = None  # type: ignore
+    NETSPEED_TIMESTAMP_PATTERN = None  # type: ignore
 
 
 class FileModel(BaseModel):
     """Model representing a CSV file."""
     name: str
     path: str
-    is_current: bool = False  # True for netspeed.csv, False for historical files
+    is_current: bool = False  # True for newest netspeed export, False for historical files
     date: Optional[datetime] = None  # For historical files, derived from file name
-    format: str = "old"  # Format of the file: "new" (14 columns) or "old" (11 columns)
+    format: str = "new"  # Format of the file: "new" (current standard) or "old" (legacy)
 
     @classmethod
     def from_path(cls, file_path: str) -> "FileModel":
@@ -38,148 +46,95 @@ class FileModel(BaseModel):
         local_logger = logging.getLogger(__name__)
 
         name = file_path.split("/")[-1]
-        is_current = name == "netspeed.csv"
-
-        # Get date for netspeed files based on filename pattern
-        date = None
         try:
-            if name.startswith("netspeed.csv"):
-                from datetime import datetime, timedelta
+            from pathlib import Path
 
-                # Get today's date
-                today = datetime.now().date()
+            path_obj = Path(file_path)
+            resolved_self = path_obj.resolve()
+        except Exception:
+            resolved_self = None
+            path_obj = None  # type: ignore
 
-                if name == "netspeed.csv":
-                    # Current file = today
-                    date = datetime.combine(today, datetime.min.time())
-                elif name.startswith("netspeed.csv."):
-                    try:
-                        # Extract number after the dot (e.g., "netspeed.csv.1" -> 1)
-                        suffix = name.split("netspeed.csv.")[1]
-                        days_back = int(suffix)
+        is_current = False
+        current_candidate = None
+        if callable(resolve_current_file):
+            try:
+                current_candidate = resolve_current_file()
+            except Exception:
+                current_candidate = None
+        if current_candidate is not None:
+            try:
+                if resolved_self is not None and resolved_self == Path(current_candidate).resolve():
+                    is_current = True
+            except Exception:
+                is_current = False
+        if not is_current and name == "netspeed.csv":
+            # Legacy deployments may still use fixed name
+            is_current = True
 
-                        # Special handling for .0 file - it should be 1 day back (yesterday)
-                        if days_back == 0:
-                            days_back = 1
-                        else:
-                            # For .1, .2, etc. add 1 more day since .0 is already yesterday
-                            days_back = days_back + 1
-
-                        # Calculate date: today minus days_back
-                        file_date = today - timedelta(days=days_back)
-                        date = datetime.combine(file_date, datetime.min.time())
-                        logging.getLogger(__name__).info(f"Calculated date for {name}: {date} (today - {days_back} days)")
-                    except (IndexError, ValueError) as e:
-                        logging.getLogger(__name__).warning(f"Error parsing netspeed file suffix '{name}': {e}")
-                        # Fallback to filesystem timestamp
-                        file_path_obj = Path(file_path)
-                        if file_path_obj.exists():
-                            mtime = file_path_obj.stat().st_mtime
-                            date = datetime.fromtimestamp(mtime)
-                else:
-                    # For other netspeed files (like netspeed.csv_bak), use filesystem timestamp
-                    file_path_obj = Path(file_path)
-                    if file_path_obj.exists():
+        # Determine date using filename timestamp when available, otherwise filesystem metadata
+        date = None
+        pattern_match = NETSPEED_TIMESTAMP_PATTERN.match(name) if NETSPEED_TIMESTAMP_PATTERN else None
+        if pattern_match:
+            try:
+                date = datetime.strptime(f"{pattern_match.group(1)}{pattern_match.group(2)}", "%Y%m%d%H%M%S")
+            except Exception:
+                date = None
+        try:
+            file_path_obj = Path(file_path)
+            if file_path_obj.exists():
+                try:
+                    process = subprocess.run(
+                        ["stat", "-c", "%w", file_path],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    creation_time_str = process.stdout.strip()
+                    logging.getLogger(__name__).info(f"Raw creation time from stat: {creation_time_str}")
+                    date_part = creation_time_str.split()[0]
+                    if date_part and date_part != "-":
+                        date = datetime.strptime(date_part, "%Y-%m-%d")
+                        logging.getLogger(__name__).info(f"Successfully parsed creation date: {date}")
+                    else:
+                        raise ValueError("Creation time unavailable")
+                except (subprocess.CalledProcessError, ValueError):
+                    if date is None:
                         mtime = file_path_obj.stat().st_mtime
                         date = datetime.fromtimestamp(mtime)
-            else:
-                # For non-netspeed files, use filesystem timestamp
-                file_path_obj = Path(file_path)
-                if file_path_obj.exists():
-                    try:
-                        # Use Linux stat command to get creation date (birth time)
-                        # Using %w instead of %y to get creation time, not modification time
-                        process = subprocess.run(
-                            ["stat", "-c", "%w", file_path],
-                            capture_output=True,
-                            text=True,
-                            check=True
-                        )
-                        creation_time_str = process.stdout.strip()
-                        logging.getLogger(__name__).info(f"Raw creation time from stat: {creation_time_str}")
-
-                        # Extract just the date part (YYYY-MM-DD) from the timestamp
-                        date_part = creation_time_str.split()[0]
-                        logging.getLogger(__name__).info(f"Extracted date part: {date_part}")
-
-                        try:
-                            # Parse the simple date format
-                            date = datetime.strptime(date_part, "%Y-%m-%d")
-                            logging.getLogger(__name__).info(f"Successfully parsed date: {date}")
-                        except ValueError as ve:
-                            logging.getLogger(__name__).warning(f"Error parsing extracted date part: {ve}")
-                            # Fallback to modification time if date parsing fails
-                            mtime = file_path_obj.stat().st_mtime
-                            date = datetime.fromtimestamp(mtime)
-                            logging.getLogger(__name__).info(f"Using fallback modification time: {date}")
-                    except subprocess.CalledProcessError:
-                        # Fallback to modification time if stat fails
-                        mtime = file_path_obj.stat().st_mtime
-                        date = datetime.fromtimestamp(mtime)
-
+                        logging.getLogger(__name__).info(f"Using modification time for {name}: {date}")
         except Exception as e:
-            # If any error occurs, just leave date as None
             logging.getLogger(__name__).error(f"Error calculating date for {file_path}: {e}")
-            pass
+            date = None
 
         # Determine format based on file content or name patterns
-        # Default to old format
-        format_type = "old"
+        new_header_lower = [h.lower() for h in NEW_NETSPEED_HEADERS]
+        format_type = "new"
 
         try:
-            # Use a consistent approach for all files
-            import csv
-            import logging
-
-            logger = logging.getLogger(__name__)
-
-            with open(file_path, 'r') as f:
-                # First read content to detect delimiter
+            with open(file_path, 'r', newline='') as f:
                 content = f.read()
-                f.seek(0)  # Reset file pointer to start
+                f.seek(0)
 
-                # Detect if file uses semicolons
                 delimiter = ';' if ';' in content else ','
-                logger.debug(f"Detected delimiter '{delimiter}' for file {file_path}")
+                local_logger.debug(f"Detected delimiter '{delimiter}' for file {file_path}")
 
-                # Parse with the detected delimiter
                 csv_reader = csv.reader(f, delimiter=delimiter)
-                # Read up to 5 rows to determine format
-                rows = []
-                for _ in range(5):
-                    try:
-                        rows.append(next(csv_reader))
-                    except StopIteration:
-                        break
+                first_row = next(csv_reader, [])
+                normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in first_row]
+                header_lower = [cell.lower() for cell in normalized_first_row]
 
-                if not rows:
-                    # Empty file, use fallback
-                    if name == "netspeed.csv":
-                        format_type = "new"  # Assume current file is new format
-                    else:
-                        format_type = "old"
+                if not normalized_first_row:
+                    format_type = "new"
+                elif header_lower == new_header_lower:
+                    format_type = "new"
+                elif len(normalized_first_row) == len(NEW_NETSPEED_HEADERS):
+                    format_type = "new"
                 else:
-                    # Log for debugging
-                    for i, row in enumerate(rows[:2]):
-                        logger.debug(f"Row {i} in {name} has {len(row)} columns")
-
-                    # Check if any rows have 14 columns (new format)
-                    new_format_count = sum(1 for row in rows if len(row) == 14)
-                    logger.debug(f"New format count for {name}: {new_format_count}/{len(rows)}")
-
-                    if new_format_count > 0:  # If any row has 14 columns
-                        format_type = "new"
-                    else:
-                        format_type = "old"
+                    format_type = "old"
         except Exception as e:
-            # Log the exception for debugging
-            import logging
-            logging.getLogger(__name__).error(f"Error detecting format for {file_path}: {e}")
-            # If we can't open or read the file, use a fallback detection by name
-            if name == "netspeed.csv":
-                # Assume that current netspeed.csv is in the new format
-                format_type = "new"
-            else:
+            local_logger.error(f"Error detecting format for {file_path}: {e}")
+            if name != "netspeed.csv":
                 format_type = "old"
 
         return cls(

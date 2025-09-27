@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 import os
 from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional, Tuple
 from datetime import datetime
 import logging
 import subprocess
@@ -14,6 +14,11 @@ from tasks.tasks import index_all_csv_files, app
 from utils.index_state import load_state, save_state
 from celery import current_app
 from config import settings
+from utils.path_utils import (
+    collect_netspeed_files,
+    resolve_current_file,
+    NETSPEED_TIMESTAMP_PATTERN,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +29,54 @@ router = APIRouter(
     prefix="/api/files",
     tags=["files"]
 )
+
+
+def _extra_search_paths() -> List[Path | str]:
+    extras: List[Path | str] = []
+    for attr in ("NETSPEED_CURRENT_DIR", "NETSPEED_HISTORY_DIR", "CSV_FILES_DIR"):
+        value = getattr(settings, attr, None)
+        if value:
+            try:
+                extras.append(Path(value))
+            except Exception:
+                continue
+    extras.append(Path("/app/data"))
+    return extras
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
+def _sorted_existing(paths: Iterable[Path]) -> List[Path]:
+    existing = []
+    for path in paths:
+        if path.exists():
+            existing.append(path)
+    return sorted(existing, key=_safe_mtime, reverse=True)
+
+
+def _collect_inventory(extras: Optional[List[Path | str]] = None) -> Tuple[dict[str, Path], List[Path], Optional[Path], List[Path]]:
+    extras = extras or _extra_search_paths()
+    historical, current, backups = collect_netspeed_files(extras)
+    inventory: dict[str, Path] = {}
+
+    for path in historical:
+        if path.exists():
+            inventory[path.name] = path
+
+    if current and current.exists():
+        inventory[current.name] = current
+        inventory.setdefault("netspeed.csv", current)
+
+    for path in backups:
+        if path.exists():
+            inventory[path.name] = path
+
+    return inventory, historical, current, backups
 
 @router.get("/health")
 async def files_health():
@@ -84,89 +137,80 @@ async def files_health():
 async def list_files():
     """
     List all available netspeed CSV files.
-    Returns them sorted with most recent (netspeed.csv) first.
-    Also includes line count for each file.
+    Returns them sorted with the newest export first, followed by historical files.
+    Includes line counts and filesystem timestamps for each file.
     """
     try:
-        from config import settings as _settings
-        roots: list[Path] = []
-        roots_set = {Path('/app/data')}
-        # Add nested mount variations if they exist
-        for r in list(roots_set):
-            if (r / 'data').exists():
-                roots_set.add(r / 'data')
-        roots = [p for p in roots_set if p.exists()]
+        extras: list[Path | str] = []
+        for attr in ("NETSPEED_CURRENT_DIR", "NETSPEED_HISTORY_DIR", "CSV_FILES_DIR"):
+            value = getattr(settings, attr, None)
+            if value:
+                extras.append(Path(value))
+
+        historical_files, current_file, backup_files = collect_netspeed_files(extras)
+
+        ordered_paths: List[Path] = []
+        if current_file and current_file.exists():
+            ordered_paths.append(current_file)
+
+        def _mtime_or_zero(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except Exception:
+                return 0.0
+
+        historical_sorted = sorted(
+            (p for p in historical_files if p.exists()),
+            key=_mtime_or_zero,
+            reverse=True,
+        )
+        ordered_paths.extend(historical_sorted)
+
+        ordered_paths.extend(p for p in backup_files if p.exists())
 
         files: list[dict] = []
         seen: set[str] = set()
 
-        def add_file(p: Path):
-            real = str(p.resolve())
-            if real in seen:
-                return
-            seen.add(real)
+        def add_file(path: Path) -> None:
             try:
-                file_model = FileModel.from_path(str(p))
+                resolved = str(path.resolve())
             except Exception:
+                resolved = str(path)
+            if resolved in seen:
                 return
-            # Count lines
+            seen.add(resolved)
+            if not path.exists():
+                return
+            try:
+                file_model = FileModel.from_path(str(path))
+            except Exception as model_err:
+                logger.debug(f"Skipping file {path}: {model_err}")
+                return
+
             line_count = 0
             try:
-                with open(p, 'r') as f:
-                    line_count = sum(1 for _ in f)
+                with open(path, 'r', newline='') as handle:
+                    line_count = sum(1 for _ in handle)
                     if line_count > 0:
                         line_count -= 1
             except Exception:
-                pass
-            file_dict = file_model.dict()
+                line_count = 0
+
+            metadata = file_model.dict()
             try:
                 from datetime import datetime as _dt, timezone as _tz
-                mtime = p.stat().st_mtime
-                file_dict['date'] = _dt.fromtimestamp(mtime).strftime('%Y-%m-%d')
-                file_dict['mtime'] = mtime
-                file_dict['datetime'] = _dt.fromtimestamp(mtime, tz=_tz.utc).isoformat()
-                try:
-                    file_dict['time'] = _dt.fromtimestamp(mtime).strftime('%H:%M')
-                except Exception:
-                    pass
+                mtime = path.stat().st_mtime
+                metadata['date'] = _dt.fromtimestamp(mtime).strftime('%Y-%m-%d')
+                metadata['mtime'] = mtime
+                metadata['datetime'] = _dt.fromtimestamp(mtime, tz=_tz.utc).isoformat()
+                metadata['time'] = _dt.fromtimestamp(mtime).strftime('%H:%M')
             except Exception:
-                file_dict['date'] = None
-            file_dict['line_count'] = line_count
-            files.append(file_dict)
+                metadata['date'] = None
+            metadata['line_count'] = line_count
+            files.append(metadata)
 
-        for root in roots:
-            # flat current + history in same root
-            for p in root.glob('netspeed.csv*'):
-                add_file(p)
-            # nested current
-            nc = root / 'netspeed'
-            if nc.exists():
-                for p in nc.glob('netspeed.csv*'):
-                    add_file(p)
-            # nested history
-            nh = root / 'history' / 'netspeed'
-            if nh.exists():
-                for p in nh.glob('netspeed.csv.*'):
-                    add_file(p)
-
-        # Sort files: netspeed.csv first, then netspeed.csv.0, netspeed.csv.1, etc.
-        def sort_key(f):
-            name = f["name"]
-            if name == "netspeed.csv":
-                return (0, 0)  # Always first
-            elif name.startswith("netspeed.csv."):
-                try:
-                    # Extract number after the dot (e.g., "netspeed.csv.1" -> 1)
-                    suffix = name.split("netspeed.csv.")[1]
-                    return (1, int(suffix))
-                except (IndexError, ValueError):
-                    # If parsing fails, put at end
-                    return (2, 999)
-            else:
-                # Other files at the end
-                return (3, 0)
-
-        files.sort(key=sort_key)
+        for candidate in ordered_paths:
+            add_file(candidate)
 
         return files
 
@@ -188,56 +232,41 @@ async def get_netspeed_info():
         Dictionary with creation date, line count, and fallback information
     """
     try:
-        # Get path to current CSV file
-        csv_dir = Path("/app/data")
-        # Candidate current file paths (nested preferred)
-        current_candidates = [
-            csv_dir / "netspeed" / "netspeed.csv",
-            csv_dir / "netspeed.csv",
-        ]
-        current_file = next((c for c in current_candidates if c.exists()), current_candidates[0])
-        # We'll pick the latest available historical file if current is missing
-        fallback_file: Optional[Path] = None
+        extras: list[Path | str] = []
+        for attr in ("NETSPEED_CURRENT_DIR", "NETSPEED_HISTORY_DIR", "CSV_FILES_DIR"):
+            value = getattr(settings, attr, None)
+            if value:
+                extras.append(Path(value))
+
+        current_file = resolve_current_file(extras)
+        historical_files, _, _ = collect_netspeed_files(extras)
 
         using_fallback = False
-        file_to_use = current_file
+        fallback_file: Optional[Path] = None
 
-        # If current is missing, try historical files in order: .0, .1, .2, ...
-        if not current_file.exists():
-            # Collect historical candidates from nested history and flat layout
-            hist_dirs = [
-                csv_dir / "history" / "netspeed",
-                csv_dir
-            ]
-            candidates: list[Path] = []
-            for hd in hist_dirs:
-                if hd.exists():
-                    for p in hd.glob("netspeed.csv.*"):
-                        name = p.name
-                        try:
-                            suf = name.split("netspeed.csv.", 1)[1]
-                            if suf.isdigit():
-                                candidates.append(p)
-                        except Exception:
-                            continue
-            # Pick smallest numeric suffix (= most recent following current)
-            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
-                if cand.exists():
-                    fallback_file = cand
-                    using_fallback = True
-                    file_to_use = cand
-                    break
-            if not using_fallback:
+        def _mtime_or_zero(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except Exception:
+                return 0.0
+
+        if current_file and current_file.exists():
+            file_to_use = current_file
+        else:
+            candidates = sorted((p for p in historical_files if p.exists()), key=_mtime_or_zero, reverse=True)
+            if not candidates:
                 return {
                     "success": False,
-                    "message": "No netspeed.csv found — place a file in /app/data and refresh. The netspeed.csv should be created at 06:55 AM.",
+                    "message": "No netspeed export found — place a file in /app/data and refresh. The exporter should create a new file around 06:55 AM.",
                     "date": None,
                     "line_count": 0,
                     "using_fallback": False,
                     "fallback_file": None
                 }
+            fallback_file = candidates[0]
+            file_to_use = fallback_file
+            using_fallback = True
 
-        # Use the file model (format detection, optional) – date will be based on mtime instead
         file_model = FileModel.from_path(str(file_to_use))
 
         # Count lines first for current file; if it's empty and not using fallback, try to pick a historical file with data
@@ -250,22 +279,12 @@ async def get_netspeed_info():
 
         initial_count = _count_lines(file_to_use)
         if not using_fallback and initial_count <= 0:
-            # current file exists but has no data; try historical files
-            candidates = []
-            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
-                name = p.name
-                try:
-                    suf = name.split("netspeed.csv.", 1)[1]
-                    if suf.isdigit():
-                        candidates.append(p)
-                except Exception:
-                    continue
-            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
-                if cand.exists() and _count_lines(cand) > 0:
-                    fallback_file = cand
-                    using_fallback = True
-                    file_to_use = cand
-                    break
+            candidates = [p for p in historical_files if p.exists() and _count_lines(p) > 0]
+            candidates.sort(key=_mtime_or_zero, reverse=True)
+            if candidates:
+                fallback_file = candidates[0]
+                using_fallback = True
+                file_to_use = fallback_file
 
         # Recompute date/time from filesystem so UI reflects the real file date
         from datetime import datetime as _dt
@@ -277,8 +296,8 @@ async def get_netspeed_info():
         result = {
             "success": True,
             "message": (
-                f"Using data from {fb_name} until new netspeed.csv is generated at 06:55 AM."
-                if using_fallback else "Current netspeed.csv file information retrieved successfully"
+                f"Using data from {fb_name} until a new netspeed export is generated."
+                if using_fallback else "Current netspeed export information retrieved successfully"
             ),
             "date": creation_date,
             "line_count": line_count,
@@ -337,98 +356,70 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         Dictionary with headers, preview rows, and file creation date
     """
     try:
-        # Get path to CSV file
-        csv_dir = Path("/app/data")
-        # Resolve filename across nested structure
-        if filename == "netspeed.csv":
-            for c in [csv_dir / "netspeed" / "netspeed.csv", csv_dir / "netspeed.csv"]:
-                if c.exists():
-                    file_path = c
-                    break
-            else:
-                file_path = csv_dir / "netspeed" / "netspeed.csv"  # default candidate
-        else:
-            # Historical may reside under history/netspeed or flat
-            direct = csv_dir / filename
-            nested_hist = csv_dir / "history" / "netspeed" / filename
-            file_path = nested_hist if nested_hist.exists() else direct
+        extras = _extra_search_paths()
+        inventory, historical_files, current_file, _ = _collect_inventory(extras)
 
+        file_path: Optional[Path] = None
         using_fallback = False
         actual_filename = filename
 
-        # If requesting netspeed.csv but it doesn't exist, try fallback
-        if filename == "netspeed.csv" and not file_path.exists():
-            # Collect historical candidates from nested history and flat
-            hist_dirs = [csv_dir / "history" / "netspeed", csv_dir]
-            candidates: list[Path] = []
-            for hd in hist_dirs:
-                if hd.exists():
-                    for p in hd.glob("netspeed.csv.*"):
-                        name = p.name
-                        try:
-                            suf = name.split("netspeed.csv.", 1)[1]
-                            if suf.isdigit():
-                                candidates.append(p)
-                        except Exception:
-                            continue
-            chosen = None
-            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
-                if cand.exists():
-                    chosen = cand
-                    break
-            if chosen is not None:
-                file_path = chosen
-                actual_filename = chosen.name
-                using_fallback = True
+        if filename == "netspeed.csv":
+            candidate = inventory.get("netspeed.csv")
+            if candidate and candidate.exists():
+                file_path = candidate
+                actual_filename = candidate.name
             else:
-                return {
-                    "success": False,
-                    "message": "No netspeed.csv found — place a file in /app/data and refresh. The netspeed.csv should be created at 06:55 AM.",
-                    "headers": [],
-                    "data": [],
-                    "creation_date": None,
-                    "file_name": filename,
-                    "using_fallback": False,
-                    "fallback_file": None
-                }
-        elif not file_path.exists():
-            return {
-                "success": False,
-                "message": f"File {filename} not found",
-                "headers": [],
-                "data": [],
-                "creation_date": None,
-                "file_name": filename,
-                "using_fallback": False,
-                "fallback_file": None
-            }
+                latest_hist = _sorted_existing(historical_files)
+                if latest_hist:
+                    file_path = latest_hist[0]
+                    actual_filename = file_path.name
+                    using_fallback = True
+                else:
+                    return {
+                        "success": False,
+                        "message": "No netspeed export available. Upload a file and retry.",
+                        "headers": [],
+                        "data": [],
+                        "creation_date": None,
+                        "file_name": filename,
+                        "using_fallback": False,
+                        "fallback_file": None
+                    }
+        else:
+            candidate = inventory.get(filename)
+            if candidate and candidate.exists():
+                file_path = candidate
+                actual_filename = candidate.name
+            else:
+                direct = Path("/app/data") / filename
+                if direct.exists():
+                    file_path = direct
+                    actual_filename = direct.name
+                else:
+                    return {
+                        "success": False,
+                        "message": f"File {filename} not found",
+                        "headers": [],
+                        "data": [],
+                        "creation_date": None,
+                        "file_name": filename,
+                        "using_fallback": False,
+                        "fallback_file": None
+                    }
 
-        # If requested file exists but has no data (only header or 0 bytes), try historical netspeed.csv.N with data
+        # If requested file exists but has no data (only header or 0 bytes), try historical netspeed export with data
         def _count_lines(fp: Path) -> int:
             try:
-                with open(fp, 'r') as fh:
+                with open(fp, 'r', newline='') as fh:
                     return max(0, sum(1 for _ in fh) - 1)
             except Exception:
                 return 0
 
         if filename == "netspeed.csv" and file_path.exists() and _count_lines(file_path) <= 0:
-            candidates = []
-            for p in sorted(csv_dir.glob("netspeed.csv.*"), key=lambda x: x.name):
-                name = p.name
-                try:
-                    suf = name.split("netspeed.csv.", 1)[1]
-                    if suf.isdigit():
-                        candidates.append(p)
-                except Exception:
-                    continue
-            chosen = None
-            for cand in sorted(candidates, key=lambda x: int(x.name.split("netspeed.csv.", 1)[1])):
-                if cand.exists() and _count_lines(cand) > 0:
-                    chosen = cand
-                    break
-            if chosen is not None:
-                file_path = chosen
-                actual_filename = chosen.name
+            viable_historical = [p for p in _sorted_existing(historical_files) if _count_lines(p) > 0]
+            if viable_historical:
+                file_path = viable_historical[0]
+                actual_filename = file_path.name
                 using_fallback = True
 
         # Get file creation date from filesystem mtime for consistency with file list
@@ -477,7 +468,7 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         preview_rows = rows[:limit]
 
         fallback_message = (
-            f" (using data from {actual_filename} until new file is generated at 06:55 AM)" if using_fallback else ""
+            f" (using data from {actual_filename} until the next export is available)" if using_fallback else ""
         )
 
         return {
@@ -582,18 +573,15 @@ async def reindex_current_file():
             pass
         from utils.opensearch import OpenSearchConfig
 
-        # Determine path to current CSV file (support nested layout /app/data/netspeed/netspeed.csv first)
-        candidates = [
-            Path("/app/data/netspeed/netspeed.csv"),
-            Path("/app/data/netspeed.csv"),
-        ]
-        csv_file_path = None
-        for c in candidates:
-            if c.exists():
-                csv_file_path = c
-                break
-        if not csv_file_path:
-            raise HTTPException(status_code=404, detail="netspeed.csv file not found in expected locations")
+        extras = _extra_search_paths()
+        csv_file_path = resolve_current_file(extras)
+        if csv_file_path is None or not Path(csv_file_path).exists():
+            _, historical_files, _, _ = _collect_inventory(extras)
+            sorted_hist = _sorted_existing(historical_files)
+            csv_file_path = sorted_hist[0] if sorted_hist else None
+        if not csv_file_path or not Path(csv_file_path).exists():
+            raise HTTPException(status_code=404, detail="No current netspeed export found")
+        csv_file_path = Path(csv_file_path)
         csv_file = str(csv_file_path)
 
         # Check if file exists
@@ -683,27 +671,59 @@ async def download_file(filename: str, request: Request):
     """
     try:
         raw_name = filename.strip()
-        # Basic allow‑list: only netspeed.csv and variants netspeed.csv.N plus optional _bak
-        if not raw_name.startswith("netspeed.csv"):
-            logger.warning(f"Blocked download attempt for disallowed filename: {raw_name}")
-            raise HTTPException(status_code=400, detail="Invalid filename")
 
         # Disallow path traversal
         if any(token in raw_name for token in ("..", "/", "\\")):
             logger.warning(f"Blocked traversal attempt: {raw_name}")
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        csv_dir = Path("/app/data").resolve()
-        file_path = (csv_dir / raw_name).resolve()
+        allowed = False
+        if raw_name == "netspeed.csv":
+            allowed = True
+        elif raw_name.startswith("netspeed.csv."):
+            suffix = raw_name.split("netspeed.csv.", 1)[1]
+            if suffix.endswith("_bak"):
+                suffix = suffix[:-4]
+            allowed = suffix.isdigit()
+        elif raw_name.endswith("_bak") and raw_name.startswith("netspeed.csv"):
+            allowed = True
+        elif NETSPEED_TIMESTAMP_PATTERN.match(raw_name):
+            allowed = True
 
-        # Ensure the resolved path is still inside csv_dir
+        if not allowed:
+            logger.warning(f"Blocked download attempt for disallowed filename: {raw_name}")
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        extras = _extra_search_paths()
+        inventory, _, _, _ = _collect_inventory(extras)
+
+        file_path = None
+        if raw_name == "netspeed.csv":
+            file_path = inventory.get("netspeed.csv")
+        if file_path is None:
+            file_path = inventory.get(raw_name)
+
+        if file_path is None or not file_path.exists():
+            fallback_candidates = [
+                Path("/app/data/netspeed") / raw_name,
+                Path("/app/data/history/netspeed") / raw_name,
+                Path("/app/data") / raw_name,
+            ]
+            for candidate in fallback_candidates:
+                if candidate.exists():
+                    file_path = candidate
+                    break
+
+        if file_path is None or not file_path.exists():
+            logger.error(f"File not found: {raw_name}")
+            raise HTTPException(status_code=404, detail=f"File {raw_name} not found")
+
+        csv_dir = Path("/app/data").resolve()
+        file_path = file_path.resolve()
+
         if csv_dir not in file_path.parents and file_path != csv_dir:
             logger.warning(f"Blocked escape attempt: {file_path}")
             raise HTTPException(status_code=400, detail="Invalid filename")
-
-        if not file_path.exists():
-            logger.error(f"File not found: {raw_name}")
-            raise HTTPException(status_code=404, detail=f"File {raw_name} not found")
 
         size = file_path.stat().st_size
         logger.info(

@@ -7,6 +7,7 @@ from watchdog.events import FileSystemEventHandler
 from tasks.tasks import index_csv, index_all_csv_files
 from utils.opensearch import opensearch_config
 from utils.archiver import archive_current_netspeed
+from utils.path_utils import resolve_current_file, NETSPEED_TIMESTAMP_PATTERN
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,12 +19,18 @@ class CSVFileHandler(FileSystemEventHandler):
 
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
-        # Prefer nested layout (/app/data/netspeed/netspeed.csv) then flat fallback
-        candidates = [
-            self.data_dir / "netspeed" / "netspeed.csv",
-            self.data_dir / "netspeed.csv",
-        ]
-        self.current_csv_path = next((c for c in candidates if c.exists()), candidates[0])
+        current_candidate = None
+        try:
+            current_candidate = resolve_current_file([self.data_dir])
+        except Exception:
+            current_candidate = None
+        if current_candidate is None:
+            candidates = [
+                self.data_dir / "netspeed" / "netspeed.csv",
+                self.data_dir / "netspeed.csv",
+            ]
+            current_candidate = next((c for c in candidates if c.exists()), candidates[0])
+        self.current_csv_path = Path(current_candidate)
         self.last_reindex_time = 0
         self.reindex_cooldown = 30  # 30 seconds cooldown between reindexing
 
@@ -37,14 +44,14 @@ class CSVFileHandler(FileSystemEventHandler):
             # For Python <3.9 compatibility in container, do a manual check
             if str(self.data_dir / "archive") in str(file_path):
                 return False
-        return (
-            file_path.name == "netspeed.csv" or
-            (
-                file_path.name.startswith("netspeed.csv.") and
-                file_path.suffix == '' and  # netspeed.csv.0, .1, etc. have no extension
-                file_path.name.replace("netspeed.csv.", "").isdigit()
-            )
-        )
+        name = file_path.name
+        if NETSPEED_TIMESTAMP_PATTERN.match(name):
+            return True
+        if name == "netspeed.csv":
+            return True
+        if name.startswith("netspeed.csv.") and file_path.suffix == '' and name.replace("netspeed.csv.", "").isdigit():
+            return True
+        return False
 
     def _should_trigger_reindex(self) -> bool:
         """Check if we should trigger reindexing (cooldown check)."""
@@ -111,6 +118,13 @@ class CSVFileHandler(FileSystemEventHandler):
         """
         try:
             logger.info(f"Processing netspeed files change ({event_type}): {file_info}")
+
+            try:
+                current_candidate = resolve_current_file([self.data_dir])
+                if current_candidate and current_candidate.exists():
+                    self.current_csv_path = current_candidate
+            except Exception:
+                pass
 
             # Step -1: Archive the current netspeed.csv so we keep every version
             try:

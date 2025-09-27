@@ -233,7 +233,7 @@ async def index_all_csv_files(
             logger.warning(f"Pre-rebuild cleanup skipped/failed: {_e}")
 
         # Submit indexing task to Celery
-        task = index_all_csv_files.delay("/app/data")
+        task = index_all_csv_files.delay()
 
         return {
             "success": True,
@@ -252,7 +252,7 @@ async def index_all_csv_files(
 async def backfill_locations():
     """Trigger a background job to backfill per-location snapshots (stats_netspeed_loc)."""
     try:
-        task = backfill_location_snapshots.delay("/app/data")
+        task = backfill_location_snapshots.delay()
         return {"success": True, "message": "Backfill task started", "task_id": task.id}
     except Exception as e:
         logger.error(f"Error starting backfill task: {e}")
@@ -263,7 +263,7 @@ async def backfill_locations():
 async def backfill_stats():
     """Trigger a background job to backfill global stats snapshots (stats_netspeed)."""
     try:
-        task = backfill_stats_snapshots.delay("/app/data")
+        task = backfill_stats_snapshots.delay()
         return {"success": True, "message": "Backfill task started", "task_id": task.id}
     except Exception as e:
         logger.error(f"Error starting backfill stats task: {e}")
@@ -333,7 +333,7 @@ async def rebuild_indices(include_historical: bool = True):
         logger.info(f"Rebuild requested: deleted {deleted} indices")
 
         from tasks.tasks import index_all_csv_files
-        task = index_all_csv_files.delay("/app/data")
+        task = index_all_csv_files.delay()
         return {
             "success": True,
             "message": f"Deleted {deleted} indices, started fresh indexing",

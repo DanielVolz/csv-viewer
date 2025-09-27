@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 
+from utils.path_utils import collect_netspeed_files
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +34,46 @@ KNOWN_HEADERS = {
         "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
     ]
 }
+
+NEW_NETSPEED_HEADERS = [
+    "IPAddress",
+    "PhoneDirectoryNumber",
+    "SerialNumber",
+    "PhoneModel",
+    "KeyExpansionModule1",
+    "KeyExpansionModule2",
+    "MACAddress1",
+    "MACAddress2",
+    "SwitchPortMode",
+    "PCPortMode",
+    "SubNetMask",
+    "VLANId",
+    "SwitchFQDN",
+    "SwitchPort",
+    "PhonePortSpeed",
+    "PCPortSpeed",
+]
+
+NEW_TO_CANONICAL_HEADER_MAP = {
+    "IPAddress": "IP Address",
+    "PhoneDirectoryNumber": "Line Number",
+    "SerialNumber": "Serial Number",
+    "PhoneModel": "Model Name",
+    "KeyExpansionModule1": "KEM",
+    "KeyExpansionModule2": "KEM 2",
+    "MACAddress1": "MAC Address",
+    "MACAddress2": "MAC Address 2",
+    "SwitchPortMode": "Speed Switch-Port",
+    "PCPortMode": "Speed PC-Port",
+    "SubNetMask": "Subnet Mask",
+    "VLANId": "Voice VLAN",
+    "SwitchFQDN": "Switch Hostname",
+    "SwitchPort": "Switch Port",
+    "PhonePortSpeed": "Speed 1",
+    "PCPortSpeed": "Speed 2",
+}
+
+_NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
 
 # Define the desired display order for columns (what Frontend should show)
 # KEM and KEM 2 are included in backend processing but merged into Line Number for display
@@ -83,8 +125,27 @@ def detect_column_type(value: str) -> Optional[str]:
 
     return None
 
+def _matches_new_header(row: List[str]) -> bool:
+    normalized = [cell.strip().lstrip("\ufeff") for cell in row]
+    if normalized == NEW_NETSPEED_HEADERS:
+        return True
+    return [cell.lower() for cell in normalized] == _NEW_HEADER_LOWER
 
-def intelligent_column_mapping(row: List[str]) -> Dict[str, str]:
+
+def _map_new_format_row(row: List[str]) -> Dict[str, str]:
+    """Map a row from the new 16-column netspeed export to canonical field names."""
+    cells = [c.strip() for c in row]
+    mapped: Dict[str, str] = {header: "" for header in KNOWN_HEADERS[16]}
+    for idx, source_header in enumerate(NEW_NETSPEED_HEADERS):
+        if idx >= len(cells):
+            break
+        canonical = NEW_TO_CANONICAL_HEADER_MAP.get(source_header)
+        if canonical:
+            mapped[canonical] = cells[idx]
+    return mapped
+
+
+def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict[str, str]:
     """
     Use intelligent pattern matching to map CSV columns to the correct headers.
     This handles cases where phones without KEM modules have shifted columns.
@@ -101,6 +162,9 @@ def intelligent_column_mapping(row: List[str]) -> Dict[str, str]:
 
     col_count = len(row)
     cells = [c.strip() for c in row]
+
+    if new_format:
+        return _map_new_format_row(cells)
 
     if col_count >= 16:
         # Direkt abbilden (überschüssige ignorieren)
@@ -313,7 +377,9 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         # First try with semicolon delimiter, then comma if needed
         all_rows = []
 
-        with open(file_path, 'r') as csv_file:
+        new_format_with_header = False
+
+        with open(file_path, 'r', newline='') as csv_file:
             content = csv_file.read()
             csv_file.seek(0)  # Reset file pointer to start
 
@@ -344,6 +410,16 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
             # Create the custom reader and process all rows
             reader = TrailingDelimiterReader(csv_file, delimiter)
             all_rows = list(reader)
+
+            if all_rows:
+                normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in all_rows[0]]
+                if _matches_new_header(normalized_first_row):
+                    logger.info(f"Detected new-format header for {file_path}")
+                    new_format_with_header = True
+                    all_rows = all_rows[1:]
+                elif normalized_first_row == KNOWN_HEADERS[16]:
+                    logger.info(f"Detected legacy header row for {file_path}")
+                    all_rows = all_rows[1:]
 
             # Determine format based on number of columns
             if len(all_rows) == 0:
@@ -387,8 +463,8 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                 cleaned_row = [cell.strip() for cell in row]
 
                 # Use intelligent column mapping instead of positional mapping
-                logger.debug(f"Row {idx}: Processing {len(cleaned_row)} columns with intelligent mapping")
-                row_dict = intelligent_column_mapping(cleaned_row)
+                logger.debug(f"Row {idx}: Processing {len(cleaned_row)} columns with intelligent mapping (new_format={new_format_with_header})")
+                row_dict = intelligent_column_mapping(cleaned_row, new_format=new_format_with_header)
 
                 # Merge KEM information into Line Number for display (but keep KEM columns in data)
                 line_number = row_dict.get("Line Number", "")
@@ -455,8 +531,10 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
     Returns a tuple of (headers, rows) where headers are the 16 standard column names.
     """
     try:
+        new_format_with_header = False
+
         # Detect delimiter by sampling content
-        with open(file_path, 'r') as csv_file:
+        with open(file_path, 'r', newline='') as csv_file:
             content = csv_file.read()
             csv_file.seek(0)
 
@@ -484,6 +562,13 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
         if not raw_rows:
             return KNOWN_HEADERS[16].copy(), []
 
+        normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in raw_rows[0]] if raw_rows else []
+        if _matches_new_header(normalized_first_row):
+            new_format_with_header = True
+            raw_rows = raw_rows[1:]
+        elif normalized_first_row == KNOWN_HEADERS[16]:
+            raw_rows = raw_rows[1:]
+
         # Normalize each row to 16 columns
         headers16 = KNOWN_HEADERS[16].copy()
         normalized_rows: List[Dict[str, Any]] = []
@@ -494,7 +579,7 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
             cleaned_row = [cell.strip() for cell in row]
 
             # Use intelligent column mapping instead of positional mapping
-            row_dict = intelligent_column_mapping(cleaned_row)
+            row_dict = intelligent_column_mapping(cleaned_row, new_format=new_format_with_header)
             normalized_rows.append(row_dict)
 
         return headers16, normalized_rows
@@ -530,30 +615,21 @@ def search_field_in_files(
             )
             return [], []
 
-        # List of files to search
-        files_to_search = []
+        historical_files, current_file, _ = collect_netspeed_files([dir_path])
 
-        # Initialize current_file reference
-        current_file = dir_path / "netspeed.csv"
+        files_to_search: List[Path] = []
+        if current_file:
+            files_to_search.append(current_file)
 
-        # Add files to search based on include_historical flag
         if include_historical:
-            # Add current file
-            if current_file.exists():
-                files_to_search.append(current_file)
+            files_to_search.extend(historical_files)
 
-            # Add historical files
-            historical_pattern = "netspeed.csv.*"
-            for file_path in dir_path.glob(historical_pattern):
-                files_to_search.append(file_path)
-        else:
-            # Only add current file when not including historical files
-            if current_file.exists():
-                files_to_search.append(current_file)
+        if not files_to_search:
+            fallback = dir_path / "netspeed.csv"
+            if fallback.exists():
+                files_to_search.append(fallback)
 
-        logger.info(
-            f"Searching for term '{search_term}' in {len(files_to_search)} files"
-        )
+        logger.info(f"Searching for term '{search_term}' in {len(files_to_search)} files")
 
         # Normalize the search term (lowercase)
         normalized_search_term = search_term.lower()
@@ -589,7 +665,7 @@ def search_field_in_files(
         )
 
         # Return headers and matching rows
-        if current_file.exists() and not headers:
+        if current_file and current_file.exists() and not headers:
             headers, _ = read_csv_file(str(current_file))
 
         return headers, matching_rows

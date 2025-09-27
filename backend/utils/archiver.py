@@ -3,12 +3,14 @@ from pathlib import Path
 from datetime import datetime
 import shutil
 
+from utils.path_utils import get_data_root, resolve_current_file
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def archive_current_netspeed(data_dir: str = "/app/data") -> dict:
+def archive_current_netspeed(data_dir: str | None = None) -> dict:
     """Copy the current netspeed.csv into an archive folder with a timestamped name.
 
     Files are written under <data_dir>/archive as netspeed_YYYY-MM-DDTHHMMSSZ.csv
@@ -18,12 +20,14 @@ def archive_current_netspeed(data_dir: str = "/app/data") -> dict:
     Returns a dict with status and destination path (if created).
     """
     try:
-        data_path = Path(data_dir)
-        src = data_path / "netspeed.csv"
-        if not src.exists():
-            return {"status": "warning", "message": f"{src} not found"}
+        base_dir = Path(data_dir) if data_dir else get_data_root()
+        extras = [data_dir] if data_dir else None
+        src = resolve_current_file(extras)
+        if not src or not Path(src).exists():
+            return {"status": "warning", "message": "netspeed.csv not found"}
+        src_path = Path(src)
 
-        archive_dir = data_path / "archive"
+        archive_dir = base_dir / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
 
         # Use UTC timestamp with microseconds to avoid collisions
@@ -31,7 +35,7 @@ def archive_current_netspeed(data_dir: str = "/app/data") -> dict:
         dest = archive_dir / f"netspeed_{ts}.csv"
 
         # Copy with metadata
-        shutil.copy2(src, dest)
+        shutil.copy2(src_path, dest)
         logger.info(f"Archived netspeed to {dest}")
         return {"status": "success", "path": str(dest)}
     except Exception as e:
@@ -39,7 +43,7 @@ def archive_current_netspeed(data_dir: str = "/app/data") -> dict:
         return {"status": "error", "message": str(e)}
 
 
-def archive_path(file_path: str, data_dir: str = "/app/data") -> dict:
+def archive_path(file_path: str, data_dir: str | None = None) -> dict:
     """Archive any given file into <data_dir>/archive using name '<basename>__<UTC>.ext'.
 
     Preserves metadata (mtime/atime) via copy2; returns a dict with status and dest.
@@ -48,7 +52,8 @@ def archive_path(file_path: str, data_dir: str = "/app/data") -> dict:
         src = Path(file_path)
         if not src.exists():
             return {"status": "warning", "message": f"{file_path} not found"}
-        archive_dir = Path(data_dir) / "archive"
+        base_dir = Path(data_dir) if data_dir else get_data_root()
+        archive_dir = base_dir / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.utcnow().strftime("%Y-%m-%dT%H%M%S%fZ")
         dest = archive_dir / f"{src.name}__{ts}"
