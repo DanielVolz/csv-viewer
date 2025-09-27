@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:{REDIS_PORT}"
     OPENSEARCH_URL: str = "http://opensearch:{OPENSEARCH_PORT}"
     OPENSEARCH_PASSWORD: Optional[str] = None
+    OPENSEARCH_STARTUP_TIMEOUT_SECONDS: int = 45
+    OPENSEARCH_STARTUP_POLL_SECONDS: float = 3.0
+    OPENSEARCH_RETRY_BASE_SECONDS: int = 5
+    OPENSEARCH_RETRY_MAX_SECONDS: int = 60
+    OPENSEARCH_RETRY_MAX_ATTEMPTS: int = 5
 
     # Server Settings
     HOST: str = "0.0.0.0"

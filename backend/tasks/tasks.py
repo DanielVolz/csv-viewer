@@ -3,8 +3,11 @@ from celery import Celery
 import logging
 from pathlib import Path
 from typing import Optional, Dict, List, Any
-from utils.opensearch import opensearch_config
 from datetime import datetime
+from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
+
+from config import settings
+from utils.opensearch import OpenSearchUnavailableError, opensearch_config
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
 from utils.csv_utils import read_csv_file_normalized
 from utils.path_utils import (
@@ -17,6 +20,14 @@ from utils.path_utils import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _calculate_retry_delay(attempt: int) -> int:
+    """Compute exponential backoff with max cap for OpenSearch retries."""
+    base = max(1, int(getattr(settings, "OPENSEARCH_RETRY_BASE_SECONDS", 5)))
+    max_seconds = max(base, int(getattr(settings, "OPENSEARCH_RETRY_MAX_SECONDS", 60)))
+    delay = base * (2 ** attempt)
+    return min(delay, max_seconds)
 
 # Initialize Celery
 app = Celery('csv_viewer')
@@ -457,8 +468,12 @@ def snapshot_current_with_details(file_path: Optional[str] = None, force_date: O
         return {"status": "error", "message": str(e)}
 
 
-@app.task(name='tasks.index_csv')
-def index_csv(file_path: str) -> dict:
+@app.task(
+    name='tasks.index_csv',
+    bind=True,
+    max_retries=getattr(settings, "OPENSEARCH_RETRY_MAX_ATTEMPTS", 5),
+)
+def index_csv(self, file_path: str) -> dict:
     """
     Task to index a CSV file in OpenSearch.
 
@@ -471,6 +486,13 @@ def index_csv(file_path: str) -> dict:
     logger.info(f"Indexing CSV file at {file_path}")
 
     try:
+        # Ensure OpenSearch is ready before attempting a heavy index run
+        opensearch_config.wait_for_availability(
+            timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+            interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+            reason=f"index_csv:{Path(file_path).name}",
+        )
+
         success, count = opensearch_config.index_csv_file(file_path)
 
         # NEU: Stats-Snapshot nach jedem erfolgreichen Index aktualisieren
@@ -509,6 +531,42 @@ def index_csv(file_path: str) -> dict:
                 "file_path": file_path,
                 "count": 0
             }
+    except OpenSearchUnavailableError as exc:
+        attempt = getattr(self.request, "retries", 0)
+        max_attempts = self.max_retries if getattr(self, "max_retries", None) is not None else getattr(settings, "OPENSEARCH_RETRY_MAX_ATTEMPTS", 5)
+        if max_attempts is not None and attempt >= max_attempts:
+            logger.error(f"OpenSearch unavailable and retry limit reached for {file_path}: {exc}")
+            return {
+                "status": "error",
+                "message": f"OpenSearch unavailable for {file_path}: {exc}",
+                "file_path": file_path,
+                "count": 0,
+            }
+
+        delay = _calculate_retry_delay(attempt)
+        max_attempts_label = max_attempts if max_attempts is not None else "∞"
+        logger.warning(
+            f"OpenSearch unavailable while indexing {file_path} (attempt {attempt + 1}/{max_attempts_label}). Retrying in {delay}s"
+        )
+        raise self.retry(exc=exc, countdown=delay)
+    except OpenSearchConnectionError as exc:
+        attempt = getattr(self.request, "retries", 0)
+        max_attempts = self.max_retries if getattr(self, "max_retries", None) is not None else getattr(settings, "OPENSEARCH_RETRY_MAX_ATTEMPTS", 5)
+        if max_attempts is not None and attempt >= max_attempts:
+            logger.error(f"OpenSearch connection error and retry limit reached for {file_path}: {exc}")
+            return {
+                "status": "error",
+                "message": f"OpenSearch connection error for {file_path}: {exc}",
+                "file_path": file_path,
+                "count": 0,
+            }
+
+        delay = _calculate_retry_delay(attempt)
+        max_attempts_label = max_attempts if max_attempts is not None else "∞"
+        logger.warning(
+            f"OpenSearch connection refused while indexing {file_path} (attempt {attempt + 1}/{max_attempts_label}). Retrying in {delay}s"
+        )
+        raise self.retry(exc=exc, countdown=delay)
     except Exception as e:
         logger.error(f"Error indexing CSV file {file_path}: {e}")
         return {

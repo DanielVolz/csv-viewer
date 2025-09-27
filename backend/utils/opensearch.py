@@ -2,6 +2,7 @@ from opensearchpy import OpenSearch, helpers
 from config import settings
 import logging
 import re
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Generator, Optional, Tuple
@@ -12,6 +13,15 @@ import os
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class OpenSearchUnavailableError(RuntimeError):
+    """Raised when OpenSearch cannot be reached within a grace period."""
+
+    def __init__(self, message: str, *, attempts: int = 0, last_error: Optional[Exception] = None):
+        super().__init__(message)
+        self.attempts = attempts
+        self.last_error = last_error
 
 
 class OpenSearchConfig:
@@ -372,6 +382,60 @@ class OpenSearchConfig:
         return self._client
 
     # ------------------------------------------------------------------
+    # Availability helpers
+    # ------------------------------------------------------------------
+    def wait_for_availability(
+        self,
+        *,
+        timeout: Optional[float] = None,
+        interval: Optional[float] = None,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Ping OpenSearch until it responds or the timeout elapses.
+
+        Args:
+            timeout: Maximum number of seconds to wait. Defaults to
+                settings.OPENSEARCH_STARTUP_TIMEOUT_SECONDS.
+            interval: Delay between ping attempts. Defaults to
+                settings.OPENSEARCH_STARTUP_POLL_SECONDS.
+            reason: Context string for logging.
+
+        Returns:
+            bool: True if OpenSearch responded before timeout, else False.
+
+        Raises:
+            OpenSearchUnavailableError: When OpenSearch does not respond within
+                the timeout window.
+        """
+
+        max_wait = timeout if timeout is not None else float(getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45))
+        poll_delay = interval if interval is not None else float(getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0))
+        poll_delay = max(0.1, poll_delay)
+
+        deadline = time.monotonic() + max_wait
+        attempts = 0
+        last_exc: Optional[Exception] = None
+        ctx = f" ({reason})" if reason else ""
+
+        while True:
+            attempts += 1
+            try:
+                if self.client.ping():
+                    if attempts > 1:
+                        logger.info(f"OpenSearch responded after {attempts} attempts{ctx}")
+                    return True
+                logger.debug(f"OpenSearch ping attempt {attempts} returned False{ctx}")
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                logger.debug(f"OpenSearch ping attempt {attempts} raised {exc!r}{ctx}")
+
+            if time.monotonic() >= deadline:
+                message = f"OpenSearch unavailable after {attempts} attempts within {max_wait}s{ctx}"
+                raise OpenSearchUnavailableError(message, attempts=attempts, last_error=last_exc)
+
+            time.sleep(poll_delay)
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
     def _build_host_list(self, raw: str) -> List[str]:
@@ -486,6 +550,137 @@ class OpenSearchConfig:
         except Exception as e:
             logger.error(f"Error getting search indices: {e}")
             return ["netspeed_*"] if include_historical else ["netspeed_current_only"]
+
+    # --- Netspeed index discovery helpers -------------------------------------------------
+
+    @staticmethod
+    def _index_to_filename(index_name: str) -> str:
+        """Convert a netspeed_* index name back into a plausible filename."""
+        if not index_name.startswith("netspeed_"):
+            return index_name
+        suffix = index_name[len("netspeed_"):]
+        if suffix == "netspeed_csv":
+            return "netspeed.csv"
+        if suffix.startswith("netspeed_csv_"):
+            return f"netspeed.csv.{suffix[len('netspeed_csv_') :]}"
+        if suffix.endswith("_csv"):
+            return suffix[:-4] + ".csv"
+        return suffix.replace("_", ".")
+
+    def list_netspeed_indices(self) -> list[dict[str, Any]]:
+        """Return metadata for all netspeed_* indices with counts and creation time."""
+        try:
+            meta = self.client.indices.get(index="netspeed_*")
+            if not isinstance(meta, dict):
+                return []
+
+            stats = self.client.indices.stats(index="netspeed_*", metric="docs")
+            stats_map = stats.get("indices", {}) if isinstance(stats, dict) else {}
+
+            entries: list[dict[str, Any]] = []
+            for index_name, descriptor in meta.items():
+                if not index_name.startswith("netspeed_"):
+                    continue
+                settings = descriptor.get("settings", {}).get("index", {})
+                creation_raw = settings.get("creation_date") or settings.get("provided_name_timestamp")
+                try:
+                    creation_ms = int(creation_raw)
+                except Exception:
+                    creation_ms = 0
+
+                docs_count = 0
+                try:
+                    docs_count = int(stats_map.get(index_name, {}).get("total", {}).get("docs", {}).get("count", 0))
+                except Exception:
+                    docs_count = 0
+
+                entries.append(
+                    {
+                        "index": index_name,
+                        "file_name": self._index_to_filename(index_name),
+                        "creation_date_ms": creation_ms,
+                        "documents": docs_count,
+                    }
+                )
+
+            entries.sort(key=lambda e: e.get("creation_date_ms", 0), reverse=True)
+            return entries
+        except Exception as exc:
+            logger.warning(f"list_netspeed_indices failed: {exc}")
+            return []
+
+    def get_latest_netspeed_snapshot(self) -> Optional[dict[str, Any]]:
+        """Return metadata and top-level info for the most recent netspeed index."""
+        entries = self.list_netspeed_indices()
+        if not entries:
+            return None
+
+        latest = entries[0]
+        index_name = latest.get("index")
+        if not index_name:
+            return None
+
+        try:
+            search_res = self.client.search(
+                index=index_name,
+                size=1,
+                sort=[{"Creation Date": {"order": "desc"}}],
+                query={"match_all": {}},
+            )
+            hits = search_res.get("hits", {}).get("hits", []) if isinstance(search_res, dict) else []
+            top_doc = hits[0].get("_source", {}) if hits else {}
+        except Exception as exc:
+            logger.warning(f"Failed to fetch latest document from {index_name}: {exc}")
+            top_doc = {}
+
+        creation_date = None
+        for key in ("Creation Date", "creation_date", "date"):
+            val = top_doc.get(key)
+            if val:
+                creation_date = val
+                break
+
+        return {
+            "index": index_name,
+            "file_name": latest.get("file_name"),
+            "documents": latest.get("documents", 0),
+            "creation_date": creation_date,
+            "creation_date_ms": latest.get("creation_date_ms"),
+            "top_document": top_doc,
+        }
+
+    def preview_index_rows(self, index_name: str, limit: int = 25) -> tuple[list[str], list[dict[str, Any]]]:
+        """Fetch a small preview from the given netspeed index."""
+        try:
+            res = self.client.search(
+                index=index_name,
+                size=max(1, limit),
+                sort=[{"Creation Date": {"order": "desc"}}, {"_doc": {"order": "asc"}}],
+                query={"match_all": {}},
+            )
+            hits = res.get("hits", {}).get("hits", []) if isinstance(res, dict) else []
+            rows = [hit.get("_source", {}) for hit in hits]
+            all_headers: list[str] = []
+            seen = set()
+            for row in rows:
+                for key in row.keys():
+                    if key not in seen:
+                        seen.add(key)
+                        all_headers.append(key)
+
+            # Align with CSV display columns when possible
+            try:
+                from utils.csv_utils import filter_display_columns
+                headers, filtered_rows = filter_display_columns(all_headers, rows)
+                if headers:
+                    return headers, filtered_rows
+            except Exception:
+                pass
+
+            return all_headers, rows
+        except Exception as exc:
+            logger.warning(f"preview_index_rows failed for {index_name}: {exc}")
+            return [], []
 
     def create_index(self, index_name: str) -> bool:
         """

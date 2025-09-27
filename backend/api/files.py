@@ -19,6 +19,7 @@ from utils.path_utils import (
     resolve_current_file,
     NETSPEED_TIMESTAMP_PATTERN,
 )
+from utils.opensearch import OpenSearchUnavailableError, opensearch_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -77,6 +78,53 @@ def _collect_inventory(extras: Optional[List[Path | str]] = None) -> Tuple[dict[
             inventory[path.name] = path
 
     return inventory, historical, current, backups
+
+
+def _latest_opensearch_snapshot() -> Optional[dict]:
+    try:
+        return opensearch_config.get_latest_netspeed_snapshot()
+    except Exception as exc:
+        logger.debug(f"OpenSearch snapshot lookup failed: {exc}")
+        return None
+
+
+def _format_snapshot_date(snapshot: dict) -> Optional[str]:
+    if not snapshot:
+        return None
+    value = snapshot.get("creation_date")
+    if isinstance(value, str) and value:
+        return value
+    ms = snapshot.get("creation_date_ms")
+    if isinstance(ms, (int, float)) and ms > 0:
+        try:
+            return datetime.utcfromtimestamp(ms / 1000).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    return None
+
+
+def _opensearch_preview(limit: int = 25) -> Optional[dict]:
+    snapshot = _latest_opensearch_snapshot()
+    if not snapshot or not snapshot.get("index"):
+        return None
+
+    headers, rows = opensearch_config.preview_index_rows(snapshot["index"], limit=limit)
+    if not rows:
+        return None
+
+    creation_date = _format_snapshot_date(snapshot)
+    file_name = snapshot.get("file_name") or snapshot.get("index")
+    return {
+        "success": True,
+        "message": "Displaying latest data available in OpenSearch.",
+        "headers": headers,
+        "data": rows,
+        "creation_date": creation_date,
+        "file_name": file_name,
+        "using_fallback": True,
+        "fallback_file": file_name,
+        "source": "opensearch",
+    }
 
 @router.get("/health")
 async def files_health():
@@ -255,6 +303,22 @@ async def get_netspeed_info():
         else:
             candidates = sorted((p for p in historical_files if p.exists()), key=_mtime_or_zero, reverse=True)
             if not candidates:
+                snapshot = _latest_opensearch_snapshot()
+                if snapshot:
+                    creation_date = _format_snapshot_date(snapshot)
+                    fallback_name = snapshot.get("file_name") or snapshot.get("index")
+                    return JSONResponse(
+                        content={
+                            "success": True,
+                            "message": "Using OpenSearch snapshot data because no filesystem export is available.",
+                            "date": creation_date,
+                            "line_count": snapshot.get("documents", 0),
+                            "using_fallback": True,
+                            "fallback_file": fallback_name,
+                            "source": "opensearch",
+                            "index": snapshot.get("index"),
+                        }
+                    )
                 return {
                     "success": False,
                     "message": "No netspeed export found — place a file in /app/data and refresh. The exporter should create a new file around 06:55 AM.",
@@ -375,6 +439,9 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                     actual_filename = file_path.name
                     using_fallback = True
                 else:
+                    fallback_preview = _opensearch_preview(limit)
+                    if fallback_preview:
+                        return fallback_preview
                     return {
                         "success": False,
                         "message": "No netspeed export available. Upload a file and retry.",
@@ -396,6 +463,9 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                     file_path = direct
                     actual_filename = direct.name
                 else:
+                    fallback_preview = _opensearch_preview(limit)
+                    if fallback_preview:
+                        return fallback_preview
                     return {
                         "success": False,
                         "message": f"File {filename} not found",
@@ -593,6 +663,16 @@ async def reindex_current_file():
 
         # Initialize OpenSearch and index the single file
         opensearch_config = OpenSearchConfig()
+
+        try:
+            opensearch_config.wait_for_availability(
+                timeout=getattr(settings, "OPENSEARCH_STARTUP_TIMEOUT_SECONDS", 45),
+                interval=getattr(settings, "OPENSEARCH_STARTUP_POLL_SECONDS", 3.0),
+                reason="reindex_current",
+            )
+        except OpenSearchUnavailableError as exc:
+            logger.warning(f"OpenSearch unavailable for fast reindex: {exc}")
+            raise HTTPException(status_code=503, detail="OpenSearch is not ready. Please try again shortly.") from exc
 
         # Delete the current index first
         index_name = opensearch_config.get_index_name(csv_file)

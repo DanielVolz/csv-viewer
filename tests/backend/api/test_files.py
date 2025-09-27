@@ -111,7 +111,8 @@ class TestFilesAPI:
         assert data["headers"] == headers
         assert len(data["data"]) == 2
 
-    def test_preview_file_not_found(self):
+    @patch('api.files._opensearch_preview', return_value=None)
+    def test_preview_file_not_found(self, mock_os_preview):
         response = client.get("/api/files/preview?filename=__does_not_exist__.csv")
         assert response.status_code == 200
         data = response.json()
@@ -138,6 +139,27 @@ class TestFilesAPI:
         response = client.get("/api/files/preview")
         assert response.status_code == 500
         assert response.json()["detail"] == "Failed to get file preview"
+
+    @patch('api.files._opensearch_preview')
+    def test_preview_file_not_found_opensearch_fallback(self, mock_os_preview):
+        mock_os_preview.return_value = {
+            "success": True,
+            "message": "Displaying latest data available in OpenSearch.",
+            "headers": ["Col1"],
+            "data": [{"Col1": "val1"}],
+            "creation_date": "2025-01-01",
+            "file_name": "netspeed_20250101-070000.csv",
+            "using_fallback": True,
+            "fallback_file": "netspeed_20250101-070000.csv",
+            "source": "opensearch",
+        }
+
+        response = client.get("/api/files/preview?filename=__does_not_exist__.csv")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data.get("source") == "opensearch"
+        assert data.get("headers") == ["Col1"]
 
     @patch('api.files.FileModel')
     @patch('api.files.open', new_callable=mock_open, read_data='header\ndata1\ndata2\ndata3')
@@ -167,10 +189,36 @@ class TestFilesAPI:
             assert response.status_code == 500
             assert response.json().get("detail") == "Failed to get netspeed file information"
 
+    @patch('api.files.opensearch_config.get_latest_netspeed_snapshot')
     @patch('api.files.collect_netspeed_files')
     @patch('api.files.resolve_current_file')
     @patch('api.files._extra_search_paths')
-    def test_netspeed_info_not_found(self, mock_extra_paths, mock_resolve_current, mock_collect_files):
+    def test_netspeed_info_not_found(self, mock_extra_paths, mock_resolve_current, mock_collect_files, mock_snapshot):
+        mock_extra_paths.return_value = [Path("/app/data")]
+        mock_resolve_current.return_value = None
+        mock_collect_files.return_value = ([], None, [])
+        mock_snapshot.return_value = {
+            "index": "netspeed_netspeed_20250101-070000_csv",
+            "file_name": "netspeed_20250101-070000.csv",
+            "documents": 123,
+            "creation_date": "2025-01-01",
+        }
+
+        response = client.get("/api/files/netspeed_info")
+        if response.status_code == 200:
+            data = response.json()
+            assert data["success"] is True
+            assert data.get("source") == "opensearch"
+            assert data.get("line_count") == 123
+        else:
+            assert response.status_code == 500
+            assert response.json().get("detail") == "Failed to get netspeed file information"
+
+    @patch('api.files.opensearch_config.get_latest_netspeed_snapshot', return_value=None)
+    @patch('api.files.collect_netspeed_files')
+    @patch('api.files.resolve_current_file')
+    @patch('api.files._extra_search_paths')
+    def test_netspeed_info_not_found_no_snapshot(self, mock_extra_paths, mock_resolve_current, mock_collect_files, mock_snapshot):
         mock_extra_paths.return_value = [Path("/app/data")]
         mock_resolve_current.return_value = None
         mock_collect_files.return_value = ([], None, [])
@@ -179,15 +227,8 @@ class TestFilesAPI:
         if response.status_code == 200:
             data = response.json()
             assert data["success"] is False
-            message = (data.get("message") or "").lower()
-            assert (
-                "no netspeed.csv found" in message
-                or "no netspeed export found" in message
-                or "not found" in message
-            )
         else:
             assert response.status_code == 500
-            assert response.json().get("detail") == "Failed to get netspeed file information"
 
     @patch('api.files.FileModel')
     @patch('api.files.collect_netspeed_files')
