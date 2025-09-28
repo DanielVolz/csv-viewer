@@ -32,6 +32,7 @@ class TestGetSearchIndices:
 
         client.indices.get.side_effect = _indices_get
         client.indices.stats.side_effect = _indices_stats
+        client.indices.exists.return_value = False
 
     def test_prefers_canonical_current_index(self, config):
         self._setup_client(
@@ -92,6 +93,22 @@ class TestGetSearchIndices:
 
         indices_hist = config.get_search_indices(include_historical=True)
         assert indices_hist == ["netspeed_*"]
+
+    def test_returns_archive_when_available_and_no_netspeed(self, config):
+        self._setup_client(
+            config,
+            all_indices=["stats_netspeed_loc", "archive_netspeed"],
+            netspeed_meta={},
+            docs_counts={},
+        )
+        config._client.indices.exists.return_value = True
+
+        indices_current = config.get_search_indices(include_historical=False)
+        assert indices_current == [config.archive_index]
+
+        indices_hist = config.get_search_indices(include_historical=True)
+        assert indices_hist[0] == "netspeed_*"
+        assert indices_hist[-1] == config.archive_index
 
 
 class TestWaitForAvailability:

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any, cast
 from pathlib import Path
 import pytest
 
@@ -90,7 +91,7 @@ def fast_handle(monkeypatch):
 
 
 def make_event(path, is_directory=False, dest_path=None):
-    return SimpleNamespace(src_path=str(path), is_directory=is_directory, dest_path=str(dest_path) if dest_path else None)
+    return cast(Any, SimpleNamespace(src_path=str(path), is_directory=is_directory, dest_path=str(dest_path) if dest_path else None))
 
 
 def test_is_netspeed_file_variants():
@@ -99,9 +100,9 @@ def test_is_netspeed_file_variants():
     h = CSVFileHandler("/tmp/data")
     # True cases (based on current implementation)
     assert h._is_netspeed_file(Path("/tmp/data/netspeed.csv"))
-    # Historical numeric suffix files do not match with current suffix check
-    assert not h._is_netspeed_file(Path("/tmp/data/netspeed.csv.0"))
-    assert not h._is_netspeed_file(Path("/tmp/data/netspeed.csv.12"))
+    # Historical numeric suffix files should also trigger netspeed handling
+    assert h._is_netspeed_file(Path("/tmp/data/netspeed.csv.0"))
+    assert h._is_netspeed_file(Path("/tmp/data/netspeed.csv.12"))
     # Other false cases
     assert not h._is_netspeed_file(Path("/tmp/data/netspeed.csv_bak"))
     assert not h._is_netspeed_file(Path("/tmp/data/other.csv"))
