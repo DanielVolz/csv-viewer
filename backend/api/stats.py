@@ -2,6 +2,7 @@ from fastapi import Query
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, cast
+from celery.result import AsyncResult
 import logging
 import time
 import os
@@ -534,7 +535,7 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0) -> Dict:
 
     - Snapshot-only from stats_netspeed_loc.
     - Series starts at the earliest available date and carries forward gaps.
-    - If limit > 0, returns the first N days from earliest; 0 = full history.
+    - If limit > 0, returns the first N days from earliest; 0 returns full range from earliest.
     """
     try:
         if not q or not q.strip():
@@ -611,17 +612,14 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0) -> Dict:
             d = b.get("key_as_string")
             if not d:
                 continue
-            by_date[d] = {
-                "file": None,
-                "date": d,
-                "metrics": {
-                    "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
-                    "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
-                    "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
-                    "phonesByModel": [],
-                    "cityCodes": [],
-                }
-            }
+            doc_count = b.get("doc_count")
+            if doc_count is not None and not int(doc_count or 0):
+                continue
+            by_date[d] = {"file": None, "date": d, "metrics": {
+                "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
+                "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
+                "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
+            }}
         series: List[Dict] = []
         if by_date:
             from datetime import datetime as _dt, timedelta as _td
@@ -894,6 +892,9 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                 d = b.get("key_as_string")
                 if not d:
                     continue
+                doc_count = b.get("doc_count")
+                if doc_count is not None and not int(doc_count or 0):
+                    continue
                 by_date[d] = {"file": None, "date": d, "metrics": {
                     "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
                     "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
@@ -901,15 +902,36 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                 }}
             series: List[Dict] = []
             if by_date:
-                window = build_anchor_window(min(by_date.keys()), max(by_date.keys()))
-                current = by_date.get(window[0])
-                for dstr in window:
+                from datetime import datetime as _dt, timedelta as _td
+                fmt = "%Y-%m-%d"
+                min_date_str = min(by_date.keys())
+                max_date_str = max(by_date.keys())
+                min_date = _dt.strptime(min_date_str, fmt)
+                max_date = _dt.strptime(max_date_str, fmt)
+                current = by_date.get(min_date_str)
+                day = min_date
+                while day <= max_date:
+                    dstr = day.strftime(fmt)
                     if dstr in by_date:
                         current = by_date[dstr]
                     if current is not None:
-                        series.append({"file": None, "date": dstr, "metrics": current.get("metrics", {})})
-            label = "cities" if (group or "city").lower() == "city" else "locations"
-            result = {"success": True, "message": f"Computed {len(series)} top-{label} timeline points (aggregate)", "series": series, "selected": selected_keys, "mode": "aggregate", "group": (group or "city").lower()}
+                        series.append({
+                            "file": None,
+                            "date": dstr,
+                            "metrics": current.get("metrics", {}),
+                        })
+                    day += _td(days=1)
+                if eff_limit and len(series) > eff_limit:
+                    series = series[:eff_limit]
+
+            result = {
+                "success": True,
+                "message": f"Computed {len(series)} top-{label} timeline points (aggregate)",
+                "series": series,
+                "selected": selected_keys,
+                "mode": "aggregate",
+                "group": (group or "city").lower()
+            }
         else:
             # Per-group series
             if (group or "city").lower() == "city":
@@ -957,6 +979,9 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                         if not d:
                             continue
                         dates_set.add(d)
+                        doc_count = b.get("doc_count")
+                        if doc_count is not None and not int(doc_count or 0):
+                            continue
                         dmap[d] = {
                             "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
                             "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
@@ -990,13 +1015,14 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                     "query": {"bool": {"filter": [
                         {"terms": {"key": selected_keys}},
                     ]}},
-                    "aggs": {"by_key": {"terms": {"field": "key", "size": len(selected_keys)}, "aggs": {
-                        "by_date": {"date_histogram": {"field": "date", "calendar_interval": "1d"}, "aggs": {
-                            "sumPhones": {"max": {"field": "totalPhones"}},
-                            "sumSwitches": {"max": {"field": "totalSwitches"}},
-                            "sumKEM": {"max": {"field": "phonesWithKEM"}},
-                        }},
-                    }}}
+                    "aggs": {
+                        "by_key": {"terms": {"field": "key", "size": len(selected_keys)}, "aggs": {
+                            "by_date": {"date_histogram": {"field": "date", "calendar_interval": "1d"}, "aggs": {
+                                "sumPhones": {"max": {"field": "totalPhones"}},
+                                "sumSwitches": {"max": {"field": "totalSwitches"}},
+                                "sumKEM": {"max": {"field": "phonesWithKEM"}},
+                            }},
+                        }}}
                 }
                 r_series = client.search(index=opensearch_config.stats_loc_index, body=body_series)
                 buckets_by_key = r_series.get("aggregations", {}).get("by_key", {}).get("buckets", [])
@@ -1011,6 +1037,9 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                         if not d:
                             continue
                         dates_set.add(d)
+                        doc_count = b.get("doc_count")
+                        if doc_count is not None and not int(doc_count or 0):
+                            continue
                         dmap[d] = {
                             "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
                             "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
@@ -1044,6 +1073,68 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
     except Exception as e:
         logger.error(f"Error building top timeline: {e}")
         return {"success": True, "message": "No top timeline data available (snapshot)", "series": [], "selected": []}
+
+
+@router.post("/timeline/rebuild")
+async def rebuild_top_location_snapshots(directory: str = "") -> Dict:
+    """Trigger a background rebuild of stats snapshots with deduplicated rows."""
+    try:
+        base_dir = directory.strip()
+        if not base_dir:
+            base_dir = getattr(settings, "CSV_FILES_DIR", None) or ""
+
+        from tasks.tasks import rebuild_stats_snapshots_deduplicated
+
+        if base_dir:
+            task = rebuild_stats_snapshots_deduplicated.delay(base_dir)
+        else:
+            task = rebuild_stats_snapshots_deduplicated.delay()
+
+        return {
+            "success": True,
+            "message": "Started deduplicated stats rebuild",
+            "task_id": task.id,
+            "base_directory": base_dir or None,
+        }
+    except Exception as e:
+        logger.error(f"Failed to trigger stats rebuild: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger stats rebuild: {e}")
+
+
+@router.get("/timeline/rebuild/status/{task_id}")
+async def get_rebuild_top_location_status(task_id: str) -> Dict:
+    """Return Celery status for the deduplicated stats rebuild task."""
+    try:
+        result = AsyncResult(task_id)
+        if result.successful():
+            return {
+                "success": True,
+                "status": "completed",
+                "result": result.result,
+            }
+        if result.failed():
+            return {
+                "success": False,
+                "status": "failed",
+                "error": str(result.result),
+            }
+        if getattr(result, "state", None) in ("PENDING", "RETRY"):
+            return {
+                "success": True,
+                "status": "pending",
+            }
+        state = getattr(result, "state", "running")
+        return {
+            "success": True,
+            "status": str(state).lower(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to check stats rebuild status: {e}")
+        return {
+            "success": False,
+            "status": "error",
+            "error": str(e),
+        }
 
 
 @router.get("/archive")
@@ -1503,8 +1594,9 @@ async def get_current_stats_fast() -> Dict:
                 "date": date_str,
                 "is_current": is_current,
                 "is_latest": bool(is_latest),
+
                 "using_fallback": bool(using_fallback or not is_current or not is_latest),
-            }
+                       }
         }
 
     except Exception as e:

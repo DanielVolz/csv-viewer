@@ -1,4 +1,6 @@
 import csv
+import hashlib
+import json
 import logging
 import os
 import re
@@ -149,6 +151,88 @@ def detect_column_type(value: str) -> Optional[str]:
             return column_type
 
     return None
+
+
+def _normalize_field(value: Any, uppercase: bool = False) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text.upper() if uppercase else text
+
+
+def phone_row_identity(row: Dict[str, Any]) -> str:
+    """Derive a stable identity for a phone row to support de-duplication."""
+    serial = _normalize_field(row.get("Serial Number"), uppercase=True)
+    mac1 = _normalize_field(row.get("MAC Address"), uppercase=True)
+    mac2 = _normalize_field(row.get("MAC Address 2"), uppercase=True)
+    line_number = _normalize_field(row.get("Line Number"))
+    ip_address = _normalize_field(row.get("IP Address"))
+
+    if serial:
+        return f"serial::{serial}"
+    if mac1:
+        return f"mac1::{mac1}"
+    if mac2:
+        return f"mac2::{mac2}"
+    if line_number and ip_address:
+        return f"line_ip::{line_number}::{ip_address}"
+    if line_number:
+        return f"line::{line_number}"
+    if ip_address:
+        return f"ip::{ip_address}"
+
+    payload = {k: _normalize_field(v) for k, v in sorted(row.items())}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    return f"hash::{hashlib.sha1(raw.encode('utf-8')).hexdigest()}"
+
+
+def _kem_module_count(row: Dict[str, Any]) -> int:
+    """Return the number of detected KEM modules for a phone row."""
+    kem_modules = 0
+    for field in ("KEM", "KEM 2"):
+        value = (row.get(field) or "").strip()
+        if value:
+            kem_modules += 1
+    if kem_modules:
+        return kem_modules
+    line_number = (row.get("Line Number") or "").upper()
+    if "KEM" in line_number:
+        count = line_number.count("KEM")
+        return count or 1
+    return 0
+
+
+def deduplicate_phone_rows(rows: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Return a list of phone rows with duplicates (based on identity) removed."""
+    if not rows:
+        return []
+
+    best_rows: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+
+    for row in rows:
+        try:
+            identity = phone_row_identity(row)
+        except Exception:
+            identity = None
+        if identity is None:
+            try:
+                payload = json.dumps(row, sort_keys=True, default=str)
+            except Exception:
+                payload = str(row)
+            identity = f"raw::{hashlib.sha1(payload.encode('utf-8')).hexdigest()}"
+
+        if identity not in best_rows:
+            best_rows[identity] = row
+            order.append(identity)
+            continue
+
+        current_best = best_rows[identity]
+        if _kem_module_count(row) > _kem_module_count(current_best):
+            # Prefer the duplicate that contains explicit KEM information.
+            best_rows[identity] = row
+
+    return [best_rows[identity] for identity in order]
 
 
 def count_unique_data_rows(file_path: str | Path | Any, opener: Optional[Any] = None) -> int:
@@ -331,8 +415,7 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
             out["KEM"] = ""
         if "KEM 2" not in out:
             out["KEM 2"] = ""
-        return out
-
+    return out
 
 def generate_headers(column_count: int) -> List[str]:
     """

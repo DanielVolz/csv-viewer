@@ -9,7 +9,12 @@ from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
 from config import settings
 from utils.opensearch import OpenSearchUnavailableError, opensearch_config
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
-from utils.csv_utils import read_csv_file_normalized, count_unique_data_rows
+from utils.csv_utils import (
+    read_csv_file_normalized,
+    count_unique_data_rows,
+    deduplicate_phone_rows,
+    phone_row_identity,
+)
 from utils.path_utils import (
     get_data_root,
     resolve_current_file,
@@ -135,7 +140,15 @@ def snapshot_current_stats(directory_path: Optional[str] = None) -> dict:
 
         fm = _FM.from_path(str(file_path))
         date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
-        _, rows = read_csv_file_normalized(str(file_path))
+        _, rows_original = read_csv_file_normalized(str(file_path))
+        rows = deduplicate_phone_rows(rows_original)
+        if len(rows) != len(rows_original):
+            logger.debug(
+                "snapshot_current_stats deduplicated %s rows: %d -> %d",
+                fm.name,
+                len(rows_original),
+                len(rows),
+            )
 
         total_phones = len(rows)
         switches = set(); locations = set(); city_codes = set()
@@ -195,16 +208,9 @@ def snapshot_current_stats(directory_path: Optional[str] = None) -> dict:
                 except Exception:
                     pass
             model_counts[model] = model_counts.get(model, 0) + 1
-            # Always assign to institution-specific counts, even for devices without switch hostname
-            try:
-                from api.stats import is_jva_switch
-                if is_jva_switch(sh):
-                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
-                else:
-                    # Devices without switch hostname default to Justiz
-                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
-            except Exception:
-                # Fallback: assign to Justiz on any error
+            if is_jva:
+                jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+            else:
                 justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
 
         if unknown_models_debug:
@@ -312,7 +318,15 @@ def snapshot_current_with_details(file_path: Optional[str] = None, force_date: O
         from models.file import FileModel as _FM
         fm = _FM.from_path(str(p))
         date_str = force_date or (fm.date.strftime('%Y-%m-%d') if fm.date else None)
-        _, rows = read_csv_file_normalized(str(p))
+        _, rows_original = read_csv_file_normalized(str(p))
+        rows = deduplicate_phone_rows(rows_original)
+        if len(rows) != len(rows_original):
+            logger.debug(
+                "snapshot_current_with_details deduplicated %s rows: %d -> %d",
+                fm.name,
+                len(rows_original),
+                len(rows),
+            )
 
         # Aggregators
         switches: set = set(); locations: set = set(); city_codes: set = set()
@@ -691,7 +705,15 @@ def backfill_location_snapshots(directory_path: str | None = None) -> dict:
                 from models.file import FileModel as _FM
                 fm = _FM.from_path(str(f))
                 date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
-                _, rows = read_csv_file_normalized(str(f))
+                _, rows_original = read_csv_file_normalized(str(f))
+                rows = deduplicate_phone_rows(rows_original)
+                if len(rows) != len(rows_original):
+                    logger.debug(
+                        "backfill_location_snapshots deduplicated %s rows: %d -> %d",
+                        fm.name,
+                        len(rows_original),
+                        len(rows),
+                    )
 
                 # Calculate detailed model stats like index_csv does
                 justiz_details_by_location: Dict[str, Dict[str, int]] = {}
@@ -874,8 +896,7 @@ def backfill_location_snapshots(directory_path: str | None = None) -> dict:
                         "mode": "code",
                         "totalPhones": agg["totalPhones"],
                         "totalSwitches": agg["totalSwitches"],
-                        # Consistency: set to kem_phones length when available
-                        "phonesWithKEM": int(len(details["kem_phones"])) if isinstance(details.get("kem_phones"), list) else int(agg.get("phonesWithKEM", 0)),
+                        "phonesWithKEM": agg["phonesWithKEM"],
                         "phonesByModel": loc_all_models_list,
                         "phonesByModelJustiz": loc_justiz_models,
                         "phonesByModelJVA": loc_jva_models,
@@ -932,7 +953,15 @@ def backfill_stats_snapshots(directory_path: str | None = None) -> dict:
                 from models.file import FileModel as _FM
                 fm = _FM.from_path(str(f))
                 date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
-                _, rows = read_csv_file_normalized(str(f))
+                _, rows_original = read_csv_file_normalized(str(f))
+                rows = deduplicate_phone_rows(rows_original)
+                if len(rows) != len(rows_original):
+                    logger.debug(
+                        "backfill_stats_snapshots deduplicated %s rows: %d -> %d",
+                        fm.name,
+                        len(rows_original),
+                        len(rows),
+                    )
 
                 total_phones = len(rows)
                 switches: set[str] = set()
@@ -992,6 +1021,60 @@ def backfill_stats_snapshots(directory_path: str | None = None) -> dict:
     except Exception as e:
         logger.error(f"Backfill stats error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@app.task(name='tasks.rebuild_stats_snapshots_deduplicated')
+def rebuild_stats_snapshots_deduplicated(directory_path: str | None = None) -> dict:
+    """Rebuild stats snapshots (global + per-location) using deduplicated CSV rows.
+
+    This task ensures historical OpenSearch documents reflect the latest
+    duplicate-protection semantics used for phones with KEM counts.
+    """
+    try:
+        base_dir = directory_path or getattr(settings, "CSV_FILES_DIR", None)
+        base_dir_text = str(base_dir) if base_dir else str(get_data_root())
+        logger.info(f"Rebuilding stats snapshots with deduplicated rows (base={base_dir_text})")
+
+        # Run global snapshot rebuild first
+        stats_result = backfill_stats_snapshots(directory_path=base_dir_text)
+        # Then rebuild per-location snapshots used by the timeline views
+        loc_result = backfill_location_snapshots(directory_path=base_dir_text)
+
+        try:
+            client = opensearch_config.client
+            client.indices.refresh(index=opensearch_config.stats_index)
+            client.indices.refresh(index=opensearch_config.stats_loc_index)
+        except Exception as refresh_err:
+            logger.debug(f"Refresh after dedupe rebuild failed: {refresh_err}")
+
+        try:
+            from api.stats import invalidate_caches as _invalidate
+            _invalidate("rebuild stats snapshots deduplicated")
+        except Exception as cache_err:
+            logger.debug(f"Cache invalidation after dedupe rebuild failed: {cache_err}")
+
+        status_values = [
+            stats_result.get("status") if isinstance(stats_result, dict) else None,
+            loc_result.get("status") if isinstance(loc_result, dict) else None,
+        ]
+        overall_status = "success"
+        if any(s == "error" for s in status_values):
+            overall_status = "error"
+        elif any(s not in ("success", "warning", "skipped") for s in status_values):
+            overall_status = "warning"
+
+        return {
+            "status": overall_status,
+            "message": "Rebuilt stats snapshots with deduplicated rows",
+            "base_directory": base_dir_text,
+            "details": {
+                "global": stats_result,
+                "locations": loc_result,
+            },
+        }
+    except Exception as exc:
+        logger.error(f"rebuild_stats_snapshots_deduplicated failed: {exc}")
+        return {"status": "error", "message": str(exc)}
 
 
 @app.task(bind=True, name='tasks.index_all_csv_files')
@@ -1152,7 +1235,15 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
                     from models.file import FileModel as _FM
                     fm = _FM.from_path(str(file_path))
                     date_str = fm.date.strftime('%Y-%m-%d') if fm.date else None
-                    _, _rows = read_csv_file_normalized(str(file_path))
+                    _, _rows_original = read_csv_file_normalized(str(file_path))
+                    _rows = deduplicate_phone_rows(_rows_original)
+                    if len(_rows) != len(_rows_original):
+                        logger.debug(
+                            "index_all_csv_files deduplicated %s rows: %d -> %d",
+                            fm.name,
+                            len(_rows_original),
+                            len(_rows),
+                        )
 
                     total_phones = len(_rows)
                     switches = set(); locations = set(); city_codes = set()
@@ -1161,43 +1252,78 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
                     justiz_switches = set(); justiz_locations = set(); justiz_city_codes = set(); justiz_phones_with_kem_unique = 0; justiz_total_kem_modules = 0
                     jva_switches = set(); jva_locations = set(); jva_city_codes = set(); jva_phones_with_kem_unique = 0; jva_total_kem_modules = 0
 
+                    try:
+                        from api.stats import extract_location as _extract_location, is_jva_switch as _is_jva_switch, is_mac_like as _is_mac_like
+                    except Exception:
+                        _extract_location = lambda _value: None  # type: ignore
+                        _is_jva_switch = lambda _value: False  # type: ignore
+                        _is_mac_like = lambda _value: False  # type: ignore
+
                     for r in _rows:
-                        sh = (r.get("Switch Hostname") or "").strip(); is_jva = False
+                        sh = (r.get("Switch Hostname") or "").strip()
+                        loc = None
+                        is_jva = False
                         if sh:
                             switches.add(sh)
                             try:
-                                from api.stats import is_jva_switch
-                                is_jva = is_jva_switch(sh)
+                                loc = _extract_location(sh)
+                            except Exception:
+                                loc = None
+                            if loc:
+                                locations.add(loc)
+                                city_codes.add(loc[:3])
+                            try:
+                                is_jva = _is_jva_switch(sh)
                             except Exception:
                                 is_jva = False
+                            if is_jva:
+                                jva_switches.add(sh)
+                                if loc:
+                                    jva_locations.add(loc)
+                                    jva_city_codes.add(loc[:3])
+                            else:
+                                justiz_switches.add(sh)
+                                if loc:
+                                    justiz_locations.add(loc)
+                                    justiz_city_codes.add(loc[:3])
 
                         model = (r.get("Model Name") or "").strip() or "Unknown"
                         if model != "Unknown":
                             try:
-                                from api.stats import is_mac_like
-                                if len(model) < 4 or is_mac_like(model):
+                                if len(model) < 4 or _is_mac_like(model):
                                     model = "Unknown"
                             except Exception:
                                 pass
                         model_counts[model] = model_counts.get(model, 0) + 1
-                        if sh:
-                            try:
-                                from api.stats import is_jva_switch
-                                if is_jva_switch(sh):
-                                    jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
-                                else:
-                                    justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
-                            except Exception:
-                                justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+                        if is_jva:
+                            jva_model_counts[model] = jva_model_counts.get(model, 0) + 1
+                        else:
+                            justiz_model_counts[model] = justiz_model_counts.get(model, 0) + 1
+
+                        kem_count = 0
+                        if (r.get("KEM") or "").strip():
+                            kem_count += 1
+                        if (r.get("KEM 2") or "").strip():
+                            kem_count += 1
+                        if kem_count == 0:
+                            ln = (r.get("Line Number") or "").strip()
+                            if "KEM" in ln:
+                                kem_count = ln.count("KEM") or 1
+                        if kem_count > 0:
+                            phones_with_kem_unique += 1
+                            total_kem_modules += kem_count
+                            if is_jva:
+                                jva_phones_with_kem_unique += 1
+                                jva_total_kem_modules += kem_count
+                            else:
+                                justiz_phones_with_kem_unique += 1
+                                justiz_total_kem_modules += kem_count
 
                     phones_by_model = [{"model": m, "count": c} for m, c in model_counts.items()]
                     phones_by_model.sort(key=lambda x: (-x["count"], x["model"]))
-                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]
-                    phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
-                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]
-                    phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
-                    total_justiz_phones = sum(justiz_model_counts.values())
-                    total_jva_phones = sum(jva_model_counts.values())
+                    phones_by_model_justiz = [{"model": m, "count": c} for m, c in justiz_model_counts.items()]; phones_by_model_justiz.sort(key=lambda x: (-x["count"], x["model"]))
+                    phones_by_model_jva = [{"model": m, "count": c} for m, c in jva_model_counts.items()]; phones_by_model_jva.sort(key=lambda x: (-x["count"], x["model"]))
+                    total_justiz_phones = sum(justiz_model_counts.values()); total_jva_phones = sum(jva_model_counts.values())
 
                     metrics = {
                         "totalPhones": total_phones,
@@ -1275,7 +1401,8 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
                 # Archive snapshot
                 try:
                     if '_rows' not in locals():
-                        _, _rows = read_csv_file_normalized(str(file_path))
+                        _, _rows_fallback = read_csv_file_normalized(str(file_path))
+                        _rows = deduplicate_phone_rows(_rows_fallback)
                     opensearch_config.index_archive_snapshot(file=file_path.name, date=date_str, rows=_rows)
                 except Exception as _e:
                     logger.debug(f"Archive snapshot failed for {file_path}: {_e}")

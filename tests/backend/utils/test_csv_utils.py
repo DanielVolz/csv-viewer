@@ -8,7 +8,7 @@ from pathlib import Path
 # Add the backend directory to the Python path to fix the import issues
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
 
-from backend.utils.csv_utils import read_csv_file
+from backend.utils.csv_utils import read_csv_file, deduplicate_phone_rows
 
 class TestCsvUtils:
     """Test the CSV utilities."""
@@ -83,3 +83,32 @@ class TestCsvUtils:
                 headers, rows = read_csv_file('/data/test.csv')
         assert isinstance(headers, list)
         assert rows == []
+
+
+def test_deduplicate_phone_rows_prefers_kem_rows():
+    """Ensure deduplication keeps the variant that retains KEM modules."""
+    rows = [
+        {"Serial Number": "SN-123", "KEM": "", "KEM 2": "", "Line Number": "100", "Model Name": "No KEM"},
+        {"Serial Number": "SN-123", "KEM": "1", "KEM 2": "", "Line Number": "100", "Model Name": "Has KEM"},
+        {"Serial Number": "SN-456", "KEM": "", "KEM 2": "", "Line Number": "200", "Model Name": "Other"},
+    ]
+
+    result = deduplicate_phone_rows(rows)
+
+    assert len(result) == 2
+    serials = {row["Serial Number"]: row for row in result}
+    assert serials["SN-123"]["Model Name"] == "Has KEM"
+    assert serials["SN-123"]["KEM"] == "1"
+
+
+def test_deduplicate_phone_rows_uses_line_number_kem_hint():
+    """A duplicate with KEM inferred from the line number should win."""
+    rows = [
+        {"Serial Number": "", "MAC Address": "AA:BB", "Line Number": "300", "KEM": "", "KEM 2": "", "Model Name": "Plain"},
+        {"Serial Number": "", "MAC Address": "AA:BB", "Line Number": "300 kem kem", "KEM": "", "KEM 2": "", "Model Name": "Line KEM"},
+    ]
+
+    result = deduplicate_phone_rows(rows)
+
+    assert len(result) == 1
+    assert result[0]["Model Name"] == "Line KEM"

@@ -2,6 +2,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
+from typing import Any, Dict
 from fastapi.testclient import TestClient
 
 # Ensure backend is importable
@@ -176,3 +178,34 @@ def test_top_cities_timeline_limit_last_n_days(patch_opensearch_top):
     dates = body.get("dates") or []
     # With limit=2 and no anchor, expect last two dates of the window: 19, 20
     assert dates == ["2025-08-19", "2025-08-20"]
+
+
+def test_rebuild_timeline_endpoint_triggers_task(monkeypatch):
+    calls: Dict[str, Any] = {}
+
+    class _FakeTask:
+        def delay(self, *args, **kwargs):
+            calls["args"] = args
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(id="fake-task-id")
+
+    monkeypatch.setattr("tasks.tasks.rebuild_stats_snapshots_deduplicated", _FakeTask(), raising=True)
+
+    response = client.post("/api/stats/timeline/rebuild")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["task_id"] == "fake-task-id"
+    from backend.config import settings as settings_module
+    expected_dir = getattr(settings_module, "CSV_FILES_DIR", None) or "/app/data"
+    assert calls.get("args") == (expected_dir,)
+    assert calls.get("kwargs") == {}
+
+
+def test_rebuild_timeline_status_handles_backend_error():
+    response = client.get("/api/stats/timeline/rebuild/status/fake-id")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("success") is False
+    assert payload.get("status") == "error"
+    assert "error" in payload
