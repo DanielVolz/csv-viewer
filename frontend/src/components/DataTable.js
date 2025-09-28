@@ -89,7 +89,6 @@ function DataTable({
   // Also remove any CSV header literally named '#' to avoid a duplicate '#' column
   const filteredHeaders = enabledHeaders
     .filter(header => header !== '#')
-    .filter(header => header !== 'MAC Address 2')
     .filter(header => headers.includes(header));
 
   // Utility used by sorting and UI: ensure defined before usage

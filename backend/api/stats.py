@@ -7,7 +7,8 @@ import time
 import os
 
 from models.file import FileModel
-from utils.path_utils import get_data_root
+from utils.path_utils import get_data_root, collect_netspeed_files
+from config import settings
 
 _PATH_TYPE = Path
 
@@ -28,6 +29,32 @@ _CURRENT_STATS_CACHE: Dict[str, Any] = {"key": None, "data": None}
 _TIMELINE_CACHE: Dict[int, Tuple[float, Dict]] = {}  # key: limit, value: (expires_at, result)
 _TIMELINE_BY_LOC_CACHE: Dict[Tuple[str, int], Tuple[float, Dict]] = {}  # key: (q, limit)
 _TIMELINE_TOP_CACHE: Dict[Tuple[int, Tuple[str, ...], int], Tuple[float, Dict]] = {}
+def _preferred_stats_files(limit: int = 12) -> List[str]:
+    """Return netspeed filenames prioritizing the currently active export."""
+    extras: List[Path | str] = []
+    for attr in ("NETSPEED_CURRENT_DIR", "NETSPEED_HISTORY_DIR", "CSV_FILES_DIR"):
+        value = getattr(settings, attr, None)
+        if value:
+            extras.append(Path(value))
+    try:
+        historical, current, _ = collect_netspeed_files(extras)
+    except Exception:
+        historical, current = [], None
+
+    names: List[str] = []
+    if current:
+        names.append(current.name)
+    for path in reversed(historical):
+        name = getattr(path, "name", None)
+        if not name or name in names:
+            continue
+        names.append(name)
+        if len(names) >= limit:
+            break
+    if "netspeed.csv" not in names:
+        names.append("netspeed.csv")
+    return names[:limit]
+
 
 def invalidate_caches(reason: str | None = None) -> None:
     """Clear in-process stats caches so next calls recompute immediately.
@@ -1253,33 +1280,55 @@ async def get_current_stats_fast() -> Dict:
                 "file": {"name": "netspeed.csv", "date": ""},
             }
 
-        # Try to get the latest snapshot for the current file first (netspeed.csv)
-        body_current = {
-            "size": 1,
-            "sort": [{"date": {"order": "desc"}}],
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"term": {"file": "netspeed.csv"}}
-                    ]
-                }
-            }
-        }
-
-        res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_current)
+        preferred_files = _preferred_stats_files()
         using_fallback = False
+        latest_doc: Dict[str, Any] | None = None
+        file_name = "netspeed.csv"
+        date_str = ""
 
-        # Fallback: any latest snapshot if netspeed.csv-specific one is missing
-        if not res["hits"]["hits"]:
-            body_any = {
-                "size": 1,
-                "sort": [{"date": {"order": "desc"}}],
-                "query": {"match_all": {}}
-            }
-            res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_any)
-            using_fallback = True
+        for idx, candidate in enumerate(preferred_files):
+            try:
+                body_current = {
+                    "size": 1,
+                    "sort": [{"date": {"order": "desc"}}],
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"term": {"file": candidate}}
+                            ]
+                        }
+                    }
+                }
+                res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_current)
+            except Exception:
+                continue
+            hits = res.get("hits", {}).get("hits", []) if isinstance(res, dict) else []
+            if hits:
+                latest_doc = hits[0].get("_source", {}) or {}
+                file_name = latest_doc.get("file", candidate) or candidate
+                date_str = latest_doc.get("date", "") or ""
+                if idx > 0:
+                    using_fallback = True
+                break
 
-        if not res["hits"]["hits"]:
+        if latest_doc is None:
+            try:
+                body_any = {
+                    "size": 1,
+                    "sort": [{"date": {"order": "desc"}}],
+                    "query": {"match_all": {}}
+                }
+                res = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_any)
+                hits = res.get("hits", {}).get("hits", []) if isinstance(res, dict) else []
+                if hits:
+                    latest_doc = hits[0].get("_source", {}) or {}
+                    file_name = latest_doc.get("file", file_name) or file_name
+                    date_str = latest_doc.get("date", "") or ""
+                    using_fallback = True
+            except Exception:
+                latest_doc = None
+
+        if not latest_doc:
             return {
                 "success": False,
                 "message": "No stats snapshots found. Please trigger reindex first.",
@@ -1315,15 +1364,16 @@ async def get_current_stats_fast() -> Dict:
             }
 
         # Extract latest snapshot data - all pre-computed during reindexing
-        latest_doc = res["hits"]["hits"][0]["_source"]
-        file_name = latest_doc.get("file", "netspeed.csv")
-        date_str = latest_doc.get("date", "")
+        # Ensure we have sane defaults even if snapshot lacks file/date fields
+        snapshot: Dict[str, Any] = cast(Dict[str, Any], latest_doc)
+        file_name = snapshot.get("file", file_name) or file_name
+        date_str = snapshot.get("date", date_str) or date_str
 
         # All data is already computed during reindexing - just use snapshot values directly
-        justiz_models = latest_doc.get("phonesByModelJustiz", [])
-        jva_models = latest_doc.get("phonesByModelJVA", [])
-        total_justiz = latest_doc.get("totalJustizPhones", 0)
-        total_jva = latest_doc.get("totalJVAPhones", 0)
+        justiz_models = snapshot.get("phonesByModelJustiz", [])
+        jva_models = snapshot.get("phonesByModelJVA", [])
+        total_justiz = snapshot.get("totalJustizPhones", 0)
+        total_jva = snapshot.get("totalJVAPhones", 0)
 
         # If the latest current snapshot is effectively empty (no phones/switches/locations and no cities),
         # fallback to the latest non-empty snapshot across any file variant
@@ -1334,27 +1384,28 @@ async def get_current_stats_fast() -> Dict:
                     and int(doc.get("totalLocations", 0) or 0) == 0 \
                     and not (doc.get("cityCodes") or [])
 
-            if _is_empty_snapshot(latest_doc):
+            if _is_empty_snapshot(snapshot):
                 body_scan = {"size": 20, "sort": [{"date": {"order": "desc"}}], "query": {"match_all": {}}, "_source": True}
                 rscan = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_scan)
                 for hh in rscan.get("hits", {}).get("hits", []):
                     src2 = hh.get("_source", {})
                     if not _is_empty_snapshot(src2):
-                        latest_doc = src2
-                        file_name = latest_doc.get("file", file_name)
-                        date_str = latest_doc.get("date", date_str)
+                        snapshot = cast(Dict[str, Any], src2)
+                        latest_doc = snapshot
+                        file_name = snapshot.get("file", file_name)
+                        date_str = snapshot.get("date", date_str)
                         using_fallback = True
                         break
                 # Re-bind derived structures after fallback
-                justiz_models = latest_doc.get("phonesByModelJustiz", [])
-                jva_models = latest_doc.get("phonesByModelJVA", [])
-                total_justiz = latest_doc.get("totalJustizPhones", 0)
-                total_jva = latest_doc.get("totalJVAPhones", 0)
+                justiz_models = snapshot.get("phonesByModelJustiz", [])
+                jva_models = snapshot.get("phonesByModelJVA", [])
+                total_justiz = snapshot.get("totalJustizPhones", 0)
+                total_jva = snapshot.get("totalJVAPhones", 0)
         except Exception:
             pass
 
         # Get city codes and resolve names
-        city_codes = latest_doc.get("cityCodes", [])
+        city_codes = snapshot.get("cityCodes", [])
         cities = []
         for code in city_codes:
             cities.append({"code": code, "name": resolve_city_name(code)})
@@ -1414,43 +1465,45 @@ async def get_current_stats_fast() -> Dict:
             # best-effort; assume latest if check fails
             is_latest = True
 
+        is_current = bool(preferred_files and file_name == preferred_files[0])
+
         return {
             "success": True,
             "message": "Statistics loaded from OpenSearch snapshot",
             "data": {
-                "totalPhones": latest_doc.get("totalPhones", 0),
-                "totalSwitches": latest_doc.get("totalSwitches", 0),
-                "totalLocations": latest_doc.get("totalLocations", 0),
-                "totalCities": latest_doc.get("totalCities", 0),
-                "phonesWithKEM": int(corrected_phones_with_kem if corrected_phones_with_kem is not None else latest_doc.get("phonesWithKEM", 0)),
-                "totalKEMs": int(corrected_total_kems if corrected_total_kems is not None else latest_doc.get("totalKEMs", 0)),
+                "totalPhones": snapshot.get("totalPhones", 0),
+                "totalSwitches": snapshot.get("totalSwitches", 0),
+                "totalLocations": snapshot.get("totalLocations", 0),
+                "totalCities": snapshot.get("totalCities", 0),
+                "phonesWithKEM": int(corrected_phones_with_kem if corrected_phones_with_kem is not None else snapshot.get("phonesWithKEM", 0)),
+                "totalKEMs": int(corrected_total_kems if corrected_total_kems is not None else snapshot.get("totalKEMs", 0)),
                 "totalJustizPhones": total_justiz,
                 "totalJVAPhones": total_jva,
                 # New individual Justiz KPIs
-                "justizSwitches": latest_doc.get("justizSwitches", 0),
-                "justizLocations": latest_doc.get("justizLocations", 0),
-                "justizCities": latest_doc.get("justizCities", 0),
-                "justizPhonesWithKEM": latest_doc.get("justizPhonesWithKEM", 0),
-                "totalJustizKEMs": latest_doc.get("totalJustizKEMs", 0),
+                "justizSwitches": snapshot.get("justizSwitches", 0),
+                "justizLocations": snapshot.get("justizLocations", 0),
+                "justizCities": snapshot.get("justizCities", 0),
+                "justizPhonesWithKEM": snapshot.get("justizPhonesWithKEM", 0),
+                "totalJustizKEMs": snapshot.get("totalJustizKEMs", 0),
                 # New individual JVA KPIs
-                "jvaSwitches": latest_doc.get("jvaSwitches", 0),
-                "jvaLocations": latest_doc.get("jvaLocations", 0),
-                "jvaCities": latest_doc.get("jvaCities", 0),
-                "jvaPhonesWithKEM": latest_doc.get("jvaPhonesWithKEM", 0),
-                "totalJVAKEMs": latest_doc.get("totalJVAKEMs", 0),
-                "phonesByModel": latest_doc.get("phonesByModel", []),
+                "jvaSwitches": snapshot.get("jvaSwitches", 0),
+                "jvaLocations": snapshot.get("jvaLocations", 0),
+                "jvaCities": snapshot.get("jvaCities", 0),
+                "jvaPhonesWithKEM": snapshot.get("jvaPhonesWithKEM", 0),
+                "totalJVAKEMs": snapshot.get("totalJVAKEMs", 0),
+                "phonesByModel": snapshot.get("phonesByModel", []),
                 "phonesByModelJustiz": justiz_models,
                 "phonesByModelJVA": jva_models,
-                "phonesByModelJustizDetails": latest_doc.get("phonesByModelJustizDetails", []),
-                "phonesByModelJVADetails": latest_doc.get("phonesByModelJVADetails", []),
+                "phonesByModelJustizDetails": snapshot.get("phonesByModelJustizDetails", []),
+                "phonesByModelJVADetails": snapshot.get("phonesByModelJVADetails", []),
                 "cities": cities,
             },
             "file": {
                 "name": file_name,
                 "date": date_str,
-                "is_current": file_name == "netspeed.csv",
+                "is_current": is_current,
                 "is_latest": bool(is_latest),
-                "using_fallback": bool(using_fallback or file_name != "netspeed.csv" or not is_latest),
+                "using_fallback": bool(using_fallback or not is_current or not is_latest),
             }
         }
 

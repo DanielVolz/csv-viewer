@@ -4,9 +4,10 @@ import logging
 import re
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Generator, Optional, Tuple
 from .csv_utils import read_csv_file
+from utils.path_utils import collect_netspeed_files, get_data_root, _configured_roots, _within_allowed_roots
 import os
 
 
@@ -46,8 +47,9 @@ class OpenSearchConfig:
         """
         self.hosts = self._build_host_list(settings.OPENSEARCH_URL)
         self._client = None
-    # NOTE: After changing field mappings (e.g. IP Address from ip->text) existing indices
-    # must be deleted & rebuilt (reindex) for the new mapping to apply.
+        self._initial_grace_applied = False
+        # NOTE: After changing field mappings (e.g. IP Address from ip->text) existing indices
+        # must be deleted & rebuilt (reindex) for the new mapping to apply.
         # Define field types for reuse
         self.keyword_type = {"type": "keyword"}
         self.text_with_keyword = {
@@ -99,10 +101,16 @@ class OpenSearchConfig:
                         }
                     },
                     "Switch Port": self.keyword_type,
-                    "Speed 1": self.keyword_type,
-                    "Speed 2": self.keyword_type,
+                    "Phone Port Speed": self.keyword_type,
+                    "PC Port Speed": self.keyword_type,
+                    "Speed 1": self.keyword_type,  # Legacy field retained for historical indices
+                    "Speed 2": self.keyword_type,  # Legacy field retained for historical indices
+                    # Legacy field names retained for historical indices
                     "Speed Switch-Port": self.keyword_type,
                     "Speed PC-Port": self.keyword_type,
+                    # Canonical column names for switch/PC port mode
+                    "Switch Port Mode": self.keyword_type,
+                    "PC Port Mode": self.keyword_type,
                 },
                 "dynamic_templates": [
                     {
@@ -342,6 +350,15 @@ class OpenSearchConfig:
             OpenSearch: Configured OpenSearch client
         """
         if self._client is None:
+            grace = float(getattr(settings, "OPENSEARCH_STARTUP_GRACE_SECONDS", 0.0) or 0.0)
+            if not self._initial_grace_applied and grace > 0:
+                logger.info(f"Delaying OpenSearch connection attempts for {grace:.1f}s to allow service startup")
+                try:
+                    time.sleep(grace)
+                except Exception:
+                    pass
+                finally:
+                    self._initial_grace_applied = True
             pwd = getattr(settings, 'OPENSEARCH_PASSWORD', None)
             last_err: Optional[Exception] = None
             for host in self.hosts:
@@ -555,7 +572,16 @@ class OpenSearchConfig:
                     current_candidates.append(name)
 
             netspeed_entries = self.list_netspeed_indices()
-            netspeed_ordered = [entry.get("index") for entry in netspeed_entries if entry.get("index")]
+            netspeed_ordered: list[str] = []
+            for entry in netspeed_entries:
+                idx_value = entry.get("index")
+                if isinstance(idx_value, str) and idx_value:
+                    netspeed_ordered.append(idx_value)
+            archive_available = False
+            try:
+                archive_available = bool(self.client.indices.exists(index=self.archive_index))
+            except Exception as archive_err:
+                logger.debug(f"Archive existence check failed: {archive_err}")
 
             if include_historical:
                 combined: list[str] = []
@@ -563,6 +589,8 @@ class OpenSearchConfig:
                 combined.extend(netspeed_ordered)
                 # Always provide wildcard fallback to catch any indices created after discovery
                 combined.append("netspeed_*")
+                if archive_available:
+                    combined.append(self.archive_index)
                 result = _dedupe(combined)
                 if result:
                     logger.info(f"Historical search indices: {result}")
@@ -574,10 +602,15 @@ class OpenSearchConfig:
                 if netspeed_ordered:
                     logger.info(f"Using latest netspeed index without filesystem current: {netspeed_ordered[0]}")
                     return [netspeed_ordered[0]]
+                if archive_available:
+                    logger.info("Using archive_netspeed index as fallback for current search")
+                    return [self.archive_index]
 
             # If we reach here, no netspeed index could be determined
             logger.warning("No current netspeed index found. Search results may be empty.")
             # Return a non-existent index name to ensure no results rather than wrong results
+            if archive_available:
+                return [self.archive_index]
             return ["netspeed_current_only"]
         except Exception as e:
             logger.error(f"Error getting search indices: {e}")
@@ -642,53 +675,126 @@ class OpenSearchConfig:
             return []
 
     def get_latest_netspeed_snapshot(self) -> Optional[dict[str, Any]]:
-        """Return metadata and top-level info for the most recent netspeed index."""
+        """Return metadata and top-level info for the most recent netspeed or archive snapshot."""
         entries = self.list_netspeed_indices()
-        if not entries:
-            return None
+        if entries:
+            latest = entries[0]
+            index_name = latest.get("index")
+            if not index_name:
+                return None
 
-        latest = entries[0]
-        index_name = latest.get("index")
-        if not index_name:
-            return None
+            try:
+                search_res = self.client.search(
+                    index=index_name,
+                    body={
+                        "size": 1,
+                        "sort": [{"Creation Date": {"order": "desc"}}],
+                        "query": {"match_all": {}},
+                    },
+                )
+                hits = search_res.get("hits", {}).get("hits", []) if isinstance(search_res, dict) else []
+                top_doc = hits[0].get("_source", {}) if hits else {}
+            except Exception as exc:
+                logger.warning(f"Failed to fetch latest document from {index_name}: {exc}")
+                top_doc = {}
 
+            creation_date = None
+            for key in ("Creation Date", "creation_date", "date"):
+                val = top_doc.get(key)
+                if val:
+                    creation_date = val
+                    break
+
+            return {
+                "index": index_name,
+                "file_name": latest.get("file_name"),
+                "documents": latest.get("documents", 0),
+                "creation_date": creation_date,
+                "creation_date_ms": latest.get("creation_date_ms"),
+                "top_document": top_doc,
+            }
+
+        return self.get_latest_archive_snapshot()
+
+    def get_latest_archive_snapshot(self) -> Optional[dict[str, Any]]:
+        """Return the latest archived snapshot when no live netspeed indices exist."""
         try:
+            if not self.client.indices.exists(index=self.archive_index):
+                return None
+
             search_res = self.client.search(
-                index=index_name,
-                size=1,
-                sort=[{"Creation Date": {"order": "desc"}}],
-                query={"match_all": {}},
+                index=self.archive_index,
+                body={
+                    "size": 1,
+                    "sort": [
+                        {"snapshot_date": {"order": "desc"}},
+                        {"_doc": {"order": "desc"}},
+                    ],
+                    "query": {"match_all": {}},
+                },
             )
             hits = search_res.get("hits", {}).get("hits", []) if isinstance(search_res, dict) else []
-            top_doc = hits[0].get("_source", {}) if hits else {}
+            if not hits:
+                return None
+
+            top_doc = hits[0].get("_source", {}) or {}
+            snapshot_file = top_doc.get("snapshot_file") or top_doc.get("File Name")
+            snapshot_date = top_doc.get("snapshot_date")
+
+            documents = 0;
+            if snapshot_file and snapshot_date:
+                try:
+                    count_body = {
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    {"term": {"snapshot_file": snapshot_file}},
+                                    {"term": {"snapshot_date": snapshot_date}},
+                                ]
+                            }
+                        }
+                    }
+                    count_res = self.client.count(index=self.archive_index, body=count_body)
+                    documents = int(count_res.get("count", 0)) if isinstance(count_res, dict) else 0
+                except Exception as exc:
+                    logger.debug(f"Archive snapshot count failed for {snapshot_file}@{snapshot_date}: {exc}")
+                    documents = len(hits)
+
+            creation_date_ms: Optional[int] = None
+            if snapshot_date:
+                try:
+                    creation_date_ms = int(
+                        datetime.strptime(snapshot_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000
+                    )
+                except Exception:
+                    creation_date_ms = None
+
+            return {
+                "index": self.archive_index,
+                "file_name": snapshot_file or "archive snapshot",
+                "documents": documents,
+                "creation_date": snapshot_date,
+                "creation_date_ms": creation_date_ms,
+                "top_document": top_doc,
+            }
         except Exception as exc:
-            logger.warning(f"Failed to fetch latest document from {index_name}: {exc}")
-            top_doc = {}
-
-        creation_date = None
-        for key in ("Creation Date", "creation_date", "date"):
-            val = top_doc.get(key)
-            if val:
-                creation_date = val
-                break
-
-        return {
-            "index": index_name,
-            "file_name": latest.get("file_name"),
-            "documents": latest.get("documents", 0),
-            "creation_date": creation_date,
-            "creation_date_ms": latest.get("creation_date_ms"),
-            "top_document": top_doc,
-        }
+            logger.warning(f"Failed to fetch latest archive snapshot: {exc}")
+            return None
 
     def preview_index_rows(self, index_name: str, limit: int = 25) -> tuple[list[str], list[dict[str, Any]]]:
         """Fetch a small preview from the given netspeed index."""
         try:
+            sort_clause = [{"Creation Date": {"order": "desc"}}, {"_doc": {"order": "asc"}}]
+            if index_name == self.archive_index:
+                sort_clause = [{"snapshot_date": {"order": "desc"}}, {"_doc": {"order": "desc"}}]
+
             res = self.client.search(
                 index=index_name,
-                size=max(1, limit),
-                sort=[{"Creation Date": {"order": "desc"}}, {"_doc": {"order": "asc"}}],
-                query={"match_all": {}},
+                body={
+                    "size": max(1, limit),
+                    "sort": sort_clause,
+                    "query": {"match_all": {}},
+                },
             )
             hits = res.get("hits", {}).get("hits", []) if isinstance(res, dict) else []
             rows = [hit.get("_source", {}) for hit in hits]
@@ -1450,6 +1556,122 @@ class OpenSearchConfig:
         logger.info(f"Deduplicated {len(documents)} documents to {len(unique_documents)} unique documents")
         return unique_documents
 
+    def _netspeed_filenames(self) -> List[str]:
+        """Return canonical netspeed file names based on configured data directories."""
+        extras: List[Path | str] = []
+        try:
+            extras.append(get_data_root())
+        except Exception:
+            pass
+
+        ordered: List[str] = []
+        historical: List[Any] = []
+        current: Optional[Any] = None
+
+        try:
+            historical, current, _ = collect_netspeed_files(extras if extras else None)
+        except Exception:
+            historical, current = [], None
+
+        if current is not None:
+            name = getattr(current, "name", None)
+            if name:
+                ordered.append(name)
+        for path in historical:
+            name = getattr(path, "name", None)
+            if name:
+                ordered.append(name)
+
+        if ordered:
+            return ordered
+
+        explicit_roots = _configured_roots()
+
+        # Fallback: direct filesystem scan using configured base directories
+        scan_bases: List[Path] = []
+        if extras:
+            for extra in extras:
+                try:
+                    scan_bases.append(Path(extra))
+                except Exception:
+                    continue
+        if not scan_bases:
+            try:
+                scan_bases.append(get_data_root())
+            except Exception:
+                scan_bases.append(Path("/app/data"))
+
+        if explicit_roots:
+            filtered_bases: List[Path] = []
+            for base in scan_bases:
+                if _within_allowed_roots(base, explicit_roots):
+                    filtered_bases.append(base)
+            scan_bases = filtered_bases
+            if not scan_bases:
+                return ordered
+
+        for base in scan_bases:
+            for candidate in (
+                base,
+                base / "netspeed",
+                base / "history" / "netspeed",
+            ):
+                try:
+                    patterns = ("netspeed_*.csv*", "netspeed.csv*")
+                    entries: List[Path] = []
+                    for pattern in patterns:
+                        entries.extend(candidate.glob(pattern))
+                    entries = sorted(entries, key=lambda p: getattr(p, "name", ""))
+                except Exception:
+                    continue
+                for entry in entries:
+                    name = getattr(entry, "name", None)
+                    if not name:
+                        continue
+                    if name.startswith("netspeed_") and (name.endswith(".csv") or ".csv." in name):
+                        if name not in ordered:
+                            ordered.append(name)
+                        continue
+                    if name == "netspeed.csv" or (name.startswith("netspeed.csv.") and name.split("netspeed.csv.", 1)[1].isdigit()):
+                        if name not in ordered:
+                            ordered.append(name)
+
+        return ordered
+
+    def _preferred_file_names(self) -> List[str]:
+        """Return netspeed file names ordered with the active export first."""
+        names = [n for n in self._netspeed_filenames() if n]
+        if "netspeed.csv" not in names:
+            names.append("netspeed.csv")
+        return names
+
+    def _preferred_file_sort_script(self) -> Dict[str, Any]:
+        """Return a painless script that ranks documents by preferred file order."""
+        preferred = self._preferred_file_names()
+        return {
+            "lang": "painless",
+            "params": {"preferred": preferred},
+            "source": (
+                "def fname = null;"
+                "if (doc.containsKey('File Name') && doc['File Name'].size() > 0) {"
+                " fname = doc['File Name'].value;"
+                "}"
+                "if (fname == null) { return params.preferred.size(); }"
+                "int idx = params.preferred.indexOf(fname);"
+                "return idx >= 0 ? idx : params.preferred.size();"
+            )
+        }
+
+    def _preferred_file_sort_clause(self) -> Dict[str, Any]:
+        """Return the reusable sort clause that prioritizes preferred netspeed files."""
+        return {
+            "_script": {
+                "type": "number",
+                "order": "asc",
+                "script": self._preferred_file_sort_script(),
+            }
+        }
+
     def _build_query_body(self, query: str, field: Optional[str] = None,
                           size: int = 20000) -> Dict[str, Any]:
         """
@@ -1463,6 +1685,7 @@ class OpenSearchConfig:
         Returns:
             Dict[str, Any]: Query body
         """
+        preferred_files = self._preferred_file_names()
         logger.debug(f"Building query body for query: {query}, field: {field}, size: {size}")
 
         # Special handling for KEM searches - return all phones that have at least 1 KEM module
@@ -1470,8 +1693,9 @@ class OpenSearchConfig:
             # Use all columns including KEM fields for KEM searches
             all_columns = [
                 "#", "File Name", "Creation Date", "IP Address", "Line Number", "Serial Number", "Model Name",
-                "KEM", "KEM 2", "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-                "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+                "KEM", "KEM 2", "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN",
+                "Phone Port Speed", "PC Port Speed", "Speed 1", "Speed 2",
+                "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
             ]
             # Semantics: phone has ≥1 KEM if KEM or KEM 2 is non-empty OR Line Number contains 'KEM'
             kem_query = {
@@ -1495,11 +1719,7 @@ class OpenSearchConfig:
                 "size": size,
                 "sort": [
                     {"Creation Date": {"order": "desc"}},
-                    {"_script": {"type": "number", "order": "asc", "script": {
-                        "lang": "painless",
-                        "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                        "params": {"f": "netspeed.csv"}
-                    }}},
+                    self._preferred_file_sort_clause(),
                     {"_score": {"order": "desc"}}
                 ]
             }
@@ -1507,9 +1727,9 @@ class OpenSearchConfig:
 
         if field:
             from utils.csv_utils import DESIRED_ORDER
+            qn = query.strip() if isinstance(query, str) else query
             # Phone-like Line Number exact-only
             if field == "Line Number" and isinstance(query, str):
-                qn = query.strip()
                 if re.fullmatch(r"\+?\d{7,}", qn or ""):
                     # Include both variants: with and without leading plus
                     variants = [qn]
@@ -1555,18 +1775,12 @@ class OpenSearchConfig:
                         "size": size,
                         "sort": [
                             {"Creation Date": {"order": "desc"}},
-                            {"_script": {"type": "number", "order": "asc", "script": {
-                                "lang": "painless",
-                                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                                "params": {"f": "netspeed.csv"}
-                            }}},
+                            self._preferred_file_sort_clause(),
                             {"_score": {"order": "desc"}}
                         ]
                     }
 
-            # Switch Port exact-only
-            if field == "Switch Port":
-                # Enforce exact match ignoring surrounding spaces and case
+            if field == "Switch Port" and isinstance(qn, str) and qn:
                 return {
                     "query": {
                         "bool": {
@@ -1575,53 +1789,103 @@ class OpenSearchConfig:
                                     "script": {
                                         "script": {
                                             "lang": "painless",
-                                            "source": "return doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value != null && doc['Switch Port'].value.trim().equalsIgnoreCase(params.q.trim());",
-                                            "params": {"q": str(query)}
+                                            "source": "def v = null; if (doc.containsKey('Switch Port') && doc['Switch Port'].size()>0) { v = doc['Switch Port'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
+                                            "params": {"q": qn}
                                         }
                                     }
                                 }
                             ],
                             "should": [
-                                {"term": {"Switch Port": query}}
+                                {"term": {"Switch Port": qn}}
                             ],
                             "minimum_should_match": 0
                         }
                     },
                     "_source": DESIRED_ORDER,
                     "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        {"_score": {"order": "desc"}}
+                    ]
                 }
 
-            # MAC exact-only when 12-hex provided
-            if field in ("MAC Address", "MAC Address 2") and isinstance(query, str):
-                mac_core = re.sub(r"[^A-Fa-f0-9]", "", query)
-                if len(mac_core) == 12:
-                    mac_up = mac_core.upper()
-                    target_field = f"{field}.keyword"
-                    should = [{"term": {target_field: mac_up}}]
-                    if field == "MAC Address 2":
-                        should.append({"term": {target_field: f"SEP{mac_up}"}})
+            # Switch Hostname-like (FQDN) exact-only: contains dot and letters (not IP)
+            if isinstance(qn, str) and any(c.isalpha() for c in qn) and "." in qn and "/" not in qn and " " not in qn:
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "script": {
+                                        "script": {
+                                            "lang": "painless",
+                                            "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
+                                            "params": {"q": qn}
+                                        }
+                                    }
+                                }
+                            ],
+                            "should": [
+                                {"term": {"Switch Hostname": qn}},
+                                {"term": {"Switch Hostname.lower": qn.lower()}},
+                            ],
+                            "minimum_should_match": 0
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
+            # Switch Hostname pattern without domain: 3 letters + 2 digits + other chars (like ABX01ZSL5210P)
+            hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if isinstance(qn, str) else None
+            if hostname_pattern_match and '.' not in qn and len(qn) >= 13:
+                from utils.csv_utils import DESIRED_ORDER
+                q_lower = qn.lower()
+                return {
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {"term": {"Switch Hostname.lower": q_lower}},
+                                {"term": {"Switch Hostname": qn}},
+                                {"term": {"Switch Hostname": qn.upper()}},
+                                {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
+                                {"prefix": {"Switch Hostname": f"{qn}."}},
+                                {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
+                            ],
+                            "minimum_should_match": 1
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
+            # Full IPv4 exact-only
+            if field == "IP Address" and isinstance(qn, str):
+                if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
                     return {
-                        "query": {"bool": {"should": should, "minimum_should_match": 1}},
+                        "query": {"bool": {"must": [{"term": {"IP Address.keyword": qn}}]}},
                         "_source": DESIRED_ORDER,
                         "size": size,
-                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                        "sort": [
+                            {"Creation Date": {"order": "desc"}},
+                            self._preferred_file_sort_clause()
+                        ]
                     }
 
-            # IP search: exact for full IPv4, partial support for prefixes (e.g., 10., 10.20, 10.20.30)
-            if field == "IP Address" and isinstance(query, str):
-                qip = query.strip()
-                full_ipv4 = re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qip or "") is not None
-                if full_ipv4:
-                    return {
-                        "query": {"bool": {"must": [{"term": {"IP Address.keyword": qip}}]}},
-                        "_source": DESIRED_ORDER,
-                        "size": size,
-                        "sort": [{"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
-                    }
-                # Partial IP prefix (1-3 octets, optional trailing dot)
-                if re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.??", qip or "") or re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}", qip or ""):
-                    clean = qip.rstrip('.')
+                # Partial IPv4 prefix-only (e.g., "10.216.73." or "192.168.")
+                if re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.??", qn or "") or re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}", qn or ""):
+                    clean = qn.rstrip('.')
                     # For partial IP, use only prefix to ensure exact prefix matching
                     should = [
                         {"prefix": {"IP Address.keyword": clean}},
@@ -1734,18 +1998,15 @@ class OpenSearchConfig:
                     "query": {"bool": {"should": [
                         {"term": {"MAC Address.keyword": mac_up}},
                         {"term": {"MAC Address 2.keyword": mac_up}},
-                        {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
+                                               {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
                         {"multi_match": {"query": mac_up, "fields": ["*"], "boost": 0.01}}
                     ], "minimum_should_match": 1}},
                     "_source": DESIRED_ORDER,
                     "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }]
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause()
+                    ]
                 }
 
             # 4-digit Model pattern (e.g., "8832", "8851") - search ONLY for exact model matches
@@ -1771,8 +2032,57 @@ class OpenSearchConfig:
                     ]
                 }
 
-            # Switch Hostname-like (FQDN) exact-only: contains dot and letters (not IP)
-            if any(c.isalpha() for c in qn) and "." in qn and "/" not in qn and " " not in qn:
+            # Phone number (Line Number) exact-only branch: enforce strict matching
+            if re.fullmatch(r"\+?\d{7,15}", qn or ""):
+                from utils.csv_utils import DESIRED_ORDER
+                cleaned = qn.lstrip('+')
+                variants = []
+                if qn.startswith('+'):
+                    variants.append(qn)
+                    if cleaned:
+                        variants.append(cleaned)
+                else:
+                    if qn:
+                        variants.append(qn)
+                    if cleaned and cleaned != qn:
+                        variants.append(f"+{cleaned}")
+
+                unique_variants = []
+                seen_variants = set()
+                for variant in variants:
+                    if variant and variant not in seen_variants:
+                        seen_variants.add(variant)
+                        unique_variants.append(variant)
+
+                should_clauses = [
+                    {"term": {"Line Number.keyword": variant}}
+                    for variant in unique_variants
+                ]
+
+                return {
+                    "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": 1,
+                    "sort": [
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Line Number.keyword') && doc['Line Number.keyword'].size()>0 && doc['Line Number.keyword'].value == q) return 0; return 1;",
+                            "params": {"q": qn}
+                        }}},
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
+            # FQDN exact-only branch for hostname-like queries
+            if (
+                any(c.isalpha() for c in qn)
+                and "." in qn
+                and "/" not in qn
+                and " " not in qn
+                and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or "")
+            ):
                 from utils.csv_utils import DESIRED_ORDER
                 return {
                     "query": {
@@ -1797,217 +2107,41 @@ class OpenSearchConfig:
                     },
                     "_source": DESIRED_ORDER,
                     "size": size,
-                    "sort": [
-                        {"Creation Date": {"order": "desc"}},
-                        {"_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}},
-                        {"_score": {"order": "desc"}}
-                    ]
+                        "sort": [
+                            {"Creation Date": {"order": "desc"}},
+                            self._preferred_file_sort_clause(),
+                            {"_score": {"order": "desc"}}
+                        ]
                 }
 
-            # Switch Hostname pattern without domain: 3 letters + 2 digits + other chars (like ABx01ZSL5210P)
-            hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if qn else None
-            if hostname_pattern_match and '.' not in qn and len(qn) >= 13:
+            # Serial Number prefix branch: alphanumeric tokens 3-10 chars use prefix wildcards
+            if re.fullmatch(r"[A-Za-z0-9]{3,10}", qn or ""):
                 from utils.csv_utils import DESIRED_ORDER
-                # Case-insensitive exact match on the hostname without domain using the normalized keyword subfield
-                q_lower = qn.lower()
-                return {
-                    "query": {
-                        "bool": {
-                            "should": [
-                                # Exact match for hostname without domain (case-insensitive via normalized field)
-                                {"term": {"Switch Hostname.lower": q_lower}},
-                                # Also try raw field exact (covers data already stored in lower/upper cases)
-                                {"term": {"Switch Hostname": qn}},
-                                {"term": {"Switch Hostname": qn.upper()}},
 
-                                # Prefix match for full hostname with domain (case-insensitive)
-                                {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
-                                {"prefix": {"Switch Hostname": f"{qn}."}},
-                                {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
-                            ],
-                            "minimum_should_match": 1
-                        }
-                    },
+                variants = []
+                if qn:
+                    variants.append(qn)
+                    upper_variant = qn.upper()
+                    if upper_variant not in (None, qn) and upper_variant not in variants:
+                        variants.append(upper_variant)
+
+                wildcard_clauses = [
+                    {"wildcard": {"Serial Number": f"{variant}*"}}
+                    for variant in variants
+                ]
+
+                return {
+                    "query": {"bool": {"should": wildcard_clauses, "minimum_should_match": 1}},
                     "_source": DESIRED_ORDER,
                     "size": size,
                     "sort": [
-                        {"Creation Date": {"order": "desc"}},
                         {"_script": {"type": "number", "order": "asc", "script": {
                             "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}},
-                        {"_score": {"order": "desc"}}
-                    ]
-                }
-
-            # Full IPv4 exact-only
-            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
-                return {
-                    "query": {"bool": {"must": [{"term": {"IP Address.keyword": qn}}]}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }]
-                }
-
-            # Partial IPv4 prefix-only (e.g., "10.216.73." or "192.168.")
-            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
-                clean_query = qn.rstrip('.')
-                return {
-                    "query": {"bool": {"should": [
-                        {"prefix": {"IP Address.keyword": clean_query}},
-                        {"prefix": {"IP Address.keyword": f"{clean_query}."}}
-                    ], "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }]
-                }
-
-            # Switch Port pattern exact-only
-            if '/' in qn and len(qn) >= 5:
-                from utils.csv_utils import DESIRED_ORDER
-                # Enforce exact match ignoring surrounding spaces and case
-                return {
-                    "query": {
-                        "bool": {
-                            "filter": [
-                                {
-                                    "script": {
-                                        "script": {
-                                            "lang": "painless",
-                                            "source": "return doc.containsKey('Switch Port') && doc['Switch Port'].size()>0 && doc['Switch Port'].value != null && doc['Switch Port'].value.trim().equalsIgnoreCase(params.q.trim());",
-                                            "params": {"q": qn}
-                                        }
-                                    }
-                                }
-                            ],
-                            "should": [
-                                {"term": {"Switch Port": qn}}
-                            ],
-                            "minimum_should_match": 0
-                        }
-                    },
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }]
-                }
-
-            # Serial Number exact-only (general): full-length alphanumeric token (11+ chars, not pure digits, not hostname)
-            alphanumeric_11_plus = re.fullmatch(r"[A-Za-z0-9]{11,}", qn or "") and not re.fullmatch(r"\d{11,}", qn or "")
-            hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if qn else None
-            if alphanumeric_11_plus and not hostname_pattern_match:
-                from utils.csv_utils import DESIRED_ORDER
-                variants = [qn]
-                up = qn.upper()
-                if up != qn:
-                    variants.append(up)
-                return {
-                    "query": {"bool": {"should": [
-                        *([{ "term": {"Serial Number": v} } for v in variants])
-                    ], "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }, {"_score": {"order": "desc"}}]
-                }
-
-            # Serial Number prefix (general): partial alphanumeric token for prefix search (3-10 chars)
-            if re.fullmatch(r"[A-Za-z][A-Za-z0-9]{2,9}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
-                variants = [qn]
-                up = qn.upper()
-                if up != qn:
-                    variants.append(up)
-                return {
-                    "query": {"bool": {"should": [
-                        *([{ "wildcard": {"Serial Number": f"{v}*"} } for v in variants])
-                    ], "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }, {"_score": {"order": "desc"}}]
-                }
-
-            # Phone-like exact-only
-            if re.fullmatch(r"\+?\d{7,}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
-                # Include both variants: with and without leading plus
-                variants = [qn]
-                if qn.startswith('+'):
-                    variants.append(qn.lstrip('+'))
-                else:
-                    variants.append(f"+{qn}")
-                return {
-                    "query": {"bool": {"should": [
-                        *([{ "term": {"Line Number.keyword": v} } for v in variants])
-                    ], "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
-                    "size": 1,
-                    "sort": [{"Creation Date": {"order": "desc"}}, {
-                        "_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                            "params": {"f": "netspeed.csv"}
-                        }}
-                    }, {"_score": {"order": "desc"}}]
-                }
-
-            # Model-like pattern (e.g., "8851", "7841") - focus search ONLY on exact Model Name matches
-            if re.fullmatch(r"\d{4}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
-                return {
-                    "query": {"bool": {"should": [
-                        # ONLY exact model name matches - no wildcards or other fields
-                        {"term": {"Model Name.keyword": f"CP-{qn}"}},
-                        {"term": {"Model Name.keyword": f"DP-{qn}"}},
-                        # Also add text matches for the exact patterns
-                        {"match": {"Model Name": f"CP-{qn}"}},
-                        {"match": {"Model Name": f"DP-{qn}"}}
-                    ], "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [
-                        # Exact model matches first
-                        {"_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "def model = doc.containsKey('Model Name.keyword') && doc['Model Name.keyword'].size()>0 ? doc['Model Name.keyword'].value : ''; return (model.equals('CP-' + params.q) || model.equals('DP-' + params.q)) ? 0 : 1;",
+                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0) { def v = doc['Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } return 1;",
                             "params": {"q": qn}
                         }}},
                         {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
                         {"_score": {"order": "desc"}}
                     ]
                 }
@@ -2016,6 +2150,11 @@ class OpenSearchConfig:
         # Exclude multi_match for hostname patterns to prevent false matches
         is_hostname_pattern = isinstance(query, str) and len(query) >= 5 and re.match(r'^[A-Za-z]{3}[0-9]{2}', query)
 
+        file_name_boost_clauses = [
+            {"term": {"File Name": {"value": name, "boost": 2.0}}}
+            for name in preferred_files[:5]
+        ]
+
         search_query = {
             "query": {"bool": {"should": [
                 {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
@@ -2023,30 +2162,25 @@ class OpenSearchConfig:
                 {"term": {"Line Number.keyword": query}},
                 {"term": {"MAC Address": query}},
                 {"term": {"Line Number.keyword": f"+{query}"}},
-                {"term": {"File Name": {"value": "netspeed.csv", "boost": 2.0}}},
+                *file_name_boost_clauses,
 
                 {"wildcard": {"MAC Address.keyword": f"*{str(query).lower()}*"}},
                 {"wildcard": {"MAC Address.keyword": f"*{str(query).upper()}*"}},
-                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).lower()}*"}},
-                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
+                                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).lower()}*"}},
+                                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
 
-                # Serial Number wildcards for partial matches (only if not hostname-like)
-                *([] if isinstance(query, str) and len(query) >= 5 and re.match(r'^[A-Za-z]{3}[0-9]{2}', query) else [
-                    {"wildcard": {"Serial Number": f"*{str(query).lower()}*"}},
-                    {"wildcard": {"Serial Number": f"*{str(query).upper()}*"}},
-                ]),
-
-                # No Serial Number wildcards to keep serial searches exact-only
                                 {"wildcard": {"Line Number.keyword": f"*{query}*"}},
-                                *([ {"wildcard": {"Line Number.keyword": f"*{str(query).lstrip('+')}*"}} ]
-                  if str(query).startswith('+') and str(query).lstrip('+') else
-                                    [ {"wildcard": {"Line Number.keyword": f"*+{query}*"}} ]),
+                                                *([{"wildcard": {"Line Number.keyword": f"*{str(query).lstrip('+')}*"}}]
+                                    if str(query).startswith('+') and str(query).lstrip('+') else
+                                    [{"wildcard": {"Line Number.keyword": f"*+{query}*"}}]),
 
 
                 {"wildcard": {"Switch Port": f"*{query}*"}},
                 {"wildcard": {"Subnet Mask": f"*{query}*"}},
                 {"wildcard": {"Voice VLAN": f"*{query}*"}},
 
+                {"wildcard": {"Phone Port Speed": f"*{query}*"}},
+                {"wildcard": {"PC Port Speed": f"*{query}*"}},
                 {"wildcard": {"Speed 1": f"*{query}*"}},
                 {"wildcard": {"Speed 2": f"*{query}*"}},
                 {"wildcard": {"Speed 3": f"*{query}*"}},
@@ -2127,8 +2261,9 @@ class OpenSearchConfig:
             except Exception as e:
                 logger.warning(f"Failed to add model name variants for '{query}': {e}")
 
-        from utils.csv_utils import DESIRED_ORDER
-        search_query["_source"] = DESIRED_ORDER
+        from utils.csv_utils import DESIRED_ORDER, LEGACY_COLUMN_RENAMES
+        legacy_fields = list(LEGACY_COLUMN_RENAMES.keys())
+        search_query["_source"] = list(dict.fromkeys(DESIRED_ORDER + legacy_fields))
 
         search_query["sort"] = [
             {"_script": {"type": "number", "order": "asc", "script": {
@@ -2137,11 +2272,7 @@ class OpenSearchConfig:
                 "params": {"q": query}
             }}},
             {"Creation Date": {"order": "desc"}},
-            {"_script": {"type": "number", "order": "asc", "script": {
-                "lang": "painless",
-                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                "params": {"f": "netspeed.csv"}
-            }}},
+            self._preferred_file_sort_clause(),
             {"_score": {"order": "desc"}}
         ]
 
@@ -2162,6 +2293,7 @@ class OpenSearchConfig:
             Tuple[List[str], List[Dict[str, Any]]]: (headers, matching documents)
         """
         try:
+            preferred_files = self._preferred_file_names()
             # Prepare containers for documents
             documents: List[Dict[str, Any]] = []
 
@@ -2194,12 +2326,13 @@ class OpenSearchConfig:
                     curr_indices_first = self.get_search_indices(False)
                     mac_upper_first = str(canonical_mac)
                     from utils.csv_utils import DESIRED_ORDER as _DO
+                    must_clauses_first: List[Dict[str, Any]] = []
+                    if preferred_files:
+                        must_clauses_first.append({"terms": {"File Name": preferred_files[:5]}})
                     targeted_first = {
                         "query": {
                             "bool": {
-                                "must": [
-                                    {"term": {"File Name": "netspeed.csv"}}
-                                ],
+                                "must": must_clauses_first,
                                 "should": [
                                     {"term": {"MAC Address.keyword": mac_upper_first}},
                                     {"term": {"MAC Address 2.keyword": mac_upper_first}},
@@ -2257,23 +2390,7 @@ class OpenSearchConfig:
                     from utils.csv_utils import DESIRED_ORDER
                     if include_historical:
                         # Return one exact match per netspeed file, newest first
-                        from pathlib import Path as _Path
-                        data_dir = _Path('/app/data')
-                        netspeed_files: List[str] = []
-                        if data_dir.exists():
-                            for p in sorted(data_dir.glob('netspeed.csv*'), key=lambda x: x.name):
-                                n = p.name
-                                if n == 'netspeed.csv' or (n.startswith('netspeed.csv.') and n.replace('netspeed.csv.', '').isdigit()):
-                                    netspeed_files.append(n)
-                        def _prio(name: str):
-                            if name == 'netspeed.csv':
-                                return (0, 0)
-                            try:
-                                return (1, int(name.split('netspeed.csv.')[1]))
-                            except Exception:
-                                return (999, 999)
-                        netspeed_files.sort(key=_prio)
-
+                        netspeed_files = self._netspeed_filenames()
                         results: List[Dict[str, Any]] = []
                         for fname in netspeed_files:
                             try:
@@ -2360,6 +2477,8 @@ class OpenSearchConfig:
                         variants.append(up)
                     from utils.csv_utils import DESIRED_ORDER
                     indices_sn = self.get_search_indices(include_historical)
+                    indices_sn_list = indices_sn if isinstance(indices_sn, list) else [indices_sn]
+                    allow_archive_files_sn = any(idx == self.archive_index for idx in indices_sn_list)
 
                     # Support both exact and prefix search for serial numbers
                     # For 8-10 characters: add both exact and wildcard queries
@@ -2377,13 +2496,11 @@ class OpenSearchConfig:
                         "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
                         "_source": DESIRED_ORDER,
                         "size": (size if include_historical else 20000),  # Increase size for prefix searches
-                        "sort": [{"Creation Date": {"order": "desc"}}, {
-                            "_script": {"type": "number", "order": "asc", "script": {
-                                "lang": "painless",
-                                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                                "params": {"f": "netspeed.csv"}
-                            }}
-                        }, {"_score": {"order": "desc"}}]
+                        "sort": [
+                            {"Creation Date": {"order": "desc"}},
+                            self._preferred_file_sort_clause(),
+                            {"_score": {"order": "desc"}}
+                        ]
                     }
                     logger.info(f"[SERIAL] indices={indices_sn} body={body_sn}")
                     resp_sn = self.client.search(index=indices_sn, body=body_sn)
@@ -2397,6 +2514,8 @@ class OpenSearchConfig:
                         if fn.startswith('netspeed.csv.'):
                             suf = fn.split('netspeed.csv.', 1)[1]
                             return suf.isdigit()
+                        if allow_archive_files_hn and fn.startswith('netspeed_'):
+                            return True
                         return False
                     docs_sn = [d for d in docs_sn if _is_allowed_file((d.get('File Name') or '').strip())]
                     if include_historical:
@@ -2427,6 +2546,8 @@ class OpenSearchConfig:
                     qn_hn = query.strip()
                     from utils.csv_utils import DESIRED_ORDER
                     indices_hn = self.get_search_indices(include_historical)
+                    indices_hn_list = indices_hn if isinstance(indices_hn, list) else [indices_hn]
+                    allow_archive_files_hn = any(idx == self.archive_index for idx in indices_hn_list)
                     body_hn = {
                         "query": {
                             "bool": {
@@ -2452,11 +2573,7 @@ class OpenSearchConfig:
                         "size": size,
                         "sort": [
                             {"Creation Date": {"order": "desc"}},
-                            {"_script": {"type": "number", "order": "asc", "script": {
-                                "lang": "painless",
-                                "source": "doc.containsKey('File Name') && doc['File Name'].size()>0 && doc['File Name'].value == params.f ? 0 : 1",
-                                "params": {"f": "netspeed.csv"}
-                            }}}
+                            self._preferred_file_sort_clause()
                         ]
                     }
                     resp_hn = self.client.search(index=indices_hn, body=body_hn)
@@ -2470,6 +2587,8 @@ class OpenSearchConfig:
                         if fn.startswith('netspeed.csv.'):
                             suf = fn.split('netspeed.csv.', 1)[1]
                             return suf.isdigit()
+                        if allow_archive_files_sn and fn.startswith('netspeed_'):
+                            return True
                         return False
                     docs_hn = [d for d in docs_hn if _is_allowed_file((d.get('File Name') or '').strip())]
                     return DESIRED_ORDER, docs_hn
@@ -2482,6 +2601,15 @@ class OpenSearchConfig:
             if looks_like_mac_first:
                 # Force historical for the general phase regardless of caller flag
                 indices = self.get_search_indices(True)
+            indices_list = indices if isinstance(indices, list) else [indices]
+            allow_archive_files_general = any(idx == self.archive_index for idx in indices_list)
+            if allow_archive_files_general and size > 10000:
+                logger.info(
+                    "Clamping search size from %s to 10000 for archive_netspeed compatibility",
+                    size,
+                )
+                size = 10000
+
             # Check if this is a KEM search - optimize performance but return ALL results
             is_kem_search = isinstance(query, str) and query.upper().strip() == "KEM"
 
@@ -2509,7 +2637,7 @@ class OpenSearchConfig:
             # Skip expensive deduplication for KEM searches to improve performance
             if is_kem_search:
                 unique_documents = documents
-                logger.info(f"Skipping deduplication for KEM search to improve performance")
+                logger.info("Skipping deduplication for KEM search to improve performance")
             else:
                 unique_documents = self._deduplicate_documents_preserve_order(documents)
 
@@ -2524,6 +2652,8 @@ class OpenSearchConfig:
                 if fn.startswith('netspeed.csv.'):
                     suf = fn.split('netspeed.csv.', 1)[1]
                     return suf.isdigit()
+                if allow_archive_files_general and fn.startswith('netspeed_'):
+                    return True
                 return False
 
             before_cnt = len(unique_documents)
@@ -2534,7 +2664,7 @@ class OpenSearchConfig:
 
             # (Removed) Hostname deduplication: return all exact matches for a host
 
-            # For MAC-like searches, ensure at least one matching document per netspeed file present in /app/data
+            # For MAC-like searches, ensure at least one matching document per netspeed file present in the data root
             # This guarantees all netspeed.csv* files show up in the results list
             try:
                 mac_core_seed = canonical_mac
@@ -2543,25 +2673,8 @@ class OpenSearchConfig:
                 looks_like_mac_seed = False
             if looks_like_mac_seed and include_historical:
                 try:
-                    from pathlib import Path as _Path
                     mac_upper_seed = str(mac_core_seed)
-                    data_dir = _Path('/app/data')
-                    netspeed_files = []
-                    if data_dir.exists():
-                        # Collect netspeed.csv and numeric suffixed history (.0, .1, ...)
-                        for p in sorted(data_dir.glob('netspeed.csv*'), key=lambda x: x.name):
-                            n = p.name
-                            if n == 'netspeed.csv' or (n.startswith('netspeed.csv.') and n.replace('netspeed.csv.', '').isdigit()):
-                                netspeed_files.append(n)
-                    # Seed order: current first, then .0, .1, ...
-                    def _seed_priority(name: str):
-                        if name == 'netspeed.csv':
-                            return (0, 0)
-                        try:
-                            return (1, int(name.split('netspeed.csv.')[1]))
-                        except Exception:
-                            return (999, 999)
-                    netspeed_files.sort(key=_seed_priority)
+                    netspeed_files = self._netspeed_filenames()
 
                     # Determine which file names are already present in results
                     present_files = set((d.get('File Name') or '') for d in unique_documents)
@@ -2592,8 +2705,8 @@ class OpenSearchConfig:
                                     '_source': _DO2,
                                     'size': 1
                                 }
-                                # Search across netspeed_* indices; avoid relying on exact index per file
-                                resp_seed = self.client.search(index=['netspeed_netspeed_csv_*'], body=seed_body)
+                                # Search across current + historical indices to include netspeed.csv as well
+                                resp_seed = self.client.search(index=self.get_search_indices(True), body=seed_body)
                                 hit = next((h.get('_source', {}) for h in resp_seed.get('hits', {}).get('hits', [])), None)
                                 if hit:
                                     seed_docs.append(hit)
@@ -2611,23 +2724,8 @@ class OpenSearchConfig:
             promoted: List[Dict[str, Any]] = []
             if looks_like_mac_seed and include_historical:
                 try:
-                    # Build list of netspeed files from /app/data in desired order
-                    from pathlib import Path as _Path
-                    data_dir2 = _Path('/app/data')
-                    netspeed_files2: List[str] = []
-                    if data_dir2.exists():
-                        for p in sorted(data_dir2.glob('netspeed.csv*'), key=lambda x: x.name):
-                            n = p.name
-                            if n == 'netspeed.csv' or (n.startswith('netspeed.csv.') and n.replace('netspeed.csv.', '').isdigit()):
-                                netspeed_files2.append(n)
-                    def _prio2(name: str):
-                        if name == 'netspeed.csv':
-                            return (0, 0)
-                        try:
-                            return (1, int(name.split('netspeed.csv.')[1]))
-                        except Exception:
-                            return (999, 999)
-                    netspeed_files2.sort(key=_prio2)
+                    # Build list of netspeed files in desired order using configured directories
+                    netspeed_files2 = self._netspeed_filenames()
 
                     # First doc per file from current unique_documents
                     first_by_file: Dict[str, Dict[str, Any]] = {}
@@ -2720,7 +2818,7 @@ class OpenSearchConfig:
                 file_name = doc.get('File Name', '')
 
                 if file_name == 'netspeed.csv':
-                    return (0, 0)  # Always first
+                    return (0, 0) # Always first
                 elif file_name.startswith('netspeed.csv.'):
                     try:
                         suffix = file_name.split('netspeed.csv.')[1]
@@ -2802,7 +2900,7 @@ class OpenSearchConfig:
             logger.error(f"Error searching for '{query}': {e}")
             return [], []
 
-    def repair_current_file_after_indexing(self, current_file_path: str = "/app/data/netspeed.csv") -> Dict[str, Any]:
+    def repair_current_file_after_indexing(self, current_file_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Repair missing data in the current netspeed.csv file AFTER all files have been indexed.
         This ensures historical indices are available for data lookup during repair.
@@ -2816,6 +2914,26 @@ class OpenSearchConfig:
         Returns:
             Dict[str, Any]: Repair results summary
         """
+        if not current_file_path:
+            candidates: List[str] = []
+            current_dir = getattr(settings, "NETSPEED_CURRENT_DIR", None)
+            if current_dir:
+                candidates.append(str(current_dir))
+                candidates.append(str(Path(current_dir) / "netspeed.csv"))
+            try:
+                candidates.append(str(get_data_root() / "netspeed.csv"))
+            except Exception:
+                pass
+            for cand in candidates:
+                try:
+                    if Path(cand).exists():
+                        current_file_path = cand
+                        break
+                except Exception:
+                    continue
+            if not current_file_path and candidates:
+                current_file_path = candidates[0]
+
         logger.info(f"POST-INDEX REPAIR: DISABLED - Skipping data repair for {current_file_path}")
         return {
             "success": True,
@@ -2907,5 +3025,5 @@ class OpenSearchConfig:
                 logger.warning(f"Error generating action for row {row_num}: {e}")
 
 
-# Create a global instance
+# Singleton configuration instance used across the backend
 opensearch_config = OpenSearchConfig()

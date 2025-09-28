@@ -12,8 +12,8 @@ from typing import List, Tuple
 # Current standard netspeed.csv format (16 columns, semicolon-delimited, no header)
 CURRENT_HEADERS_16 = [
     "IP Address", "Line Number", "Serial Number", "Model Name", "KEM", "KEM 2",
-    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-    "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
+    "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
 ]
 
 

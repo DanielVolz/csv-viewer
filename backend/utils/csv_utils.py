@@ -13,6 +13,31 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Define base headers for different known formats
+LEGACY_COLUMN_RENAMES = {
+    "Speed Switch-Port": "Switch Port Mode",
+    "Speed PC-Port": "PC Port Mode",
+    "Speed 1": "Phone Port Speed",
+    "Speed 2": "PC Port Speed",
+}
+
+
+def _canonicalize_header_name(name: str) -> str:
+    if not name:
+        return name
+    return LEGACY_COLUMN_RENAMES.get(name, name)
+
+
+def _canonicalize_header_row(headers: List[str]) -> List[str]:
+    seen = set()
+    canonical: List[str] = []
+    for header in headers:
+        normalized = _canonicalize_header_name(header)
+        if normalized not in seen:
+            seen.add(normalized)
+            canonical.append(normalized)
+    return canonical
+
+
 KNOWN_HEADERS = {
     11: [  # OLD format
         "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2",
@@ -20,18 +45,18 @@ KNOWN_HEADERS = {
     ],
     14: [  # OLD format without KEM
         "IP Address", "Line Number", "Serial Number", "Model Name", "MAC Address",
-        "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-        "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+        "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
+        "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
     ],
     15: [  # TRANSITION format with 1 KEM column
         "IP Address", "Line Number", "Serial Number", "Model Name", "KEM",
-        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-        "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
+        "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
     ],
     16: [  # NEW STANDARD format with KEM columns (current and future files)
         "IP Address", "Line Number", "Serial Number", "Model Name", "KEM", "KEM 2",
-        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-        "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port"
+        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
+        "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
     ]
 }
 
@@ -63,14 +88,14 @@ NEW_TO_CANONICAL_HEADER_MAP = {
     "KeyExpansionModule2": "KEM 2",
     "MACAddress1": "MAC Address",
     "MACAddress2": "MAC Address 2",
-    "SwitchPortMode": "Speed Switch-Port",
-    "PCPortMode": "Speed PC-Port",
+    "SwitchPortMode": "Switch Port Mode",
+    "PCPortMode": "PC Port Mode",
     "SubNetMask": "Subnet Mask",
     "VLANId": "Voice VLAN",
     "SwitchFQDN": "Switch Hostname",
     "SwitchPort": "Switch Port",
-    "PhonePortSpeed": "Speed 1",
-    "PCPortSpeed": "Speed 2",
+    "PhonePortSpeed": "Phone Port Speed",
+    "PCPortSpeed": "PC Port Speed",
 }
 
 _NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
@@ -79,8 +104,8 @@ _NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
 # KEM and KEM 2 are included in backend processing but merged into Line Number for display
 DESIRED_ORDER = [
     "#", "File Name", "Creation Date", "IP Address", "Line Number",
-    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Speed 1", "Speed 2",
-    "Switch Hostname", "Switch Port", "Speed Switch-Port", "Speed PC-Port", "Serial Number", "Model Name"
+    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
+    "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode", "Serial Number", "Model Name"
 ]
 
 # Regex patterns for intelligent column detection
@@ -94,12 +119,12 @@ COLUMN_PATTERNS = {
     "MAC Address 2": re.compile(r'^SEP[0-9A-F]{12}$', re.IGNORECASE),  # SEP prefixed MAC
     "Subnet Mask": re.compile(r'^255\.[\d.]+$'),  # Subnet masks starting with 255
     "Voice VLAN": re.compile(r'^\d{1,4}$'),  # VLAN IDs (1-4 digits)
-    "Speed 1": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
-    "Speed 2": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
+    "Phone Port Speed": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
+    "PC Port Speed": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
     "Switch Hostname": re.compile(r'^[A-Za-z0-9\-_.]+\.juwin\.bayern\.de$', re.IGNORECASE),
     "Switch Port": re.compile(r'^(GigabitEthernet|FastEthernet|Ethernet)\d+/\d+/\d+$', re.IGNORECASE),
-    "Speed Switch-Port": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?)', re.IGNORECASE),
-    "Speed PC-Port": re.compile(r'^(Voll|Half|Auto|Abwärts|Aufwärts|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE)
+    "Switch Port Mode": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?)', re.IGNORECASE),
+    "PC Port Mode": re.compile(r'^(Voll|Half|Auto|Abwärts|Aufwärts|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE)
 }
 
 
@@ -200,7 +225,7 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
             )
 
         if is_defective_cp8832:
-            # DEFEKTE CP-8832 Zeile: Speed 2 fehlt, daher ist alles ab Switch Hostname verschoben
+            # DEFEKTE CP-8832 Zeile: PC Port Speed fehlt, daher ist alles ab Switch Hostname verschoben
             # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, Speed1, SwitchHost, SwitchPort, SpeedSw, [eventuell leer]
             mapping_defective = [
                 "IP Address",        # 0
@@ -211,10 +236,10 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
                 "MAC Address 2",     # 5
                 "Subnet Mask",       # 6
                 "Voice VLAN",        # 7
-                "Speed 1",           # 8
+                "Phone Port Speed",  # 8
                 "Switch Hostname",   # 9  ← Hierher verschoben!
                 "Switch Port",       # 10
-                "Speed Switch-Port"  # 11
+                "Switch Port Mode"   # 11
             ]
 
             for i, header in enumerate(mapping_defective):
@@ -224,8 +249,8 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
             # Fehlende Felder leer lassen
             out["KEM"] = ""
             out["KEM 2"] = ""
-            out["Speed 2"] = ""
-            out["Speed PC-Port"] = ""
+            out["PC Port Speed"] = ""
+            out["PC Port Mode"] = ""
 
         else:
             # Normales 14-Spalten Format ohne KEM: KNOWN_HEADERS[14]
@@ -241,7 +266,7 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
     elif col_count == 12:
         # SPECIAL CASE: CP-8832 und ähnliche Telefone ohne KEM-Spalten haben nur 12 Spalten
         # Diese Telefone haben KEINE KEM-Spalte, daher sind alle Spalten ab MAC Address um 2 nach links verschoben
-        # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, Speed1, SwitchHost, SwitchPort, SpeedSw
+    # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, PhoneSpeed, SwitchHost, SwitchPort, SwitchSpeed
         mapping_12 = [
             "IP Address",        # 0
             "Line Number",       # 1
@@ -251,10 +276,10 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
             "MAC Address 2",     # 5
             "Subnet Mask",       # 6
             "Voice VLAN",        # 7
-            "Speed 1",           # 8
+            "Phone Port Speed",  # 8
             "Switch Hostname",   # 9 (verschoben von Spalte 11 auf 9!)
             "Switch Port",       # 10
-            "Speed Switch-Port"  # 11
+            "Switch Port Mode"   # 11
         ]
 
         for i, header in enumerate(mapping_12):
@@ -264,8 +289,8 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
         # KEM-Felder leer lassen
         out["KEM"] = ""
         out["KEM 2"] = ""
-        out["Speed 2"] = ""  # Auch Speed 2 fehlt bei 12-Spalten Format
-        out["Speed PC-Port"] = ""  # Auch Speed PC-Port fehlt
+        out["PC Port Speed"] = ""  # PC Port Speed fehlt bei 12-Spalten Format
+        out["PC Port Mode"] = ""  # Auch PC Port Mode fehlt
 
         return out
     else:
@@ -328,19 +353,26 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
     Returns:
         Tuple of (filtered_headers, filtered_data)
     """
+    # Normalize headers to canonical names (handles legacy Speed Switch-Port naming)
+    canonical_headers = _canonicalize_header_row(headers or [])
+
     # Filter headers to only include desired columns
-    display_headers = []
+    display_headers: List[str] = []
     for header in DESIRED_ORDER:
-        if header in headers:
+        if header in canonical_headers:
             display_headers.append(header)
 
-    # Filter data to only include displayed columns
+    # Filter data to only include displayed columns, copying legacy values when necessary
     filtered_data = []
     for row in data:
         filtered_row = {}
+        row_with_aliases = dict(row)
+        for legacy, renamed in LEGACY_COLUMN_RENAMES.items():
+            if legacy in row_with_aliases and renamed not in row_with_aliases:
+                row_with_aliases[renamed] = row_with_aliases[legacy]
         for header in display_headers:
-            if header in row:
-                filtered_row[header] = row[header]
+            if header in row_with_aliases:
+                filtered_row[header] = row_with_aliases[header]
         filtered_data.append(filtered_row)
 
     return display_headers, filtered_data
@@ -417,7 +449,7 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                     logger.info(f"Detected new-format header for {file_path}")
                     new_format_with_header = True
                     all_rows = all_rows[1:]
-                elif normalized_first_row == KNOWN_HEADERS[16]:
+                elif _canonicalize_header_row(normalized_first_row) == KNOWN_HEADERS[16]:
                     logger.info(f"Detected legacy header row for {file_path}")
                     all_rows = all_rows[1:]
 
@@ -566,7 +598,7 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
         if _matches_new_header(normalized_first_row):
             new_format_with_header = True
             raw_rows = raw_rows[1:]
-        elif normalized_first_row == KNOWN_HEADERS[16]:
+        elif _canonicalize_header_row(normalized_first_row) == KNOWN_HEADERS[16]:
             raw_rows = raw_rows[1:]
 
         # Normalize each row to 16 columns

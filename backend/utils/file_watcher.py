@@ -10,6 +10,61 @@ from utils.opensearch import opensearch_config, OpenSearchUnavailableError
 from utils.archiver import archive_current_netspeed
 from utils.path_utils import resolve_current_file, NETSPEED_TIMESTAMP_PATTERN
 
+
+def _resolve_data_dir(data_dir: str | Path | None) -> Path:
+    """Resolve the directory that should be watched for netspeed changes."""
+    if isinstance(data_dir, Path):
+        data_dir = str(data_dir)
+
+    raw_roots = getattr(settings, "_explicit_data_roots", ()) or ()
+    explicit_roots = tuple(
+        str(root)
+        for root in raw_roots
+        if isinstance(root, str) and root.strip()
+    )
+
+    chosen_path: str | None
+    if data_dir:
+        chosen_path = data_dir
+    elif explicit_roots:
+        chosen_path = explicit_roots[0]
+    else:
+        chosen_path = getattr(settings, "CSV_FILES_DIR", "/app/data")
+
+    if not chosen_path or not str(chosen_path).strip():
+        chosen_path = "/app/data"
+
+    try:
+        candidate = Path(chosen_path).expanduser().resolve()
+    except Exception:
+        candidate = Path(chosen_path)
+
+    if explicit_roots:
+        allowed: list[Path] = []
+        for root in explicit_roots:
+            try:
+                allowed.append(Path(root))
+            except Exception:
+                continue
+        for root in allowed:
+            try:
+                if candidate == root or candidate.is_relative_to(root):
+                    break
+            except AttributeError:
+                # Python <3.9 compatibility
+                if str(candidate).startswith(f"{root}/"):
+                    break
+            except Exception:
+                continue
+        else:
+            fallback = next((root for root in allowed if str(root).strip()), None)
+            if fallback is not None:
+                if candidate != fallback:
+                    logger.info("File watcher overriding watch directory %s -> %s to honor explicit data roots", candidate, fallback)
+                candidate = fallback
+
+    return candidate
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,8 +73,8 @@ logger = logging.getLogger(__name__)
 class CSVFileHandler(FileSystemEventHandler):
     """Handler for monitoring CSV file changes."""
 
-    def __init__(self, data_dir: str):
-        self.data_dir = Path(data_dir)
+    def __init__(self, data_dir: str | None):
+        self.data_dir = _resolve_data_dir(data_dir)
         current_candidate = None
         try:
             current_candidate = resolve_current_file([self.data_dir])
@@ -50,8 +105,12 @@ class CSVFileHandler(FileSystemEventHandler):
             return True
         if name == "netspeed.csv":
             return True
-        if name.startswith("netspeed.csv.") and file_path.suffix == '' and name.replace("netspeed.csv.", "").isdigit():
-            return True
+        if name.startswith("netspeed.csv."):
+            suffix = name.split("netspeed.csv.", 1)[1]
+            if suffix.endswith("_bak"):
+                suffix = suffix[:-4]
+            if suffix.isdigit():
+                return True
         return False
 
     def _should_trigger_reindex(self) -> bool:
@@ -244,10 +303,11 @@ class CSVFileHandler(FileSystemEventHandler):
 class FileWatcher:
     """File system watcher for CSV files."""
 
-    def __init__(self, data_dir: str = "/app/data"):
-        self.data_dir = data_dir
+    def __init__(self, data_dir: str | None = None):
+        resolved_dir = _resolve_data_dir(data_dir)
+        self.data_dir = str(resolved_dir)
         self.observer = Observer()
-        self.handler = CSVFileHandler(data_dir)
+        self.handler = CSVFileHandler(self.data_dir)
 
     def start(self):
         """Start watching for file changes."""
@@ -282,7 +342,7 @@ class FileWatcher:
 file_watcher = None
 
 
-def start_file_watcher(data_dir: str = "/app/data"):
+def start_file_watcher(data_dir: str | None = None):
     """
     Start the global file watcher.
 

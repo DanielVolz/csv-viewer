@@ -74,17 +74,25 @@ def patch_opensearch(monkeypatch):
                 }
             else:
                 # Code mode: return single doc (today)
-                return {'hits': {'hits': [{'_source': {
-                    'key': 'ABC01', 'date': '2099-01-01', 'totalPhones': 7, 'totalSwitches': 1,
-                    'phonesWithKEM': 1, 'phonesByModel': [{'model':'M2','count':7}],
-                    'phonesByModelJustiz': [], 'phonesByModelJVA': [], 'vlanUsage': [], 'topVLANs': [], 'uniqueVLANCount': 0, 'switches': [], 'kemPhones': ['K1']
-                }}]}}
+                    return {'hits': {'hits': [{'_source': {
+                        'key': 'ABC01', 'query': 'ABC01', 'mode': 'code', 'date': '2099-01-01',
+                        'totalPhones': 7, 'totalSwitches': 1,
+                        'phonesWithKEM': 1, 'phonesByModel': [{'model': 'M2', 'count': 7}],
+                        'phonesByModelJustiz': [], 'phonesByModelJVA': [],
+                        'vlanUsage': [], 'topVLANs': [], 'uniqueVLANCount': 0,
+                        'switches': [], 'kemPhones': ['K1']
+                    }}]}}
     class DummyConfig:
         def __init__(self):
             self.client = DummyClient()
             self.stats_loc_index = 'stats_netspeed_loc'
     # Patch the utils.opensearch.OpenSearchConfig class used inside endpoint
+    # The API imports OpenSearch helpers via `from utils.opensearch import opensearch_config`
+    # but some modules also refer to `backend.utils.opensearch`, so patch both.
+    monkeypatch.setattr('utils.opensearch.OpenSearchConfig', DummyConfig)
     monkeypatch.setattr('backend.utils.opensearch.OpenSearchConfig', DummyConfig)
+    monkeypatch.setattr('utils.opensearch.opensearch_config', DummyConfig(), raising=False)
+    monkeypatch.setattr('backend.utils.opensearch.opensearch_config', DummyConfig(), raising=False)
     yield
 
 @pytest.mark.parametrize('query,mode', [

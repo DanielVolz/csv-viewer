@@ -18,6 +18,7 @@ from utils.path_utils import (
     collect_netspeed_files,
     resolve_current_file,
     NETSPEED_TIMESTAMP_PATTERN,
+    get_data_root,
 )
 from utils.opensearch import OpenSearchUnavailableError, opensearch_config
 
@@ -41,7 +42,10 @@ def _extra_search_paths() -> List[Path | str]:
                 extras.append(Path(value))
             except Exception:
                 continue
-    extras.append(Path("/app/data"))
+    try:
+        extras.append(get_data_root())
+    except Exception:
+        pass
     return extras
 
 
@@ -138,7 +142,7 @@ async def files_health():
         hist_env = _settings.NETSPEED_HISTORY_DIR
         mount_env = _settings.CSV_FILES_DIR
         # Inside container expected mapping
-        container_mount = Path("/app/data")
+        container_mount = get_data_root()
         current_expected = container_mount / "netspeed" / "netspeed.csv"
         history_dir_expected = container_mount / "history" / "netspeed"
         history_files = []
@@ -345,9 +349,10 @@ async def get_netspeed_info():
                             "index": snapshot.get("index"),
                         }
                     )
+                data_root = get_data_root()
                 return {
                     "success": False,
-                    "message": "No netspeed export found — place a file in /app/data and refresh. The exporter should create a new file around 06:55 AM.",
+                    "message": f"No netspeed export found — place a file in {data_root} and refresh. The exporter should create a new file around 06:55 AM.",
                     "date": None,
                     "line_count": 0,
                     "using_fallback": False,
@@ -484,7 +489,7 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                 file_path = candidate
                 actual_filename = candidate.name
             else:
-                direct = Path("/app/data") / filename
+                direct = get_data_root() / filename
                 if direct.exists():
                     file_path = direct
                     actual_filename = direct.name
@@ -613,7 +618,7 @@ async def reindex_all_files():
     """
     try:
         # Get path to CSV files directory
-        csv_dir = "/app/data"
+        csv_dir = str(get_data_root())
 
         # Trigger the Celery task asynchronously
         task = index_all_csv_files.delay(csv_dir)
@@ -623,7 +628,7 @@ async def reindex_all_files():
         try:
             from tasks.tasks import snapshot_current_with_details as _snap
             try:
-                _snap.delay()  # default path /app/data/netspeed.csv
+                _snap.delay()  # default path resolves via settings/get_data_root
                 snapshot_queued = True
                 logger.info("Queued snapshot_current_with_details after reindex_all_files")
             except Exception as e:
@@ -819,11 +824,11 @@ async def download_file(filename: str, request: Request):
             file_path = inventory.get(raw_name)
 
         if file_path is None or not file_path.exists():
-            fallback_candidates = [
-                Path("/app/data/netspeed") / raw_name,
-                Path("/app/data/history/netspeed") / raw_name,
-                Path("/app/data") / raw_name,
-            ]
+            fallback_candidates = []
+            data_root = get_data_root()
+            fallback_candidates.append(data_root / "netspeed" / raw_name)
+            fallback_candidates.append(data_root / "history" / "netspeed" / raw_name)
+            fallback_candidates.append(data_root / raw_name)
             for candidate in fallback_candidates:
                 if candidate.exists():
                     file_path = candidate
@@ -833,10 +838,28 @@ async def download_file(filename: str, request: Request):
             logger.error(f"File not found: {raw_name}")
             raise HTTPException(status_code=404, detail=f"File {raw_name} not found")
 
-        csv_dir = Path("/app/data").resolve()
+        import pathlib
+
+        base_dir_value = getattr(settings, "CSV_FILES_DIR", None)
+        if base_dir_value:
+            try:
+                csv_dir = pathlib.Path(base_dir_value).resolve()
+            except Exception:
+                csv_dir = pathlib.Path(base_dir_value)
+        else:
+            csv_dir = get_data_root().resolve()
         file_path = file_path.resolve()
 
-        if csv_dir not in file_path.parents and file_path != csv_dir:
+        csv_dir_str = str(csv_dir)
+        file_path_str = str(file_path)
+        logger.debug("download_file security context csv_dir=%s file_path=%s", csv_dir_str, file_path_str)
+
+        normalized_dir = csv_dir_str.rstrip("/") or "/"
+        normalized_dir_with_sep = normalized_dir if normalized_dir.endswith("/") else normalized_dir + "/"
+        if not (
+            file_path_str == normalized_dir
+            or file_path_str.startswith(normalized_dir_with_sep)
+        ):
             logger.warning(f"Blocked escape attempt: {file_path}")
             raise HTTPException(status_code=400, detail="Invalid filename")
 
@@ -884,8 +907,7 @@ async def get_available_columns():
         available_columns = []
 
     # Define default enabled state for each column returned to the frontend settings
-    # Note: Speed 1 and Speed 2 are excluded from settings (always hidden)
-    # Additionally, "MAC Address 2" is intentionally excluded from settings and hidden by default
+    # All CSV columns are now available for toggling except KeyExpansionModule fields, which are never exposed
         default_enabled = {
             "#": True,
             "File Name": True,
@@ -893,12 +915,15 @@ async def get_available_columns():
             "IP Address": True,
             "Line Number": True,
             "MAC Address": True,
+            "MAC Address 2": False,
             "Subnet Mask": False,
             "Voice VLAN": True,
             "Switch Hostname": True,
             "Switch Port": True,
-            "Speed Switch-Port": False,
-            "Speed PC-Port": False,
+            "Phone Port Speed": False,
+            "PC Port Speed": False,
+            "Switch Port Mode": False,
+            "PC Port Mode": False,
             "Serial Number": True,
             "Model Name": True
         }
@@ -910,13 +935,15 @@ async def get_available_columns():
             "Voice VLAN": "V-VLAN",
             "Serial Number": "Serial",
             "Model Name": "Model",
+            "MAC Address 2": "MAC Addr. 2",
+            "Phone Port Speed": "Phone Port Speed",
+            "PC Port Speed": "PC Port Speed",
+            "Switch Port Mode": "Switch Port Mode",
+            "PC Port Mode": "PC Port Mode",
         }
         for column_id in DESIRED_ORDER:
-            # Only include columns that are defined in default_enabled (excludes Speed 1, Speed 2)
+            # Only include columns that are defined in default_enabled (KeyExpansionModule columns are never exposed)
             if column_id in default_enabled:
-                # Explicitly skip "MAC Address 2" so it doesn't appear in settings
-                if column_id == "MAC Address 2":
-                    continue
                 available_columns.append({
                     "id": column_id,
                     "label": display_labels.get(column_id, column_id),

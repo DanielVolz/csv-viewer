@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from utils.path_utils import get_data_root
+
 
 def _pad_code(code: str) -> str:
     """Normalize license plate code to 3-letter padded form using 'X' (e.g., M->MXX, HH->HHX)."""
@@ -16,7 +18,6 @@ def _pad_code(code: str) -> str:
 
 _DEFAULT_PATHS: List[str] = [
     str(Path(__file__).parent / "city_codes.json"),
-    "/app/data/city_codes.json",
 ]
 
 _CACHE_MAP: Dict[str, str] = {}
@@ -30,14 +31,18 @@ def load_city_code_map(paths: Optional[List[str]] = None) -> Dict[str, str]:
     or already padded (e.g., "MXX", "HHX", "ABC"). All keys are normalized to
     a 3-letter padded form.
 
-    Merge order (later files override earlier ones):
-      1) backend/utils/city_codes.json (bundled base)
-      2) /app/data/city_codes.json (deployment override)
+        Merge order (later files override earlier ones):
+            1) backend/utils/city_codes.json (bundled base)
+            2) <CSV data root>/city_codes.json (deployment override)
 
     Returns an empty dict if nothing could be loaded.
     """
     if paths is None:
         paths = list(_DEFAULT_PATHS)
+        try:
+            paths.append(str(get_data_root() / "city_codes.json"))
+        except Exception:
+            pass
     out: Dict[str, str] = {}
     for p in paths:
         try:
@@ -71,6 +76,10 @@ def get_city_code_map(paths: Optional[List[str]] = None) -> Dict[str, str]:
     global _CACHE_MAP, _CACHE_MTIMES
     if paths is None:
         paths = list(_DEFAULT_PATHS)
+        try:
+            paths.append(str(get_data_root() / "city_codes.json"))
+        except Exception:
+            pass
 
     changed = False
     current_mtimes: Dict[str, float] = {}

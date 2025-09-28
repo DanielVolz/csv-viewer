@@ -32,7 +32,7 @@ export const SettingsProvider = ({ children }) => {
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         if (Array.isArray(parsed?.columns) && parsed.columns.length > 0) {
-          const sanitized = parsed.columns.filter(c => c?.id !== 'MAC Address 2');
+          const sanitized = parsed.columns.filter(c => c && c.id);
           if (sanitized.length > 0) setColumns(sanitized);
         }
       }
@@ -60,8 +60,6 @@ export const SettingsProvider = ({ children }) => {
       // Merge backend columns with saved preferences preserving saved order
       let mergedColumns = [];
       if (Array.isArray(savedColumns) && savedColumns.length > 0) {
-        // Remove columns intentionally hidden from settings
-        savedColumns = savedColumns.filter(c => c?.id !== 'MAC Address 2');
         // Use saved order; for each saved col, take backend definition if exists
         const backendById = new Map(availableColumns.map(c => [c.id, c]));
         mergedColumns = savedColumns
@@ -157,13 +155,13 @@ export const SettingsProvider = ({ children }) => {
 
   // Get enabled columns in order
   const getEnabledColumns = useCallback(() => {
-    return columns.filter(col => col.enabled && col.id !== 'MAC Address 2');
+    return columns.filter(col => col.enabled);
   }, [columns]);
 
   // Get enabled column headers as array
   const getEnabledColumnHeaders = useCallback(() => {
     return columns
-      .filter(col => col.enabled && col.id !== 'MAC Address 2')
+      .filter(col => col.enabled)
       .map(col => col.id);
   }, [columns]);
 
@@ -195,7 +193,7 @@ export const SettingsProvider = ({ children }) => {
   // Reset to default configuration (reload from backend)
   const resetToDefault = useCallback(() => {
     if (availableColumns && availableColumns.length > 0) {
-      const next = availableColumns.filter(c => c.id !== 'MAC Address 2');
+      const next = availableColumns.map(c => ({ ...c }));
       setColumns(next);
       persistSettings(undefined, next);
     } else {

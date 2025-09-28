@@ -81,7 +81,7 @@ def search_opensearch(query: str,
 
 
 @app.task(name='tasks.snapshot_current_stats')
-def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
+def snapshot_current_stats(directory_path: Optional[str] = None) -> dict:
     """Compute and persist today's stats snapshot for netspeed.csv only.
 
     phonesWithKEM counts unique phones with >=1 KEM; totalKEMs counts modules.
@@ -90,11 +90,20 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
         from models.file import FileModel as _FM
         # Allow override via ENV NETSPEED_DATA_DIR
         env_dir = os.environ.get("NETSPEED_DATA_DIR")
-        if env_dir:
-            directory_path = env_dir
-        data_dir = Path(directory_path)
+        base_dir = directory_path or env_dir or getattr(settings, "CSV_FILES_DIR", None)
+        if base_dir:
+            data_dir = Path(base_dir)
+        else:
+            data_dir = get_data_root()
 
         extras: List[Path | str] = [data_dir]
+        for extra in (
+            getattr(settings, "NETSPEED_CURRENT_DIR", None),
+            getattr(settings, "NETSPEED_HISTORY_DIR", None),
+            get_data_root(),
+        ):
+            if extra:
+                extras.append(extra)
         file_path: Optional[Path] = None
         try:
             candidate = resolve_current_file(extras)
@@ -104,10 +113,18 @@ def snapshot_current_stats(directory_path: str = "/app/data") -> dict:
             file_path = None
 
         if file_path is None:
-            fallback_candidates = [
-                data_dir / "netspeed.csv",
-                Path("/usr/scripts/netspeed/netspeed.csv"),
-            ]
+            fallback_candidates: List[Path] = []
+            # Prefer configured directories
+            current_dir = getattr(settings, "NETSPEED_CURRENT_DIR", None)
+            if current_dir:
+                current_path = Path(current_dir)
+                if current_path.is_file():
+                    fallback_candidates.append(current_path)
+                else:
+                    fallback_candidates.append(current_path / "netspeed.csv")
+            fallback_candidates.append(data_dir / "netspeed.csv")
+            fallback_candidates.append(get_data_root() / "netspeed.csv")
+            fallback_candidates.append(Path("/usr/scripts/netspeed/netspeed.csv"))
             for cand in fallback_candidates:
                 if cand.exists():
                     file_path = cand
@@ -251,7 +268,14 @@ def snapshot_current_with_details(file_path: Optional[str] = None, force_date: O
         extras: List[Path | str] = []
         if env_dir:
             extras.append(Path(env_dir))
-        extras.append(Path("/app/data"))
+        for extra in (
+            getattr(settings, "CSV_FILES_DIR", None),
+            getattr(settings, "NETSPEED_CURRENT_DIR", None),
+            getattr(settings, "NETSPEED_HISTORY_DIR", None),
+            get_data_root(),
+        ):
+            if extra:
+                extras.append(extra)
 
         p: Optional[Path] = Path(file_path) if file_path else None
         if p and not p.exists():
@@ -266,10 +290,16 @@ def snapshot_current_with_details(file_path: Optional[str] = None, force_date: O
                 p = None
 
         if p is None:
-            fallback_candidates = [
-                Path("/app/data/netspeed.csv"),
-                Path("/usr/scripts/netspeed/netspeed.csv"),
-            ]
+            fallback_candidates: List[Path] = []
+            current_dir = getattr(settings, "NETSPEED_CURRENT_DIR", None)
+            if current_dir:
+                current_path = Path(current_dir)
+                if current_path.is_file():
+                    fallback_candidates.append(current_path)
+                else:
+                    fallback_candidates.append(current_path / "netspeed.csv")
+            fallback_candidates.append(get_data_root() / "netspeed.csv")
+            fallback_candidates.append(Path("/usr/scripts/netspeed/netspeed.csv"))
             for cand in fallback_candidates:
                 if cand.exists():
                     p = cand
@@ -1314,7 +1344,7 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
             try:
                 from tasks.tasks import snapshot_current_stats as _snap_min
                 logger.info("Running minimal snapshot (snapshot_current_stats) for safety")
-                fallback_dir = directory_path or "/app/data"
+                fallback_dir = directory_path or getattr(settings, "CSV_FILES_DIR", None) or str(get_data_root())
                 min_snap_res = _snap_min(directory_path=fallback_dir)
                 logger.info(f"Minimal snapshot result: {min_snap_res}")
             except Exception as e:

@@ -7,11 +7,14 @@ from typing import Iterable, List, Optional, Tuple
 
 from config import settings
 
-NETSPEED_TIMESTAMP_PATTERN = re.compile(r"^netspeed_(\d{8})-(\d{6})\.csv$")
+NETSPEED_TIMESTAMP_PATTERN = re.compile(r"^netspeed_(\d{8})-(\d{6})\.csv(?:\.(\d+))?$")
 
 
 def get_data_root() -> Path:
     """Return the canonical container path that holds netspeed data."""
+    explicit_roots = _configured_roots()
+    if explicit_roots:
+        return explicit_roots[0]
     candidates = [
         getattr(settings, "NETSPEED_CURRENT_DIR", None),
         getattr(settings, "NETSPEED_HISTORY_DIR", None),
@@ -82,6 +85,44 @@ def _dedupe_paths(paths: Iterable[Path]) -> List[Path]:
     return unique
 
 
+def _configured_roots() -> List[Path]:
+    raw_roots = getattr(settings, "_explicit_data_roots", ()) or ()
+    collected: List[Path] = []
+    for raw in raw_roots:
+        try:
+            path = Path(raw)
+        except Exception:
+            continue
+        if str(path).strip() == "" or path == Path("/"):
+            continue
+        collected.append(path)
+    if not collected:
+        return []
+    return _dedupe_paths(collected)
+
+
+def _within_allowed_roots(path: Path, roots: Iterable[Path]) -> bool:
+    if not roots:
+        return True
+    for root in roots:
+        try:
+            if path == root or path.is_relative_to(root):
+                return True
+        except AttributeError:
+            # Python <3.9 fallback not required in current runtime, but keep safe
+            pass
+        except Exception:
+            pass
+        try:
+            if root.is_relative_to(path):
+                return True
+        except AttributeError:
+            pass
+        except Exception:
+            pass
+    return False
+
+
 def _candidate_search_dirs(root: Path) -> List[Path]:
     """Return directories to inspect for netspeed files given a root path."""
     dirs: List[Path] = []
@@ -127,9 +168,10 @@ def history_directory_candidates(extra: Optional[Iterable[Path | str]] = None) -
 
 def resolve_current_file(extra_candidates: Optional[Iterable[Path | str]] = None) -> Optional[Path]:
     """Resolve the most likely path to the current netspeed.csv file."""
+    explicit_roots = _configured_roots()
     candidates = current_directory_candidates(extra_candidates)
     seen: set[str] = set()
-    timestamped: List[Tuple[str, Path]] = []
+    timestamped: List[Tuple[str, int, Path]] = []
     legacy_current: List[Path] = []
 
     def _consider(path: Path) -> None:
@@ -146,7 +188,9 @@ def resolve_current_file(extra_candidates: Optional[Iterable[Path | str]] = None
         match = NETSPEED_TIMESTAMP_PATTERN.match(name)
         if match:
             timestamp_key = f"{match.group(1)}{match.group(2)}"
-            timestamped.append((timestamp_key, path))
+            rotation = match.group(3)
+            rotation_order = int(rotation) if rotation is not None else -1
+            timestamped.append((timestamp_key, rotation_order, path))
         elif name == "netspeed.csv":
             legacy_current.append(path)
 
@@ -155,7 +199,7 @@ def resolve_current_file(extra_candidates: Optional[Iterable[Path | str]] = None
             if cand.is_file():
                 _consider(cand)
             else:
-                for path in cand.glob("netspeed_*.csv"):
+                for path in cand.glob("netspeed_*.csv*"):
                     _consider(path)
                 _consider(cand / "netspeed.csv")
                 _consider(cand / "netspeed" / "netspeed.csv")
@@ -163,19 +207,50 @@ def resolve_current_file(extra_candidates: Optional[Iterable[Path | str]] = None
             continue
 
     if timestamped:
-        timestamped.sort(key=lambda item: item[0], reverse=True)
-        return timestamped[0][1]
+        timestamped.sort(key=lambda item: (item[0], item[1]))
+        latest_timestamp = timestamped[-1][0]
+        latest_group = [item for item in timestamped if item[0] == latest_timestamp]
+        latest_group.sort(key=lambda item: item[1])
+        return latest_group[0][2]
 
     if legacy_current:
         legacy_current.sort(key=_current_sort_key)
         return legacy_current[0]
 
-    fallback_candidates = [
-        Path("/app/data/netspeed/netspeed.csv"),
-        Path("/app/data/netspeed.csv"),
+    fallback_candidates: List[Path] = []
+    env_current = getattr(settings, "NETSPEED_CURRENT_DIR", None)
+    if env_current:
+        cur_path = Path(env_current)
+        if cur_path.is_file():
+            fallback_candidates.append(cur_path)
+        else:
+            fallback_candidates.append(cur_path / "netspeed.csv")
+    try:
+        base_dir = get_data_root()
+        fallback_candidates.append(base_dir / "netspeed" / "netspeed.csv")
+        fallback_candidates.append(base_dir / "netspeed.csv")
+    except Exception:
+        pass
+    fallback_candidates.extend([
         Path("/usr/scripts/netspeed/netspeed.csv"),
         Path("/usr/scripts/netspeed/data/netspeed.csv"),
-    ]
+    ])
+
+    if explicit_roots:
+        filtered: List[Path] = []
+        for candidate in fallback_candidates:
+            target = candidate
+            try:
+                if not candidate.is_dir():
+                    target = candidate.parent
+            except Exception:
+                target = candidate
+            if _within_allowed_roots(target, explicit_roots):
+                filtered.append(candidate)
+        fallback_candidates = filtered
+        if not fallback_candidates:
+            return None
+
     for fallback in fallback_candidates:
         if fallback.exists() and fallback.is_file():
             return fallback
@@ -198,12 +273,18 @@ def resolve_current_directory(extra_candidates: Optional[Iterable[Path | str]] =
 
 def _is_historical_file(path: Path) -> bool:
     name = path.name
+    match = NETSPEED_TIMESTAMP_PATTERN.match(name)
+    if match:
+        rotation = match.group(3)
+        return rotation is not None
     if not name.startswith("netspeed.csv"):
         return False
     if name == "netspeed.csv":
         return False
     if name.startswith("netspeed.csv."):
         suffix = name.split("netspeed.csv.", 1)[1]
+        if suffix.endswith("_bak"):
+            suffix = suffix[:-4]
         return suffix.isdigit()
     return False
 
@@ -217,16 +298,20 @@ def _is_backup_file(path: Path) -> bool:
     return False
 
 
-def _historical_sort_key(path: Path) -> tuple[int, int | str]:
+def _historical_sort_key(path: Path) -> tuple[int, str, int]:
     name = path.name
     match = NETSPEED_TIMESTAMP_PATTERN.match(name)
     if match:
-        return (0, f"{match.group(1)}{match.group(2)}")
+        rotation = match.group(3)
+        rotation_order = int(rotation) if rotation is not None else -1
+        return (0, f"{match.group(1)}{match.group(2)}", rotation_order)
     if name.startswith("netspeed.csv."):
         suffix = name.split("netspeed.csv.", 1)[1]
+        if suffix.endswith("_bak"):
+            suffix = suffix[:-4]
         if suffix.isdigit():
-            return (1, int(suffix))
-    return (2, name)
+            return (1, f"{int(suffix):06d}", 0)
+    return (2, name, 0)
 
 
 def _current_sort_key(path: Path) -> Tuple[int, str]:
@@ -255,6 +340,11 @@ def collect_netspeed_files(
             directories.append(cand)
     directories = _dedupe_paths(directories)
 
+    explicit_roots = _configured_roots()
+    if explicit_roots:
+        directories = [p for p in directories if _within_allowed_roots(p, explicit_roots)]
+        file_candidates = [p for p in file_candidates if _within_allowed_roots(p, explicit_roots)]
+
     files_map: dict[str, Path] = {}
 
     def _store(path: Path) -> None:
@@ -270,16 +360,18 @@ def collect_netspeed_files(
 
     for base_dir in directories:
         for search_dir in _candidate_search_dirs(base_dir):
+            if explicit_roots and not _within_allowed_roots(search_dir, explicit_roots):
+                continue
             if not search_dir.exists() or not search_dir.is_dir():
                 continue
-            for pattern in ("netspeed.csv*", "netspeed_*.csv"):
+            for pattern in ("netspeed.csv*", "netspeed_*.csv*"):
                 for path in search_dir.glob(pattern):
                     if not path.is_file():
                         continue
                     _store(path)
 
     historical: List[Path] = []
-    timestamped: List[Tuple[str, Path]] = []
+    timestamped: List[Tuple[str, int, Path]] = []
     legacy_current: List[Path] = []
     backups: List[Path] = []
 
@@ -288,7 +380,9 @@ def collect_netspeed_files(
         match = NETSPEED_TIMESTAMP_PATTERN.match(name)
         if match:
             timestamp_key = f"{match.group(1)}{match.group(2)}"
-            timestamped.append((timestamp_key, path))
+            rotation = match.group(3)
+            rotation_order = int(rotation) if rotation is not None else -1
+            timestamped.append((timestamp_key, rotation_order, path))
         elif name == "netspeed.csv":
             legacy_current.append(path)
         elif _is_historical_file(path):
@@ -299,20 +393,25 @@ def collect_netspeed_files(
             backups.append(path)
 
     historical.sort(key=_historical_sort_key)
-    timestamped.sort(key=lambda item: item[0])
+    timestamped.sort(key=lambda item: (item[0], item[1]))
     legacy_current.sort(key=_current_sort_key)
     backups.sort(key=lambda p: (p.parent.name, p.name))
 
     current_file: Optional[Path] = None
 
     if timestamped:
-        # Older timestamped files become historical; newest is current
-        for ts_key, path in timestamped[:-1]:
-            historical.append(path)
-        current_file = timestamped[-1][1]
+        latest_timestamp = timestamped[-1][0]
+        latest_group = [item for item in timestamped if item[0] == latest_timestamp]
+        latest_group.sort(key=lambda item: item[1])
+        current_entry = latest_group[0]
+        current_file = current_entry[2]
+        for entry in timestamped:
+            if entry[2] == current_file:
+                continue
+            historical.append(entry[2])
 
     # Ensure historical remains sorted after adding timestamped entries
-    historical = sorted(set(historical), key=_historical_sort_key)
+    historical = sorted({_path_key(path): path for path in historical}.values(), key=_historical_sort_key)
 
     if current_file is None and legacy_current:
         current_file = legacy_current[0]

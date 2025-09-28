@@ -39,7 +39,7 @@ async def startup_event():
     """Start file watcher and trigger full CSV/Stats indexing on application startup."""
     try:
         logger.info("Starting file watcher...")
-        start_file_watcher("/app/data")
+        start_file_watcher()
         logger.info("File watcher started successfully")
     except Exception as e:
         logger.error(f"Failed to start file watcher: {e}")

@@ -53,6 +53,9 @@ services:
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - NO_PROXY=${NO_PROXY}
+      - CSV_FILES_DIR=${CSV_FILES_DIR}
+      - NETSPEED_CURRENT_DIR=${NETSPEED_CURRENT_DIR}
+      - NETSPEED_HISTORY_DIR=${NETSPEED_HISTORY_DIR}
     env_file:
       - .env.dev
     depends_on:
@@ -82,7 +85,7 @@ services:
           - redis
     command: redis-server --appendonly yes
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -106,11 +109,7 @@ services:
     env_file:
       - .env.dev
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'",
-        ]
+      test: [ "CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'" ]
       interval: 10s
       timeout: 10s
       retries: 20
