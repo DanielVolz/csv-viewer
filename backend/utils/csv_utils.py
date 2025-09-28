@@ -150,6 +150,34 @@ def detect_column_type(value: str) -> Optional[str]:
 
     return None
 
+
+def count_unique_data_rows(file_path: str | Path | Any, opener: Optional[Any] = None) -> int:
+    """Count unique, non-empty data rows in a CSV export, excluding the header."""
+    open_fn = opener or open
+    try:
+        # Determine a suitable target for the opener while accommodating mocks in unit tests
+        if isinstance(file_path, (str, bytes, os.PathLike)) or isinstance(file_path, Path):
+            target = file_path
+        else:
+            target = str(file_path)
+
+        unique_rows: set[str] = set()
+        with open_fn(target, 'r', newline='') as handle:
+            first_line = handle.readline()
+            if not first_line:
+                return 0
+            for raw_line in handle:
+                normalized = raw_line.rstrip('\r\n')
+                if not normalized.strip():
+                    continue
+                if normalized in unique_rows:
+                    continue
+                unique_rows.add(normalized)
+        return len(unique_rows)
+    except Exception as exc:
+        logger.debug("Failed to count unique rows for %s: %s", file_path, exc)
+        return 0
+
 def _matches_new_header(row: List[str]) -> bool:
     normalized = [cell.strip().lstrip("\ufeff") for cell in row]
     if normalized == NEW_NETSPEED_HEADERS:

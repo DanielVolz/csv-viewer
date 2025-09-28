@@ -93,8 +93,8 @@ function FileTable() {
       };
     }
     const empty = typeof file?.line_count === 'number' ? file.line_count <= 0 : !file?.line_count;
-    const isNetspeed = file?.name?.startsWith('netspeed.csv');
-    if (file.name === 'netspeed.csv') {
+    const isCurrent = Boolean(file?.is_current);
+    if (isCurrent) {
       if (empty) {
         return {
           label: 'No data',
@@ -104,25 +104,23 @@ function FileTable() {
         };
       }
       return { label: 'Active', color: 'success', icon: <CheckCircleRounded sx={{ fontSize: 18 }} /> };
-    } else if (file.name.includes('_bak')) {
-      return { label: 'Backup', color: 'warning', icon: <Inventory2Rounded sx={{ fontSize: 18 }} /> };
-    } else {
-      // Historical netspeed files: mark empty ones as 'No data'
-      if (isNetspeed) {
-        if (empty) {
-          return {
-            label: 'No data',
-            color: 'warning',
-            icon: <WarningRounded sx={{ fontSize: 18 }} />,
-            tooltip: 'This historical file has no data (not functional).'
-          };
-        }
-        // Make 'Historical' subtly orange so it’s clearly not current
-        return { label: 'Historical', color: 'warning', icon: <HistoryRounded sx={{ fontSize: 18 }} /> };
-      }
-      // Other files
-      return { label: 'Other', color: 'default', icon: null };
     }
+    if (file?.name?.includes('_bak')) {
+      return { label: 'Backup', color: 'warning', icon: <Inventory2Rounded sx={{ fontSize: 18 }} /> };
+    }
+    const isNetspeed = typeof file?.name === 'string' && file.name.startsWith('netspeed');
+    if (isNetspeed) {
+      if (empty) {
+        return {
+          label: 'No data',
+          color: 'warning',
+          icon: <WarningRounded sx={{ fontSize: 18 }} />,
+          tooltip: 'This historical file has no data (not functional).'
+        };
+      }
+      return { label: 'Historical', color: 'warning', icon: <HistoryRounded sx={{ fontSize: 18 }} /> };
+    }
+    return { label: 'Other', color: 'default', icon: null };
   };
 
   // We avoid early returns so hook order stays stable across renders
@@ -258,7 +256,7 @@ function FileTable() {
                 {files && files.length > 0 ? (
                   files.map((file, index) => {
                     const status = getFileStatus(file);
-                    const isActiveFile = file.name === 'netspeed.csv';
+                    const isActiveFile = Boolean(file?.is_current);
                     const isDownloadable = file?.downloadable !== false && file?.source !== 'opensearch';
                     const indexStatusText = statusLabel(idxStatus);
                     return (

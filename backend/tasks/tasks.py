@@ -9,7 +9,7 @@ from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
 from config import settings
 from utils.opensearch import OpenSearchUnavailableError, opensearch_config
 from utils.index_state import load_state, save_state, update_file_state, update_totals, is_file_current, start_active, update_active, clear_active
-from utils.csv_utils import read_csv_file_normalized
+from utils.csv_utils import read_csv_file_normalized, count_unique_data_rows
 from utils.path_utils import (
     get_data_root,
     resolve_current_file,
@@ -1137,14 +1137,7 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
                 total_documents += count
 
                 # Count lines (excluding header)
-                line_count = 0
-                try:
-                    with open(file_path, 'r') as fh:
-                        total_lines = sum(1 for _ in fh)
-                        if total_lines > 0:
-                            line_count = total_lines - 1
-                except Exception:
-                    line_count = 0
+                line_count = count_unique_data_rows(file_path)
 
                 try:
                     update_file_state(index_state, file_path, line_count, count)

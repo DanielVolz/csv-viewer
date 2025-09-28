@@ -9,7 +9,7 @@ import subprocess
 
 from models.file import FileModel
 from config import settings, get_settings
-from utils.csv_utils import read_csv_file, DESIRED_ORDER
+from utils.csv_utils import read_csv_file, DESIRED_ORDER, count_unique_data_rows
 from tasks.tasks import index_all_csv_files, app
 from utils.index_state import load_state, save_state
 from celery import current_app
@@ -239,14 +239,7 @@ async def list_files():
                 logger.debug(f"Skipping file {path}: {model_err}")
                 return
 
-            line_count = 0
-            try:
-                with open(path, 'r', newline='') as handle:
-                    line_count = sum(1 for _ in handle)
-                    if line_count > 0:
-                        line_count -= 1
-            except Exception:
-                line_count = 0
+            line_count = count_unique_data_rows(path, opener=open)
 
             metadata = file_model.dict()
             try:
@@ -365,12 +358,8 @@ async def get_netspeed_info():
         file_model = FileModel.from_path(str(file_to_use))
 
         # Count lines first for current file; if it's empty and not using fallback, try to pick a historical file with data
-        def _count_lines(fp: Path) -> int:
-            try:
-                with open(fp, 'r') as f:
-                    return max(0, sum(1 for _ in f) - 1)
-            except Exception:
-                return 0
+        def _count_lines(fp: Path | str) -> int:
+            return count_unique_data_rows(fp, opener=open)
 
         initial_count = _count_lines(file_to_use)
         if not using_fallback and initial_count <= 0:
@@ -509,12 +498,8 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                     }
 
         # If requested file exists but has no data (only header or 0 bytes), try historical netspeed export with data
-        def _count_lines(fp: Path) -> int:
-            try:
-                with open(fp, 'r', newline='') as fh:
-                    return max(0, sum(1 for _ in fh) - 1)
-            except Exception:
-                return 0
+        def _count_lines(fp: Path | str) -> int:
+            return count_unique_data_rows(fp, opener=open)
 
         if filename == "netspeed.csv" and file_path.exists() and _count_lines(file_path) <= 0:
             viable_historical = [p for p in _sorted_existing(historical_files) if _count_lines(p) > 0]
