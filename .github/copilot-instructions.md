@@ -321,6 +321,14 @@ curl http://localhost:8002/api/files/reindex/current
 curl "http://localhost:8002/api/stats/fast/by_location?q=ABX01"
 ```
 
+## Operational Practices
+- Always execute diagnostic CLI commands yourself from within the repo; do not delegate routine curl checks to the user. Capture and summarize the outputs in your response.
+- When sharing shell commands, place each single command in its own fenced block and avoid chaining multiple commands in one terminal invocation.
+- Production reindex trigger (run from project root):
+  ```bash
+  docker compose -f docker-compose.prod.yml --env-file .env.prod exec backend-prod curl -s http://localhost:8001/api/search/index/all
+  ```
+
 ## Useful Debugging Commands
 
 ```bash

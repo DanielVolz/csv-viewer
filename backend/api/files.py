@@ -657,7 +657,6 @@ async def reindex_current_file():
             _invalidate("reindex/current requested")
         except Exception:
             pass
-        from utils.opensearch import OpenSearchConfig
 
         extras = _extra_search_paths()
         csv_file_path = resolve_current_file(extras)
@@ -677,9 +676,7 @@ async def reindex_current_file():
                 detail="netspeed.csv file not found"
             )
 
-        # Initialize OpenSearch and index the single file
-        opensearch_config = OpenSearchConfig()
-
+        # Reuse shared OpenSearch config and index the single file
         should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
         if should_wait:
             try:

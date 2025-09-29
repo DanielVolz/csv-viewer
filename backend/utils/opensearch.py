@@ -26,6 +26,7 @@ class OpenSearchUnavailableError(RuntimeError):
 
 
 class OpenSearchConfig:
+    _startup_grace_consumed = False
     """OpenSearch configuration and client management.
 
     Improvements made during cleanup:
@@ -47,7 +48,7 @@ class OpenSearchConfig:
         """
         self.hosts = self._build_host_list(settings.OPENSEARCH_URL)
         self._client = None
-        self._initial_grace_applied = False
+        self._initial_grace_applied = OpenSearchConfig._startup_grace_consumed
         # NOTE: After changing field mappings (e.g. IP Address from ip->text) existing indices
         # must be deleted & rebuilt (reindex) for the new mapping to apply.
         # Define field types for reuse
@@ -351,14 +352,23 @@ class OpenSearchConfig:
         """
         if self._client is None:
             grace = float(getattr(settings, "OPENSEARCH_STARTUP_GRACE_SECONDS", 0.0) or 0.0)
-            if not self._initial_grace_applied and grace > 0:
-                logger.info(f"Delaying OpenSearch connection attempts for {grace:.1f}s to allow service startup")
+            need_grace = (
+                grace > 0
+                and not self._initial_grace_applied
+                and not OpenSearchConfig._startup_grace_consumed
+            )
+            if need_grace:
+                logger.info(
+                    f"Delaying OpenSearch connection attempts for {grace:.1f}s to allow service startup"
+                )
                 try:
                     time.sleep(grace)
                 except Exception:
                     pass
-                finally:
-                    self._initial_grace_applied = True
+            if not OpenSearchConfig._startup_grace_consumed:
+                OpenSearchConfig._startup_grace_consumed = True
+            if not self._initial_grace_applied:
+                self._initial_grace_applied = True
             pwd = getattr(settings, 'OPENSEARCH_PASSWORD', None)
             last_err: Optional[Exception] = None
             for host in self.hosts:
@@ -1952,7 +1962,7 @@ class OpenSearchConfig:
 
             # Field-specific: exact, prefix, wildcard
             # Prefer keyword subfield for exact/prefix/wildcard on certain fields
-            eff_field = f"{field}.keyword" if field in ("Line Number", "MAC Address", "MAC Address 2") else field
+            eff_field = f"{field}.keyword" if field in ("Line Number", "MAC Address", "MAC Address  2") else field
             should_clauses = [
                 {"term": {eff_field: query}},
                 {"prefix": {eff_field: query}},
@@ -1998,7 +2008,7 @@ class OpenSearchConfig:
                     "query": {"bool": {"should": [
                         {"term": {"MAC Address.keyword": mac_up}},
                         {"term": {"MAC Address 2.keyword": mac_up}},
-                                               {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
+                        {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
                         {"multi_match": {"query": mac_up, "fields": ["*"], "boost": 0.01}}
                     ], "minimum_should_match": 1}},
                     "_source": DESIRED_ORDER,
@@ -2047,16 +2057,9 @@ class OpenSearchConfig:
                     if cleaned and cleaned != qn:
                         variants.append(f"+{cleaned}")
 
-                unique_variants = []
-                seen_variants = set()
-                for variant in variants:
-                    if variant and variant not in seen_variants:
-                        seen_variants.add(variant)
-                        unique_variants.append(variant)
-
                 should_clauses = [
                     {"term": {"Line Number.keyword": variant}}
-                    for variant in unique_variants
+                    for variant in variants
                 ]
 
                 return {
@@ -2107,11 +2110,11 @@ class OpenSearchConfig:
                     },
                     "_source": DESIRED_ORDER,
                     "size": size,
-                        "sort": [
-                            {"Creation Date": {"order": "desc"}},
-                            self._preferred_file_sort_clause(),
-                            {"_score": {"order": "desc"}}
-                        ]
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
                 }
 
             # Serial Number prefix branch: alphanumeric tokens 3-10 chars use prefix wildcards
@@ -3025,5 +3028,5 @@ class OpenSearchConfig:
                 logger.warning(f"Error generating action for row {row_num}: {e}")
 
 
-# Singleton configuration instance used across the backend
+# Shared OpenSearchConfig instance for modules that expect a singleton
 opensearch_config = OpenSearchConfig()

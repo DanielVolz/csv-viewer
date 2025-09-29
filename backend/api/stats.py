@@ -6,12 +6,23 @@ from celery.result import AsyncResult
 import logging
 import time
 import os
+import pathlib
+
+from opensearchpy.exceptions import NotFoundError
+
 
 from models.file import FileModel
 from utils.path_utils import get_data_root, collect_netspeed_files
 from config import settings
+import utils.opensearch as _opensearch_module
 
-_PATH_TYPE = Path
+
+class _OpenSearchConfigProxy:
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_opensearch_module.opensearch_config, name)
+
+
+opensearch_config = _OpenSearchConfigProxy()
 
 logger = logging.getLogger(__name__)
 
@@ -116,30 +127,37 @@ except Exception as _e:
 
 
 def _resolve_data_path(name: str | Path) -> Path:
-    """Resolve a path relative to the configured data root."""
+    """Resolve a path relative to the configured data root.
+
+    When tests patch ``Path`` with a mock, defer to the patched object so
+    mocked ``exists()`` or ``resolve()`` chains continue to work.
+    """
     base = get_data_root()
-    patched_path = Path
-    if patched_path is not _PATH_TYPE:
+    path_cls = Path
+    # When Path is patched (e.g., MagicMock), forward operations to the mock so
+    # tests can control chaining behavior.
+    if not isinstance(path_cls, type(pathlib.Path)):
         try:
-            base_mock = patched_path(str(base))
+            base_obj = path_cls(str(base))
         except Exception:
-            base_mock = patched_path
+            base_obj = path_cls
         try:
-            candidate = base_mock / str(name)  # type: ignore[operator]
+            candidate = base_obj / str(name)  # type: ignore[operator]
         except Exception:
-            candidate = base_mock
+            candidate = base_obj
         try:
             resolved = candidate.resolve()  # type: ignore[assignment]
             if resolved:
                 return cast(Path, resolved)
         except Exception:
-            return cast(Path, candidate)
+            pass
         return cast(Path, candidate)
-    if isinstance(name, _PATH_TYPE):
+
+    if isinstance(name, Path):
         return name if name.is_absolute() else base / name
     text = str(name)
     if os.path.isabs(text):
-        return _PATH_TYPE(text)
+        return Path(text)
     return base / text
 
 
@@ -293,9 +311,6 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
         # ONLY load from OpenSearch snapshots - never CSV
         if date_str:
             try:
-                from utils.opensearch import opensearch_config
-                from opensearchpy.exceptions import NotFoundError
-
                 # Try to get snapshot from stats index
                 doc_id = f"{file_model.name}:{date_str}"
                 try:
@@ -418,7 +433,6 @@ async def get_stats_timeline(limit: int = 0, include_backups: bool = False) -> D
             return cached[1]
 
         # Only use OpenSearch snapshots, never CSV fallback
-        from utils.opensearch import opensearch_config
         # Fetch many hits but respect default max_result_window (10k)
         max_docs = 10000
         # If stats index is missing, try an on-demand backfill once, then continue
@@ -552,7 +566,6 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0) -> Dict:
         if cached and cached[0] > now:
             return cached[1]
 
-        from utils.opensearch import opensearch_config
         client = opensearch_config.client
         # Ensure index exists or try one-off backfill
         try:
@@ -698,7 +711,6 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
         if cached and cached[0] > now:
             return cached[1]
 
-        from utils.opensearch import opensearch_config
         client = opensearch_config.client
 
         # Ensure index exists
@@ -1147,7 +1159,6 @@ async def get_archive(date: str, file: str | None = None, size: int = 1000) -> D
         size: max docs to return (default 1000)
     """
     try:
-        from utils.opensearch import opensearch_config
         # If archive index doesn't exist yet, return empty set gracefully
         try:
             if not opensearch_config.client.indices.exists(index=opensearch_config.archive_index):
@@ -1191,7 +1202,6 @@ async def debug_cities(filename: str = "netspeed.csv", limit: int = 25) -> Dict:
 
         # Get city codes from OpenSearch snapshots only
         try:
-            from utils.opensearch import opensearch_config
             file_model = FileModel.from_path(str(_resolve_data_path(filename)))
             date_str = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
@@ -1240,8 +1250,6 @@ async def list_locations(q: str = "", filename: str = "netspeed.csv", limit: int
     NO CSV computation - only uses OpenSearch indices.
     """
     try:
-        from utils.opensearch import opensearch_config
-
         # Query current netspeed index for locations
         current_index = None
         try:
@@ -1332,9 +1340,6 @@ async def get_current_stats_fast() -> Dict:
     Uses pre-computed values from reindexing.
     """
     try:
-        from utils.opensearch import OpenSearchConfig
-        opensearch_config = OpenSearchConfig()
-
         # Check if stats index exists
         if not opensearch_config.client.indices.exists(index=opensearch_config.stats_index):
             return {
@@ -1594,7 +1599,6 @@ async def get_current_stats_fast() -> Dict:
                 "date": date_str,
                 "is_current": is_current,
                 "is_latest": bool(is_latest),
-
                 "using_fallback": bool(using_fallback or not is_current or not is_latest),
                        }
         }
@@ -1643,8 +1647,6 @@ async def get_cities_fast() -> Dict:
     Returns city code to name mapping for location search.
     """
     try:
-        from utils.opensearch import OpenSearchConfig
-        opensearch_config = OpenSearchConfig()
         # Prefer latest netspeed.csv snapshot; fallback to any snapshot
         body_current = {"size": 1, "sort": [{"date": {"order": "desc"}}], "query": {"term": {"file": {"value": "netspeed.csv"}}}}
         r = opensearch_config.client.search(index=opensearch_config.stats_index, body=body_current)
@@ -1681,9 +1683,6 @@ async def get_locations_fast(limit: int = 1000) -> Dict:
     NO CSV fallbacks - only uses location data from reindexing.
     """
     try:
-        from utils.opensearch import OpenSearchConfig
-        opensearch_config = OpenSearchConfig()
-
         # Check if location stats index exists
         if not opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index):
             return {
@@ -1753,9 +1752,6 @@ async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
     Returns format: [{"code": "NXX01", "display": "NXX01 (Nürnberg)"}]
     """
     try:
-        from utils.opensearch import OpenSearchConfig
-        opensearch_config = OpenSearchConfig()
-
         # Helpers for normalization (accent-insensitive matching)
         import unicodedata
         def _norm_txt(s: str) -> str:
@@ -1940,9 +1936,6 @@ async def get_stats_by_location_fast(q: str) -> Dict:
     - Early termination for basic stats
     """
     try:
-        from utils.opensearch import OpenSearchConfig
-        opensearch_config = OpenSearchConfig()
-
         query = q.strip().upper()
 
         def _safe_int(value: Any) -> int:

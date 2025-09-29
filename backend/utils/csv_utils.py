@@ -52,8 +52,8 @@ KNOWN_HEADERS = {
     ],
     15: [  # TRANSITION format with 1 KEM column
         "IP Address", "Line Number", "Serial Number", "Model Name", "KEM",
-        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
-        "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
+        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Switch Port Mode", "PC Port Mode",
+        "Switch Hostname", "Switch Port", "Phone Port Speed", "PC Port Speed"
     ],
     16: [  # NEW STANDARD format with KEM columns (current and future files)
         "IP Address", "Line Number", "Serial Number", "Model Name", "KEM", "KEM 2",
@@ -310,12 +310,27 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
                 out[h] = cells[i]
         return out
     elif col_count == 15:
-        # Annahme: Reihenfolge wie KNOWN_HEADERS[15] (eine KEM Spalte, danach MAC Address)
-        base15 = KNOWN_HEADERS[15]
-        for i, h in enumerate(base15):
-            if i < col_count:
-                out[h] = cells[i]
-        # Sicherstellen, dass KEM 2 leer existiert
+        mapping_legacy15 = [
+            "IP Address",
+            "Line Number",
+            "Serial Number",
+            "Model Name",
+            "KEM",
+            "MAC Address",
+            "MAC Address 2",
+            "Subnet Mask",
+            "Voice VLAN",
+            "Switch Port Mode",
+            "PC Port Mode",
+            "Switch Hostname",
+            "Switch Port",
+            "Phone Port Speed",
+            "PC Port Speed",
+        ]
+        for idx, header in enumerate(mapping_legacy15):
+            if idx >= col_count:
+                break
+            out[header] = cells[idx]
         if not out.get("KEM 2"):
             out["KEM 2"] = ""
         return out
@@ -365,15 +380,28 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
             out["PC Port Mode"] = ""
 
         else:
-            # Normales 14-Spalten Format ohne KEM: KNOWN_HEADERS[14]
-            base14 = KNOWN_HEADERS[14]
-            for i, h in enumerate(base14):
-                if i < col_count:
-                    out[h] = cells[i]
-            # KEM Felder leeren
-            out["KEM"] = ""
-            out["KEM 2"] = ""
-
+            mapping_legacy14 = [
+                "IP Address",
+                "Line Number",
+                "Serial Number",
+                "Model Name",
+                "MAC Address",
+                "MAC Address 2",
+                "Subnet Mask",
+                "Voice VLAN",
+                "Switch Port Mode",
+                "PC Port Mode",
+                "Switch Hostname",
+                "Switch Port",
+                "Phone Port Speed",
+                "PC Port Speed",
+            ]
+            for idx, header in enumerate(mapping_legacy14):
+                if idx >= col_count:
+                    break
+                out[header] = cells[idx]
+            out["KEM"] = out.get("KEM", "")
+            out["KEM 2"] = out.get("KEM 2", "")
         return out
     elif col_count == 12:
         # SPECIAL CASE: CP-8832 und ähnliche Telefone ohne KEM-Spalten haben nur 12 Spalten

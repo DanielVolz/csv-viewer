@@ -8,7 +8,7 @@ from pathlib import Path
 # Add the backend directory to the Python path to fix the import issues
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
 
-from backend.utils.csv_utils import read_csv_file, deduplicate_phone_rows
+from backend.utils.csv_utils import read_csv_file, read_csv_file_normalized, deduplicate_phone_rows
 
 class TestCsvUtils:
     """Test the CSV utilities."""
@@ -83,6 +83,34 @@ class TestCsvUtils:
                 headers, rows = read_csv_file('/data/test.csv')
         assert isinstance(headers, list)
         assert rows == []
+
+    def test_read_csv_file_normalized_maps_legacy_speed_columns(self):
+        legacy_values = [
+            "10.0.0.1",
+            "+498955974361",
+            "SN1234",
+            "CP-8851",
+            "AA:BB:CC:DD:EE:FF",
+            "SEPAA0B0C0D0E",
+            "255.255.255.0",
+            "803",
+            "SWITCH_MODE_LEGACY",
+            "PC_MODE_LEGACY",
+            "mxx03zsl4750p.juwin.bayern.de",
+            "GigabitEthernet1/0/5",
+            "PHONE_SPEED_LEGACY",
+            "PC_SPEED_LEGACY",
+        ]
+        legacy_data = ";".join(legacy_values) + "\n"
+        with patch("builtins.open", return_value=io.StringIO(legacy_data)):
+            headers, rows = read_csv_file_normalized("/data/legacy.csv")
+        assert headers
+        assert rows
+        row = rows[0]
+        assert row["Switch Port Mode"] == "SWITCH_MODE_LEGACY"
+        assert row["PC Port Mode"] == "PC_MODE_LEGACY"
+        assert row["Phone Port Speed"] == "PHONE_SPEED_LEGACY"
+        assert row["PC Port Speed"] == "PC_SPEED_LEGACY"
 
 
 def test_deduplicate_phone_rows_prefers_kem_rows():

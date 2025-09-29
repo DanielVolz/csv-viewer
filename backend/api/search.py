@@ -8,7 +8,6 @@ from tasks.tasks import backfill_stats_snapshots
 from celery.result import AsyncResult
 from utils.opensearch import (
     opensearch_config,
-    OpenSearchConfig,
     OpenSearchUnavailableError,
 )
 
@@ -229,7 +228,7 @@ async def index_all_csv_files(
             pass
         # Cleanup existing netspeed_* indices BEFORE starting a full rebuild to prevent duplicates
         try:
-            cfg = OpenSearchConfig()
+            cfg = opensearch_config
             should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
             if should_wait:
                 cfg.wait_for_availability(
