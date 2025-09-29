@@ -387,6 +387,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
 
   // Location search dropdown state
   const [locationSuggestions, setLocationSuggestions] = React.useState([]);
+  const [locationSuggestMessage, setLocationSuggestMessage] = React.useState('');
   const [showLocationDropdown, setShowLocationDropdown] = React.useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = React.useState(-1);
   const [isSearchingLocations, setIsSearchingLocations] = React.useState(false);
@@ -456,8 +457,9 @@ const StatisticsPage = React.memo(function StatisticsPage() {
   const searchLocationSuggestions = React.useCallback(async (query) => {
     const q = (query || '').trim();
     if (!q) {
-      startTransition(() => setLocationSuggestions([]));
-      startTransition(() => setShowLocationDropdown(false));
+      setLocationSuggestions([]);
+      setLocationSuggestMessage('');
+      setShowLocationDropdown(false);
       return;
     }
     // Now allow 1+ characters; backend handles broad prefixes efficiently
@@ -478,7 +480,12 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         }
         // Avoid duplicate if already present
         const exists = out.some(s => String(s.code || '').toUpperCase().replace(/X/g, 'x') === code3Mxx);
-        const prefixItem = { code: code3Mxx, city: cityName, isPrefixAll: true };
+        const prefixItem = {
+          code: code3Mxx,
+          city: cityName,
+          isPrefixAll: true,
+          display: cityName ? `${code3Upper} (${cityName})` : code3Upper,
+        };
         if (!exists) {
           out.unshift(prefixItem);
         } else {
@@ -494,9 +501,10 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     if (suggestionsCacheRef.current.has(q)) {
       const cached = suggestionsCacheRef.current.get(q) || [];
       const merged = withCityPrefixOption(q, cached);
-      startTransition(() => setLocationSuggestions(merged));
-      startTransition(() => setShowLocationDropdown(merged.length > 0));
-      startTransition(() => setSelectedSuggestionIndex(-1));
+      setLocationSuggestions(merged);
+      setLocationSuggestMessage(merged.length ? '' : (cached.length ? '' : 'Keine Standorte gefunden'));
+      setShowLocationDropdown(true);
+      setSelectedSuggestionIndex(-1);
       return;
     }
 
@@ -505,6 +513,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       if (suggestionsControllerRef.current) {
         try { suggestionsControllerRef.current.abort(); } catch { /* ignore */ }
       }
+      setShowLocationDropdown(Boolean(q));
       const controller = new AbortController();
       suggestionsControllerRef.current = controller;
       setIsSearchingLocations(true);
@@ -527,17 +536,20 @@ const StatisticsPage = React.memo(function StatisticsPage() {
           suggestionsCacheRef.current.delete(firstKey);
         }
         const merged = withCityPrefixOption(q, data.suggestions);
-        startTransition(() => setLocationSuggestions(merged));
-        startTransition(() => setShowLocationDropdown(merged.length > 0));
-        startTransition(() => setSelectedSuggestionIndex(-1));
+        setLocationSuggestions(merged);
+        setLocationSuggestMessage(merged.length ? '' : 'Keine Standorte gefunden');
+        setShowLocationDropdown(true);
+        setSelectedSuggestionIndex(-1);
       } else {
-        startTransition(() => setLocationSuggestions([]));
-        startTransition(() => setShowLocationDropdown(false));
+        setLocationSuggestions([]);
+        setLocationSuggestMessage(data.message || 'Keine Vorschläge gefunden');
+        setShowLocationDropdown(true);
       }
     } catch (error) {
       console.error('Error fetching location suggestions:', error);
-      startTransition(() => setLocationSuggestions([]));
-      startTransition(() => setShowLocationDropdown(false));
+      setLocationSuggestions([]);
+      setLocationSuggestMessage('Fehler beim Laden der Vorschläge');
+      setShowLocationDropdown(true);
     } finally {
       setIsSearchingLocations(false);
     }
@@ -571,6 +583,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     setLocStatsLoading(false);
     setLocError(null);
     setLocationSuggestions([]);
+    setLocationSuggestMessage('');
     setShowLocationDropdown(false);
     setSelectedSuggestionIndex(-1);
     if (locInputRef.current) {
@@ -592,6 +605,8 @@ const StatisticsPage = React.memo(function StatisticsPage() {
       const trimmed = val.trim();
       if (trimmed) {
         setLocError(null);
+        setLocationSuggestMessage('');
+        setShowLocationDropdown(true);
         debouncedLocationSearch(trimmed.toUpperCase());
       }
     }
@@ -650,6 +665,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
     const formattedCode = suggestion.code.toUpperCase().replace(/X/g, 'x');
     triggerLocationSearch(formattedCode);
     setLocationSuggestions([]);
+    setLocationSuggestMessage('');
     setShowLocationDropdown(false);
     setSelectedSuggestionIndex(-1);
   }, [triggerLocationSearch]);
@@ -665,11 +681,13 @@ const StatisticsPage = React.memo(function StatisticsPage() {
         try { locInputRef.current.value = display; } catch { /* ignore */ }
       }
       setLocInput(code3);
+      setLocationSuggestMessage('');
       setShowLocationDropdown(false);
       setLocationSuggestions([]);
       setSelectedSuggestionIndex(-1);
       return;
     }
+    setLocationSuggestMessage('');
     selectLocationSuggestion(suggestion);
     setLocError(null);
   }, [selectLocationSuggestion, setLocError]);
@@ -2772,91 +2790,107 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                   />
 
                   {/* Location Suggestions Dropdown */}
-                  {showLocationDropdown && (() => {
-                    const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
-                    const three = /^[a-zA-Z]{3}$/.test(inputVal);
-                    return three || (locationSuggestions.length > 0);
-                  })() && (
-                      <Paper
-                        elevation={8}
-                        sx={{
-                          position: 'absolute',
-                          top: 'calc(100% + 2px)',
-                          left: '2%',
-                          width: '98%',
-                          minWidth: '320px',
-                          maxWidth: 'none',
-                          zIndex: 1300,
-                          maxHeight: '280px',
-                          overflow: 'auto',
-                          borderRadius: 2,
-                          border: (theme) => `1px solid ${theme.palette.divider}`,
-                          boxShadow: (theme) =>
-                            theme.palette.mode === 'dark'
-                              ? '0 8px 32px rgba(0,0,0,0.5)'
-                              : '0 8px 32px rgba(0,0,0,0.12)',
-                        }}
-                      >
-                        {(() => {
-                          // Redundant safety: render a sticky prefix item at the top when input is exactly 3 letters
-                          const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
-                          const three = /^[a-zA-Z]{3}$/.test(inputVal);
-                          if (!three) return null;
-                          const codeUpper = inputVal.toUpperCase();
-                          const codeMxx = codeUpper.replace(/X/g, 'x');
-                          const city = cityNameByCode3?.[codeMxx] || cityNameByCode3?.[codeUpper];
-                          // If merged array already starts with our synthetic item, skip
-                          const first = locationSuggestions[0];
-                          const firstIsSamePrefix = first && first.isPrefixAll && String(first.code || '').toUpperCase().replace(/X/g, 'x') === codeMxx;
-                          if (firstIsSamePrefix) return null;
-                          return (
+                  {showLocationDropdown && (
+                    <Paper
+                      elevation={8}
+                      sx={{
+                        position: 'absolute',
+                        top: 'calc(100% + 2px)',
+                        left: '2%',
+                        width: '98%',
+                        minWidth: '320px',
+                        maxWidth: 'none',
+                        zIndex: 1300,
+                        maxHeight: '280px',
+                        overflow: 'auto',
+                        borderRadius: 2,
+                        border: (theme) => `1px solid ${theme.palette.divider}`,
+                        boxShadow: (theme) =>
+                          theme.palette.mode === 'dark'
+                            ? '0 8px 32px rgba(0,0,0,0.5)'
+                            : '0 8px 32px rgba(0,0,0,0.12)',
+                      }}
+                    >
+                      {(() => {
+                        // Redundant safety: render a sticky prefix item at the top when input is exactly 3 letters
+                        const inputVal = (locInputRef.current && typeof locInputRef.current.value === 'string') ? locInputRef.current.value.trim() : '';
+                        const three = /^[a-zA-Z]{3}$/.test(inputVal);
+                        if (!three) return null;
+                        const codeUpper = inputVal.toUpperCase();
+                        const codeMxx = codeUpper.replace(/X/g, 'x');
+                        const city = cityNameByCode3?.[codeMxx] || cityNameByCode3?.[codeUpper];
+                        // If merged array already starts with our synthetic item, skip
+                        const first = locationSuggestions[0];
+                        const firstIsSamePrefix = first && first.isPrefixAll && String(first.code || '').toUpperCase().replace(/X/g, 'x') === codeMxx;
+                        if (firstIsSamePrefix) return null;
+                        return (
+                          <Box
+                            key={`${codeMxx}__prefix_top`}
+                            onClick={() => handleLocationSuggestionSelect({ code: codeMxx, city, isPrefixAll: true })}
+                            sx={{
+                              px: 2,
+                              py: 1.5,
+                              cursor: 'pointer',
+                              backgroundColor: (theme) => theme.palette.action.hover,
+                              borderBottom: '1px solid',
+                              borderBottomColor: (theme) => theme.palette.divider,
+                              transition: 'background-color 0.15s ease',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 1.5,
+                            }}
+                          >
                             <Box
-                              key={`${codeMxx}__prefix_top`}
-                              onClick={() => handleLocationSuggestionSelect({ code: codeMxx, city, isPrefixAll: true })}
                               sx={{
-                                px: 2,
-                                py: 1.5,
-                                cursor: 'pointer',
-                                backgroundColor: (theme) => theme.palette.action.hover,
-                                borderBottom: '1px solid',
-                                borderBottomColor: (theme) => theme.palette.divider,
-                                transition: 'background-color 0.15s ease',
+                                width: 32,
+                                height: 32,
+                                borderRadius: '50%',
+                                backgroundColor: (theme) => theme.palette.primary.main,
+                                color: 'white',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: 1.5,
+                                justifyContent: 'center',
+                                fontSize: '14px',
+                                fontWeight: 'bold',
+                                flexShrink: 0,
                               }}
                             >
-                              <Box
-                                sx={{
-                                  width: 32,
-                                  height: 32,
-                                  borderRadius: '50%',
-                                  backgroundColor: (theme) => theme.palette.primary.main,
-                                  color: 'white',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  fontSize: '14px',
-                                  fontWeight: 'bold',
-                                  flexShrink: 0,
-                                }}
-                              >
-                                {codeMxx}
-                              </Box>
-                              <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary', mb: 0.25 }}>
-                                  {city ? `${codeMxx} ${city}` : codeMxx}
-                                </Typography>
-                                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
-                                  All locations in this city
-                                </Typography>
-                              </Box>
+                              {codeUpper}
                             </Box>
-                          );
-                        })()}
-                        {locationSuggestions.map((suggestion, index) => (
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary', mb: 0.25 }}>
+                                {city ? `${codeUpper} (${city})` : codeUpper}
+                              </Typography>
+                              <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
+                                All locations in this city
+                              </Typography>
+                            </Box>
+                          </Box>
+                        );
+                      })()}
+                      {isSearchingLocations && !locationSuggestions.length && (
+                        <Box
+                          sx={{
+                            px: 2,
+                            py: 1.5,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1.5,
+                            color: 'text.secondary',
+                          }}
+                        >
+                          <CircularProgress size={18} thickness={5} />
+                          <Typography variant="body2">Lade Vorschläge…</Typography>
+                        </Box>
+                      )}
+                      {locationSuggestions.map((suggestion, index) => {
+                        const codeUpper = String(suggestion.code || '').toUpperCase();
+                        const displayLabel = suggestion.isPrefixAll
+                          ? (suggestion.city ? `${codeUpper} (${suggestion.city})` : codeUpper)
+                          : (suggestion.display || codeUpper);
+                        return (
                           <Box
-                            key={suggestion.code.toUpperCase().replace(/X/g, 'x')}
+                            key={codeUpper}
                             onClick={() => handleLocationSuggestionSelect(suggestion)}
                             sx={{
                               px: 2,
@@ -2892,7 +2926,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                 flexShrink: 0,
                               }}
                             >
-                              {suggestion.code.substring(0, 3).toUpperCase().replace(/X/g, 'x')}
+                              {codeUpper.substring(0, 3)}
                             </Box>
                             {/* Location details */}
                             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -2904,12 +2938,7 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                                   mb: 0.25,
                                 }}
                               >
-                                {(() => {
-                                  const code = suggestion.code.toUpperCase().replace(/X/g, 'x');
-                                  if (!suggestion.isPrefixAll) return code;
-                                  const city = suggestion.city || cityNameByCode3?.[code] || cityNameByCode3?.[code.toUpperCase()];
-                                  return city ? `${code} ${city}` : code;
-                                })()}
+                                {displayLabel}
                               </Typography>
                               {suggestion.city && !suggestion.isPrefixAll && (
                                 <Typography
@@ -2932,9 +2961,21 @@ const StatisticsPage = React.memo(function StatisticsPage() {
                               )}
                             </Box>
                           </Box>
-                        ))}
-                      </Paper>
-                    )}
+                        );
+                      })}
+                      {!isSearchingLocations && !locationSuggestions.length && locationSuggestMessage && (
+                        <Box
+                          sx={{
+                            px: 2,
+                            py: 1.5,
+                            color: 'text.secondary',
+                          }}
+                        >
+                          <Typography variant="body2">{locationSuggestMessage}</Typography>
+                        </Box>
+                      )}
+                    </Paper>
+                  )}
                 </Grid>
 
                 {/* City Name Search */}
