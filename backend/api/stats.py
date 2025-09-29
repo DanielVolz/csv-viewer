@@ -2064,54 +2064,56 @@ async def get_stats_by_location_fast(q: str) -> Dict:
             return {"success": False, "message": "Query must be one of: full code ABC01, 1-3 letter prefix (A / AB / ABC), or partial code ABC0"}
 
         if mode == "code":
-            # For model details, always use today's data (current netspeed.csv)
-            from datetime import datetime
-            today = datetime.now().strftime('%Y-%m-%d')
-
-            # First try to get today's data for model details
-            body_today = {
-                "size": 1,
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {"term": {"key": query}},
-                            {"term": {"date": today}}
-                        ]
-                    }
-                }
-            }
-
-            res_today = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body_today)
-
-            if res_today["hits"]["hits"]:
-                # Use today's data with model details
-                location_doc = res_today["hits"]["hits"][0]["_source"]
-                # Normalize: ensure phonesWithKEM equals kemPhones length when details exist
+            preferred_files = _preferred_stats_files(limit=8)
+            if "netspeed.csv" not in preferred_files:
+                preferred_files.insert(0, "netspeed.csv")
+            location_doc: Dict[str, Any] | None = None
+            for candidate in preferred_files:
                 try:
-                    kem_list = location_doc.get("kemPhones")
-                    if isinstance(kem_list, list):
-                        location_doc["phonesWithKEM"] = len(kem_list)
-                        location_doc["kemPhonesCount"] = len(kem_list)
+                    res_candidate = opensearch_config.client.search(
+                        index=opensearch_config.stats_loc_index,
+                        body={
+                            "size": 1,
+                            "sort": [{"date": {"order": "desc"}}],
+                            "query": {
+                                "bool": {
+                                    "filter": [
+                                        {"term": {"key": {"value": query}}},
+                                        {"term": {"file": {"value": candidate}}},
+                                    ]
+                                }
+                            },
+                        },
+                    )
                 except Exception:
-                    pass
-                location_doc = _normalize_vlan_summary(location_doc)
-            else:
-                # Fallback: get latest available data but model details will be empty
-                body_latest = {
-                    "size": 1,
-                    "sort": [{"date": {"order": "desc"}}],
-                    "query": {
-                        "bool": {
-                            "filter": [
-                                {"term": {"key": query}}
-                            ]
-                        }
-                    }
-                }
-
-                res_latest = opensearch_config.client.search(index=opensearch_config.stats_loc_index, body=body_latest)
-
-                if not res_latest["hits"]["hits"]:
+                    continue
+                candidate_hits = res_candidate.get("hits", {}).get("hits", [])
+                if candidate_hits:
+                    location_doc = candidate_hits[0].get("_source", {}) or {}
+                    break
+            if location_doc is None:
+                try:
+                    fallback = opensearch_config.client.search(
+                        index=opensearch_config.stats_loc_index,
+                        body={
+                            "size": 1,
+                            "sort": [
+                                {"date": {"order": "desc"}},
+                                {"file": {"order": "asc"}},
+                            ],
+                            "query": {
+                                "bool": {
+                                    "filter": [
+                                        {"term": {"key": {"value": query}}},
+                                    ]
+                                }
+                            },
+                        },
+                    )
+                except Exception:
+                    fallback = {}
+                hits_latest = fallback.get("hits", {}).get("hits", [])
+                if not hits_latest:
                     return {
                         "success": True,
                         "message": f"No data found for location {query}",
@@ -2129,25 +2131,19 @@ async def get_stats_by_location_fast(q: str) -> Dict:
                             "uniqueVLANCount": 0,
                             "switches": [],
                             "kemPhones": [],
-                        }
+                        },
                     }
-
-                # Use latest data but clear model details (only basic stats available)
-                location_doc = res_latest["hits"]["hits"][0]["_source"]
-                # Clear model details if not from today
-                location_doc["phonesByModel"] = []
-                location_doc["phonesByModelJustiz"] = []
-                location_doc["phonesByModelJVA"] = []
-                # Normalize: if kemPhones exists, align phonesWithKEM and add kemPhonesCount
-                try:
-                    kem_list = location_doc.get("kemPhones")
-                    if isinstance(kem_list, list):
+                location_doc = hits_latest[0].get("_source", {}) or {}
+            if location_doc is None:
+                location_doc = {}
+            try:
+                kem_list = location_doc.get("kemPhones")
+                if isinstance(kem_list, list):
+                    location_doc["kemPhonesCount"] = len(kem_list)
+                    if kem_list and len(kem_list) != int(location_doc.get("phonesWithKEM", 0) or 0):
                         location_doc["phonesWithKEM"] = len(kem_list)
-                        location_doc["kemPhonesCount"] = len(kem_list)
-                except Exception:
-                    pass
-                location_doc = _normalize_vlan_summary(location_doc)
-
+            except Exception:
+                pass
         else:  # prefix mode - aggregate all locations starting with this prefix (1-4 chars)
             # Optimized: Only fetch necessary fields and use smaller payloads
             body = {

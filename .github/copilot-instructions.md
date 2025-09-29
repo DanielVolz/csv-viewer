@@ -357,3 +357,7 @@ docker exec -it csv-viewer-backend-dev python -c "from tasks.tasks import index_
 docker exec -it csv-viewer-backend-dev env | grep CSV_FILES_DIR
 docker exec -it csv-viewer-backend-dev ls -la /app/data/
 ```
+
+## Recent Verification
+- `curl -s http://localhost:9200/_cluster/health` returns `status: green` with 1 data node (verified 2025-09-29)
+- `/api/stats/fast/by_location?q=<code>` now returns populated `switches` and `kemPhones` arrays for `netspeed.csv` snapshots after the September 2025 fix

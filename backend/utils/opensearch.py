@@ -583,10 +583,13 @@ class OpenSearchConfig:
 
             netspeed_entries = self.list_netspeed_indices()
             netspeed_ordered: list[str] = []
+            netspeed_csv_ordered: list[str] = []
             for entry in netspeed_entries:
                 idx_value = entry.get("index")
                 if isinstance(idx_value, str) and idx_value:
                     netspeed_ordered.append(idx_value)
+                    if idx_value.startswith("netspeed_netspeed_csv"):
+                        netspeed_csv_ordered.append(idx_value)
             archive_available = False
             try:
                 archive_available = bool(self.client.indices.exists(index=self.archive_index))
@@ -596,7 +599,10 @@ class OpenSearchConfig:
             if include_historical:
                 combined: list[str] = []
                 combined.extend(current_candidates)
-                combined.extend(netspeed_ordered)
+                combined.extend(netspeed_csv_ordered)
+                for idx in netspeed_ordered:
+                    if idx not in netspeed_csv_ordered:
+                        combined.append(idx)
                 # Always provide wildcard fallback to catch any indices created after discovery
                 combined.append("netspeed_*")
                 if archive_available:
@@ -609,6 +615,9 @@ class OpenSearchConfig:
                 # Without historical data we just want the freshest index available
                 if current_candidates:
                     return [current_candidates[0]]
+                if netspeed_csv_ordered:
+                    logger.info(f"Using latest netspeed CSV index without filesystem current: {netspeed_csv_ordered[0]}")
+                    return [netspeed_csv_ordered[0]]
                 if netspeed_ordered:
                     logger.info(f"Using latest netspeed index without filesystem current: {netspeed_ordered[0]}")
                     return [netspeed_ordered[0]]
