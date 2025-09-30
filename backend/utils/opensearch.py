@@ -354,8 +354,10 @@ class OpenSearchConfig:
         """
         if self._client is None:
             grace = float(getattr(settings, "OPENSEARCH_STARTUP_GRACE_SECONDS", 0.0) or 0.0)
+            wait_enabled = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
             need_grace = (
-                grace > 0
+                wait_enabled
+                and grace > 0
                 and not self._initial_grace_applied
                 and not OpenSearchConfig._startup_grace_consumed
             )
@@ -367,6 +369,11 @@ class OpenSearchConfig:
                     time.sleep(grace)
                 except Exception:
                     pass
+            elif not wait_enabled:
+                if grace > 0:
+                    logger.debug(
+                        "Skipping OpenSearch startup grace delay because OPENSEARCH_WAIT_FOR_AVAILABILITY is disabled"
+                    )
             if not OpenSearchConfig._startup_grace_consumed:
                 OpenSearchConfig._startup_grace_consumed = True
             if not self._initial_grace_applied:
@@ -1666,8 +1673,38 @@ class OpenSearchConfig:
     def _preferred_file_names(self) -> List[str]:
         """Return netspeed file names ordered with the active export first."""
         names = [n for n in self._netspeed_filenames() if n]
+        if not names:
+            try:
+                entries = self.list_netspeed_indices()
+                for entry in entries:
+                    filename = entry.get("file_name")
+                    if filename and filename not in names:
+                        names.append(filename)
+            except Exception as exc:
+                logger.debug(f"Preferred file name discovery via indices failed: {exc}")
+
         if "netspeed.csv" not in names:
             names.append("netspeed.csv")
+
+        def _weight(name: str) -> tuple[int, int, int, str]:
+            if not name:
+                return (5, 0, 0, "")
+            if name == "netspeed.csv":
+                return (0, 0, 0, name)
+            ts_match = re.match(r"^netspeed_(\d{8})-(\d{6})\.csv(?:\.(\d+))?$", name)
+            if ts_match:
+                stamp = int(ts_match.group(1) + ts_match.group(2))
+                rotation = int(ts_match.group(3)) if ts_match.group(3) is not None else -1
+                return (1, -stamp, rotation, name)
+            if name.startswith("netspeed.csv."):
+                suffix = name.split("netspeed.csv.", 1)[1]
+                if suffix.isdigit():
+                    return (2, -int(suffix), 0, name)
+            return (4, 0, 0, name)
+
+        if names:
+            deduped = list(dict.fromkeys(names))
+            names = sorted(deduped, key=_weight)
         return names
 
     def _preferred_file_sort_script(self) -> Dict[str, Any]:
@@ -2008,7 +2045,7 @@ class OpenSearchConfig:
                             "params": {"q": query, "f": field, "fk": fk}
                         }
                     }
-                }, {"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
+                }, self._preferred_file_sort_clause(), {"Creation Date": {"order": "desc"}}, {"_score": {"order": "desc"}}]
             }
 
         # General search across all fields
@@ -2029,8 +2066,8 @@ class OpenSearchConfig:
                     "_source": DESIRED_ORDER,
                     "size": size,
                     "sort": [
-                        {"Creation Date": {"order": "desc"}},
-                        self._preferred_file_sort_clause()
+                        self._preferred_file_sort_clause(),
+                        {"Creation Date": {"order": "desc"}}
                     ]
                 }
 
