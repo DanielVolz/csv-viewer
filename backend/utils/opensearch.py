@@ -27,6 +27,8 @@ class OpenSearchUnavailableError(RuntimeError):
 
 class OpenSearchConfig:
     _startup_grace_consumed = False
+    _startup_grace_logged = False
+    _host_order_logged = False
     """OpenSearch configuration and client management.
 
     Improvements made during cleanup:
@@ -521,7 +523,11 @@ class OpenSearchConfig:
                 for v in localhost_variants:
                     if v not in hosts:
                         hosts.append(v)
-        logger.info(f"OpenSearch host attempt order: {hosts}")
+        if not OpenSearchConfig._host_order_logged:
+            logger.info(f"OpenSearch host attempt order: {hosts}")
+            OpenSearchConfig._host_order_logged = True
+        else:
+            logger.debug(f"OpenSearch host attempt order (cached): {hosts}")
         return hosts
 
     def get_index_name(self, file_path: str) -> str:
