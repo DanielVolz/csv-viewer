@@ -31,6 +31,29 @@ def _has_wildcard(shoulds, field, pattern):
     return any("wildcard" in c and c["wildcard"].get(field) == pattern for c in shoulds)
 
 
+def test_preferred_file_names_orders_rotations(monkeypatch):
+    cfg = OpenSearchConfig()
+    monkeypatch.setattr(
+        cfg,
+        "_netspeed_filenames",
+        lambda: [
+            "netspeed.csv.10",
+            "netspeed.csv.3",
+            "netspeed.csv.1",
+            "netspeed.csv",
+        ],
+    )
+
+    ordered = cfg._preferred_file_names()
+
+    assert ordered[:4] == [
+        "netspeed.csv",
+        "netspeed.csv.1",
+        "netspeed.csv.3",
+        "netspeed.csv.10",
+    ]
+
+
 def test_build_query_field_line_number_exact():
     cfg = OpenSearchConfig()
     body = cfg._build_query_body("+1234567890123", field="Line Number", size=10)

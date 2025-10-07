@@ -1699,7 +1699,7 @@ class OpenSearchConfig:
             if name.startswith("netspeed.csv."):
                 suffix = name.split("netspeed.csv.", 1)[1]
                 if suffix.isdigit():
-                    return (2, -int(suffix), 0, name)
+                    return (2, int(suffix), 0, name)
             return (4, 0, 0, name)
 
         if names:
@@ -2718,6 +2718,25 @@ class OpenSearchConfig:
                 logger.info(f"Filtered out {before_cnt - after_cnt} non-canonical files (kept netspeed.csv and netspeed.csv.N only)")
 
             # (Removed) Hostname deduplication: return all exact matches for a host
+
+            if looks_like_mac_first:
+                try:
+                    preferred_map = {name: idx for idx, name in enumerate(self._preferred_file_names())}
+
+                    def _doc_sort_key(doc: Dict[str, Any]) -> tuple[int, float, int]:
+                        fname = (doc.get("File Name") or "").strip()
+                        weight = preferred_map.get(fname, len(preferred_map))
+                        date_str = (doc.get("Creation Date") or "").strip()
+                        try:
+                            ts = datetime.strptime(date_str, "%Y-%m-%d").timestamp()
+                        except Exception:
+                            ts = 0.0
+                        # Prefer newer dates (descending) by negating timestamp
+                        return (weight, -ts, 0)
+
+                    unique_documents = sorted(unique_documents, key=_doc_sort_key)
+                except Exception as ordering_exc:
+                    logger.debug(f"MAC result reordering failed: {ordering_exc}")
 
             # For MAC-like searches, ensure at least one matching document per netspeed file present in the data root
             # This guarantees all netspeed.csv* files show up in the results list
