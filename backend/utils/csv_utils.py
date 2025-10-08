@@ -97,46 +97,77 @@ def _get_display_name(source_header: str) -> str:
     """
     return CUSTOM_DISPLAY_NAMES.get(source_header, _camel_to_display(source_header))
 
+# Cache for discovered headers (lazy loading to avoid slow imports in tests)
+_DISCOVERED_HEADERS_CACHE = None
+
 # Dynamically discover headers from current netspeed.csv file
 def _discover_csv_headers():
     """Read headers from the current netspeed CSV file.
     Falls back to empty list if file not found.
+    Uses caching to avoid repeated file I/O.
+
+    Performance: Fast path that directly checks known locations instead of
+    calling collect_netspeed_files() which does expensive filesystem operations.
     """
-    from utils.path_utils import collect_netspeed_files
+    global _DISCOVERED_HEADERS_CACHE
+
+    # Return cached result if available
+    if _DISCOVERED_HEADERS_CACHE is not None:
+        return _DISCOVERED_HEADERS_CACHE
+
     from pathlib import Path
     import csv
 
+    # Fast path: Check most common locations directly (avoids expensive glob operations)
+    candidate_paths = [
+        Path("/app/data/netspeed/netspeed.csv"),
+        Path("/app/data/netspeed.csv"),
+    ]
+
+    # Also check for timestamped files in common locations (newest first)
     try:
-        # Find current netspeed file
-        csv_dirs = [Path("/app/data/netspeed"), Path("/app/data")]
-        historical_files, current_file, _ = collect_netspeed_files(csv_dirs)
+        netspeed_dir = Path("/app/data/netspeed")
+        if netspeed_dir.exists() and netspeed_dir.is_dir():
+            # Get timestamped files, sorted by name (YYYYMMDD-HHMMSS pattern sorts correctly)
+            timestamped = sorted(
+                [f for f in netspeed_dir.glob("netspeed_*.csv") if f.is_file()],
+                reverse=True  # Newest first
+            )
+            candidate_paths = timestamped[:1] + candidate_paths  # Check newest timestamped file first
+    except Exception:
+        pass
 
-        if not current_file or not current_file.exists():
-            logger.debug("No current netspeed file found for header discovery")
-            return []
+    try:
+        for current_file in candidate_paths:
+            if not current_file.exists() or not current_file.is_file():
+                continue
 
-        # Read first line to get headers
-        with open(current_file, 'r', newline='') as f:
-            content = f.read()
-            f.seek(0)
-            delimiter = ';' if ';' in content else ','
-            reader = csv.reader(f, delimiter=delimiter)
-            first_row = next(reader, [])
+            # Read first line to get headers
+            with open(current_file, 'r', newline='') as f:
+                # Quick delimiter detection
+                first_bytes = f.read(1024)
+                f.seek(0)
+                delimiter = ';' if ';' in first_bytes else ','
 
-            # Clean headers (remove BOM, whitespace)
-            headers = [h.strip().lstrip('\ufeff') for h in first_row]
+                reader = csv.reader(f, delimiter=delimiter)
+                first_row = next(reader, [])
 
-            # Check if first row looks like headers (not data)
-            if headers and not any(h.replace('.', '').replace(':', '').replace('+', '').isdigit() for h in headers[:3]):
-                logger.info(f"Discovered {len(headers)} headers from {current_file.name}")
-                return headers
+                # Clean headers (remove BOM, whitespace)
+                headers = [h.strip().lstrip('\ufeff') for h in first_row]
+
+                # Check if first row looks like headers (not data)
+                if headers and not any(h.replace('.', '').replace(':', '').replace('+', '').isdigit() for h in headers[:3]):
+                    logger.info(f"Discovered {len(headers)} headers from {current_file.name}")
+                    _DISCOVERED_HEADERS_CACHE = headers
+                    return headers
 
     except Exception as e:
         logger.debug(f"Could not discover CSV headers: {e}")
 
+    _DISCOVERED_HEADERS_CACHE = []
     return []
 
-# Discover headers dynamically, or use empty list if no file found
+# Discover headers with caching (called once at module import, but fast due to cache)
 NEW_NETSPEED_HEADERS = _discover_csv_headers()
 
 # Build mapping from discovered headers
