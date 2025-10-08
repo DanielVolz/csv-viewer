@@ -615,8 +615,29 @@ class OpenSearchConfig:
                     logger.info(f"Historical search indices: {result}")
                     return result
             else:
-                # Current-only search: use only the newest netspeed index
+                # Current-only search: find index for current file (not just newest by creation time)
                 if netspeed_ordered:
+                    # Determine the current file name
+                    try:
+                        from utils.path_utils import resolve_current_file
+                        current_file_path = resolve_current_file()
+                        if current_file_path:
+                            current_filename = current_file_path.name
+                            logger.info(f"Current file determined as: {current_filename}")
+
+                            # Find the index that matches the current filename
+                            for entry in netspeed_entries:
+                                idx_name = entry.get("index")
+                                file_name = entry.get("file_name")
+                                if file_name == current_filename and idx_name:
+                                    logger.info(f"Found index for current file: {idx_name}")
+                                    return [str(idx_name)]
+
+                            logger.warning(f"No index found for current file {current_filename}, falling back to newest index")
+                    except Exception as e:
+                        logger.warning(f"Failed to determine current file: {e}, falling back to newest index")
+
+                    # Fallback: use newest index by creation time
                     logger.info(f"Using latest netspeed index for current-only search: {netspeed_ordered[0]}")
                     return [netspeed_ordered[0]]
                 if archive_available:
@@ -2251,6 +2272,53 @@ class OpenSearchConfig:
                     ]
                 }
 
+            # IP Address search: full or partial IPv4
+            # Full IPv4: 10.216.10.7 (4 octets) - exact match only
+            # Partial IPv4: 10.216.10 or 10.216 (1-3 octets) - prefix match
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
+                # Full IPv4 address - exact match first, then prefix
+                from utils.csv_utils import DESIRED_ORDER
+                return {
+                    "query": {"bool": {"should": [
+                        {"term": {"IP Address.keyword": {"value": qn, "boost": 100.0}}},
+                        {"prefix": {"IP Address.keyword": {"value": qn, "boost": 10.0}}}
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('IP Address.keyword') && doc['IP Address.keyword'].size()>0 && doc['IP Address.keyword'].value == q) return 0; if (doc.containsKey('IP Address.keyword') && doc['IP Address.keyword'].size()>0 && doc['IP Address.keyword'].value.startsWith(q)) return 1; return 2;",
+                            "params": {"q": qn}
+                        }}},
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+            elif re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
+                # Partial IPv4 address - prefix match only
+                from utils.csv_utils import DESIRED_ORDER
+                clean_query = qn.rstrip('.')
+                return {
+                    "query": {"bool": {"should": [
+                        {"prefix": {"IP Address.keyword": clean_query}},
+                        {"prefix": {"IP Address.keyword": f"{clean_query}."}}
+                    ], "minimum_should_match": 1}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('IP Address.keyword') && doc['IP Address.keyword'].size()>0 && doc['IP Address.keyword'].value.startsWith(q)) return 0; return 1;",
+                            "params": {"q": clean_query}
+                        }}},
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
             # Serial Number prefix branch: alphanumeric tokens 3-10 chars use prefix wildcards
             if re.fullmatch(r"[A-Za-z0-9]{3,10}", qn or ""):
                 from utils.csv_utils import DESIRED_ORDER
@@ -2343,17 +2411,7 @@ class OpenSearchConfig:
         except Exception as e:
             logger.warning(f"Failed to add strengthened MAC keyword terms: {e}")
 
-        # Add IP prefix support for partial IPv4 fragments
-        ip_pattern = re.compile(r'^[0-9]{1,3}(\.[0-9]{1,3}){0,2}\.?$')
-        if isinstance(query, str) and ip_pattern.match(query):
-            try:
-                clean_query = query.rstrip('.')
-                if clean_query:
-                    # For general search, use only prefix to avoid false matches
-                    search_query["query"]["bool"]["should"].append({"prefix": {"IP Address.keyword": clean_query}})
-                    search_query["query"]["bool"]["should"].append({"prefix": {"IP Address.keyword": f"{clean_query}."}})
-            except Exception as e:
-                logger.warning(f"Failed to add IP prefix search for '{query}': {e}")
+
 
         # Long numeric substring: add plus-prefixed exact variant
         if isinstance(query, str) and query.isdigit() and len(query) >= 5:
