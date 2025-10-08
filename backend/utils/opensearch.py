@@ -2665,19 +2665,24 @@ class OpenSearchConfig:
                     logger.info(f"[SERIAL] indices={indices_sn} body={body_sn}")
                     resp_sn = self.client.search(index=indices_sn, body=body_sn)
                     docs_sn = [h.get('_source', {}) for h in resp_sn.get('hits', {}).get('hits', [])]
-                    # Filter out archived filenames; keep only netspeed.csv, netspeed_YYYYMMDD-HHMMSS.csv, and netspeed.csv.N
+                    # Filter out archived filenames; keep only netspeed.csv, netspeed_YYYYMMDD-HHMMSS.csv, and rotation files
                     def _is_allowed_file(fn: str) -> bool:
                         if not fn:
                             return False
                         if fn == 'netspeed.csv':
                             return True
-                        # Always allow timestamp format (current file)
+                        # Always allow timestamp format (current file without rotation suffix)
                         if re.match(r'^netspeed_\d{8}-\d{6}\.csv$', fn):
                             return True
                         # Historical rotation files
-                        if allow_historical_files_sn and fn.startswith('netspeed.csv.'):
-                            suf = fn.split('netspeed.csv.', 1)[1]
-                            return suf.isdigit()
+                        if allow_historical_files_sn:
+                            # Legacy rotation: netspeed.csv.N
+                            if fn.startswith('netspeed.csv.'):
+                                suf = fn.split('netspeed.csv.', 1)[1]
+                                return suf.isdigit()
+                            # Timestamped rotation: netspeed_YYYYMMDD-HHMMSS.csv.N
+                            if re.match(r'^netspeed_\d{8}-\d{6}\.csv\.\d+$', fn):
+                                return True
                         # Archive files
                         if allow_archive_files_sn and fn.startswith('netspeed_'):
                             return True
@@ -2813,6 +2818,7 @@ class OpenSearchConfig:
             # - netspeed.csv (legacy current file)
             # - netspeed_YYYYMMDD-HHMMSS.csv (new current file format with timestamp)
             # - netspeed.csv.N (historical rotation files) - only if include_historical=True
+            # - netspeed_YYYYMMDD-HHMMSS.csv.N (timestamped rotation files) - only if include_historical=True
             # - archive files - only if querying archive index
             def _is_allowed_file(fn: str) -> bool:
                 if not fn:
@@ -2820,7 +2826,7 @@ class OpenSearchConfig:
                 # Always allow legacy current file name
                 if fn == 'netspeed.csv':
                     return True
-                # Always allow new timestamped format (current file)
+                # Always allow new timestamped format (current file without rotation suffix)
                 if fn.startswith('netspeed_') and fn.endswith('.csv'):
                     # Check if it matches timestamp format: netspeed_YYYYMMDD-HHMMSS.csv
                     import re
@@ -2830,9 +2836,16 @@ class OpenSearchConfig:
                     if allow_archive_files_general:
                         return True
                 # Historical rotation files only if include_historical=True
-                if allow_historical_files_general and fn.startswith('netspeed.csv.'):
-                    suf = fn.split('netspeed.csv.', 1)[1]
-                    return suf.isdigit()
+                if allow_historical_files_general:
+                    # Legacy rotation: netspeed.csv.N
+                    if fn.startswith('netspeed.csv.'):
+                        suf = fn.split('netspeed.csv.', 1)[1]
+                        return suf.isdigit()
+                    # Timestamped rotation: netspeed_YYYYMMDD-HHMMSS.csv.N
+                    if fn.startswith('netspeed_'):
+                        import re
+                        if re.match(r'^netspeed_\d{8}-\d{6}\.csv\.\d+$', fn):
+                            return True
                 return False
 
             before_cnt = len(unique_documents)
