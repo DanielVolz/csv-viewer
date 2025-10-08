@@ -54,6 +54,22 @@ def test_preferred_file_names_orders_rotations(monkeypatch):
     ]
 
 
+def test_build_query_general_switch_hostname_code():
+    cfg = OpenSearchConfig()
+    body = cfg._build_query_body("ABX01ZSL4750P", field=None, size=25)
+
+    shoulds = _find_should_terms(body)
+    assert _has_term(shoulds, "Switch Hostname", "ABX01ZSL4750P")
+    assert any(
+        "prefix" in clause and clause["prefix"].get("Switch Hostname") == "ABX01ZSL4750P."
+        for clause in shoulds
+    )
+
+    filters = body["query"]["bool"].get("filter", [])
+    assert filters and filters[0]["script"]["script"]["params"]["qLower"] == "abx01zsl4750p"
+    assert body["sort"][0] == {"Creation Date": {"order": "desc"}}
+
+
 def test_build_query_field_line_number_exact():
     cfg = OpenSearchConfig()
     body = cfg._build_query_body("+1234567890123", field="Line Number", size=10)
@@ -202,3 +218,33 @@ def test_search_phone_exact_then_partial_fallback_dedup(monkeypatch):
 
     # Verify two searches were performed
     assert mock_client.search.call_count == 2
+
+
+def test_search_hostname_prefix_uses_historical_indices(monkeypatch):
+    cfg = OpenSearchConfig()
+    monkeypatch.setattr(cfg, "_preferred_file_names", lambda: ["netspeed.csv", "netspeed.csv.1"])
+    monkeypatch.setattr(cfg, "_deduplicate_documents_preserve_order", lambda docs: docs)
+
+    call_log = []
+
+    def fake_get_indices(include):
+        call_log.append(("indices", include))
+        return ["netspeed_netspeed_csv"] if not include else ["netspeed_netspeed_csv", "netspeed_netspeed_csv_1"]
+
+    monkeypatch.setattr(cfg, "get_search_indices", fake_get_indices)
+
+    cfg._client = MagicMock()
+
+    def fake_search(index, body):
+        call_log.append(("search", tuple(index) if isinstance(index, list) else index))
+        return {"hits": {"hits": []}}
+
+    cfg._client.search.side_effect = fake_search
+
+    # Hostname prefix searches now respect the include_historical flag
+    headers, docs = cfg.search("Mxx09", include_historical=False)
+
+    assert ("indices", False) in call_log
+    assert ("search", ("netspeed_netspeed_csv",)) in call_log
+    assert headers == []
+    assert docs == []

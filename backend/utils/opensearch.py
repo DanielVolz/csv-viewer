@@ -588,21 +588,14 @@ class OpenSearchConfig:
                     ordered_unique.append(item)
                 return ordered_unique
 
-            # Prefer canonical current indices when present
-            current_candidates: list[str] = []
-            for name in ("netspeed_netspeed_csv", "netspeed_netspeed"):
-                if name in indices:
-                    current_candidates.append(name)
-
+            # Get all netspeed indices sorted by creation date (newest first)
             netspeed_entries = self.list_netspeed_indices()
             netspeed_ordered: list[str] = []
-            netspeed_csv_ordered: list[str] = []
             for entry in netspeed_entries:
                 idx_value = entry.get("index")
                 if isinstance(idx_value, str) and idx_value:
                     netspeed_ordered.append(idx_value)
-                    if idx_value.startswith("netspeed_netspeed_csv"):
-                        netspeed_csv_ordered.append(idx_value)
+
             archive_available = False
             try:
                 archive_available = bool(self.client.indices.exists(index=self.archive_index))
@@ -610,12 +603,9 @@ class OpenSearchConfig:
                 logger.debug(f"Archive existence check failed: {archive_err}")
 
             if include_historical:
+                # Historical search: include all netspeed indices
                 combined: list[str] = []
-                combined.extend(current_candidates)
-                combined.extend(netspeed_csv_ordered)
-                for idx in netspeed_ordered:
-                    if idx not in netspeed_csv_ordered:
-                        combined.append(idx)
+                combined.extend(netspeed_ordered)
                 # Always provide wildcard fallback to catch any indices created after discovery
                 combined.append("netspeed_*")
                 if archive_available:
@@ -625,14 +615,9 @@ class OpenSearchConfig:
                     logger.info(f"Historical search indices: {result}")
                     return result
             else:
-                # Without historical data we just want the freshest index available
-                if current_candidates:
-                    return [current_candidates[0]]
-                if netspeed_csv_ordered:
-                    logger.info(f"Using latest netspeed CSV index without filesystem current: {netspeed_csv_ordered[0]}")
-                    return [netspeed_csv_ordered[0]]
+                # Current-only search: use only the newest netspeed index
                 if netspeed_ordered:
-                    logger.info(f"Using latest netspeed index without filesystem current: {netspeed_ordered[0]}")
+                    logger.info(f"Using latest netspeed index for current-only search: {netspeed_ordered[0]}")
                     return [netspeed_ordered[0]]
                 if archive_available:
                     logger.info("Using archive_netspeed index as fallback for current search")
@@ -2051,6 +2036,103 @@ class OpenSearchConfig:
         # General search across all fields
         if isinstance(query, str):
             qn = query.strip()
+
+            # Switch hostname prefix (e.g., Mxx08, ABX01, ABX01ZSL) - exactly 5 characters OR 6-12 with multiple continuing letters
+            # Excludes serial-like patterns such as ABC1234, ABC1234X (single letter at end)
+            hostname_prefix_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
+            # Only treat as hostname prefix if:
+            # - Exactly 5 chars (e.g., ABX01, Mxx08), OR
+            # - 8+ chars with at least 2 consecutive letters after position 5 (e.g., ABX01ZSL, ABX01ZSL4750)
+            # This excludes: ABC1234 (7 chars, only digits after pos 5), ABC1234X (8 chars, only single letter at end)
+            is_hostname_prefix = False
+            if hostname_prefix_match and '.' not in qn and 5 <= len(qn) < 13:
+                if len(qn) == 5:
+                    # Exactly 5 characters: always treat as hostname prefix
+                    is_hostname_prefix = True
+                elif len(qn) >= 8:
+                    # 8+ characters: check if there are at least 2 consecutive letters after position 5
+                    # This pattern matches hostname suffixes like ZSL, Z, etc. but not single letter serials like X
+                    remaining = qn[5:]
+                    # Look for at least 2 consecutive letters
+                    if re.search(r'[A-Za-z]{2,}', remaining):
+                        is_hostname_prefix = True
+
+            if is_hostname_prefix:
+                from utils.csv_utils import DESIRED_ORDER
+                q_lower = qn.lower()
+                q_upper = qn.upper()
+                # Prefix search: matches ABX01*, ABX01ZSL*, etc.
+                should_clauses = [
+                    {"prefix": {"Switch Hostname.lower": q_lower}},
+                    {"prefix": {"Switch Hostname": qn}},
+                    {"prefix": {"Switch Hostname": q_upper}},
+                    {"wildcard": {"Switch Hostname.lower": f"{q_lower}*"}},
+                    {"wildcard": {"Switch Hostname": f"{qn}*"}},
+                    {"wildcard": {"Switch Hostname": f"{q_upper}*"}},
+                ]
+                return {
+                    "query": {
+                        "bool": {
+                            "should": should_clauses,
+                            "minimum_should_match": 1
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}},
+                    ]
+                }
+
+            # Switch hostname codes (e.g., ABX01ZSL4750P) - exact match with 13+ characters
+            hostname_code_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
+            if hostname_code_match and '.' not in qn and len(qn) >= 13:
+                from utils.csv_utils import DESIRED_ORDER
+                q_lower = qn.lower()
+                should_clauses = [
+                    {"term": {"Switch Hostname.lower": q_lower}},
+                    {"term": {"Switch Hostname": qn}},
+                    {"term": {"Switch Hostname": qn.upper()}},
+                    {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
+                    {"prefix": {"Switch Hostname": f"{qn}."}},
+                    {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
+                ]
+                return {
+                    "query": {
+                        "bool": {
+                            "should": should_clauses,
+                            "minimum_should_match": 1,
+                            "filter": [
+                                {
+                                    "script": {
+                                        "script": {
+                                            "lang": "painless",
+                                            "source": (
+                                                "def raw = null; "
+                                                "if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { raw = doc['Switch Hostname'].value; } "
+                                                "if (raw == null) { return false; } "
+                                                "String norm = raw.trim().toLowerCase(); "
+                                                "String q = params.qLower; "
+                                                "return norm.equals(q) || norm.startsWith(q + '.');"
+                                            ),
+                                            "params": {"qLower": q_lower},
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}},
+                    ]
+                }
+
             # MAC exact-only when 12-hex provided
             mac_core = re.sub(r"[^A-Fa-f0-9]", "", qn)
             if len(mac_core) == 12:
@@ -2505,6 +2587,28 @@ class OpenSearchConfig:
                 except Exception as e:
                     logger.warning(f"Phone exact search failed, falling back to general: {e}")
 
+            looks_like_hostname_prefix = False
+            try:
+                if isinstance(query, str):
+                    q_hostname_prefix = query.strip()
+                    if (
+                        q_hostname_prefix
+                        and re.match(r'^[A-Za-z]{3}[0-9]{2}', q_hostname_prefix)
+                        and '.' not in q_hostname_prefix
+                        and 5 <= len(q_hostname_prefix) < 13
+                    ):
+                        # Exactly 5 characters: always a hostname prefix (e.g., ABX01, Mxx08)
+                        if len(q_hostname_prefix) == 5:
+                            looks_like_hostname_prefix = True
+                        # 8+ characters: must have at least 2 consecutive letters after position 5
+                        # This excludes patterns like ABC1234 (only digits) and ABC1234X (single letter at end)
+                        elif len(q_hostname_prefix) >= 8:
+                            remaining = q_hostname_prefix[5:]
+                            if re.search(r'[A-Za-z]{2,}', remaining):
+                                looks_like_hostname_prefix = True
+            except Exception:
+                looks_like_hostname_prefix = False
+
             # Early exact branch: Serial Number-like (long alphanumeric, not pure digits)
             try:
                 looks_like_serial = False
@@ -2534,6 +2638,7 @@ class OpenSearchConfig:
                     indices_sn = self.get_search_indices(include_historical)
                     indices_sn_list = indices_sn if isinstance(indices_sn, list) else [indices_sn]
                     allow_archive_files_sn = any(idx == self.archive_index for idx in indices_sn_list)
+                    allow_historical_files_sn = bool(include_historical)
 
                     # Support both exact and prefix search for serial numbers
                     # For 8-10 characters: add both exact and wildcard queries
@@ -2566,10 +2671,10 @@ class OpenSearchConfig:
                             return False
                         if fn == 'netspeed.csv':
                             return True
-                        if fn.startswith('netspeed.csv.'):
+                        if allow_historical_files_sn and fn.startswith('netspeed.csv.'):
                             suf = fn.split('netspeed.csv.', 1)[1]
                             return suf.isdigit()
-                        if allow_archive_files_hn and fn.startswith('netspeed_'):
+                        if allow_archive_files_sn and fn.startswith('netspeed_'):
                             return True
                         return False
                     docs_sn = [d for d in docs_sn if _is_allowed_file((d.get('File Name') or '').strip())]
@@ -2603,6 +2708,7 @@ class OpenSearchConfig:
                     indices_hn = self.get_search_indices(include_historical)
                     indices_hn_list = indices_hn if isinstance(indices_hn, list) else [indices_hn]
                     allow_archive_files_hn = any(idx == self.archive_index for idx in indices_hn_list)
+                    allow_historical_files_hn = bool(include_historical)
                     body_hn = {
                         "query": {
                             "bool": {
@@ -2639,10 +2745,10 @@ class OpenSearchConfig:
                             return False
                         if fn == 'netspeed.csv':
                             return True
-                        if fn.startswith('netspeed.csv.'):
+                        if allow_historical_files_hn and fn.startswith('netspeed.csv.'):
                             suf = fn.split('netspeed.csv.', 1)[1]
                             return suf.isdigit()
-                        if allow_archive_files_sn and fn.startswith('netspeed_'):
+                        if allow_archive_files_hn and fn.startswith('netspeed_'):
                             return True
                         return False
                     docs_hn = [d for d in docs_hn if _is_allowed_file((d.get('File Name') or '').strip())]
@@ -2656,8 +2762,10 @@ class OpenSearchConfig:
             if looks_like_mac_first:
                 # Force historical for the general phase regardless of caller flag
                 indices = self.get_search_indices(True)
+            # Removed: hostname prefix override - respect user's include_historical flag
             indices_list = indices if isinstance(indices, list) else [indices]
             allow_archive_files_general = any(idx == self.archive_index for idx in indices_list)
+            allow_historical_files_general = bool(include_historical or looks_like_mac_first)
             if allow_archive_files_general and size > 10000:
                 logger.info(
                     "Clamping search size from %s to 10000 for archive_netspeed compatibility",
@@ -2697,18 +2805,29 @@ class OpenSearchConfig:
                 unique_documents = self._deduplicate_documents_preserve_order(documents)
 
             # Always restrict results to canonical netspeed files only:
-            # - netspeed.csv
-            # - netspeed.csv.N (where N is a number)
+            # - netspeed.csv (legacy current file)
+            # - netspeed_YYYYMMDD-HHMMSS.csv (new current file format with timestamp)
+            # - netspeed.csv.N (historical rotation files) - only if include_historical=True
+            # - archive files - only if querying archive index
             def _is_allowed_file(fn: str) -> bool:
                 if not fn:
                     return False
+                # Always allow legacy current file name
                 if fn == 'netspeed.csv':
                     return True
-                if fn.startswith('netspeed.csv.'):
+                # Always allow new timestamped format (current file)
+                if fn.startswith('netspeed_') and fn.endswith('.csv'):
+                    # Check if it matches timestamp format: netspeed_YYYYMMDD-HHMMSS.csv
+                    import re
+                    if re.match(r'^netspeed_\d{8}-\d{6}\.csv$', fn):
+                        return True
+                    # Or from archive index
+                    if allow_archive_files_general:
+                        return True
+                # Historical rotation files only if include_historical=True
+                if allow_historical_files_general and fn.startswith('netspeed.csv.'):
                     suf = fn.split('netspeed.csv.', 1)[1]
                     return suf.isdigit()
-                if allow_archive_files_general and fn.startswith('netspeed_'):
-                    return True
                 return False
 
             before_cnt = len(unique_documents)

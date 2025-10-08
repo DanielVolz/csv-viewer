@@ -39,12 +39,13 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
 
   // Show warning for fallback files, info for normal files
   const alertSeverity = previewData?.using_fallback ? "warning" : "info";
+  const displayFileName = previewData?.actual_file_name || previewData?.file_name;
 
   return (
     <Box>
       <Alert severity={alertSeverity} sx={{ mb: 3 }}>
         {(previewData?.message || "Showing latest entries from the CSV file")}
-        {previewData?.file_name ? ` • ${previewData.file_name}` : ''}
+        {displayFileName ? ` • ${displayFileName}` : ''}
       </Alert>
       <DataTable
         headers={previewData.headers}
