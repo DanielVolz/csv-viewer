@@ -888,29 +888,18 @@ async def get_available_columns():
         # Use DESIRED_ORDER from csv_utils which defines the current 16-column format
         available_columns = []
 
-    # Define default enabled state for each column returned to the frontend settings
-    # All CSV columns are now available for toggling except KeyExpansionModule fields, which are never exposed
-        default_enabled = {
-            "#": True,
-            "File Name": True,
-            "Creation Date": True,
-            "IP Address": True,
-            "Line Number": True,
-            "MAC Address": True,
-            "MAC Address 2": False,
-            "Subnet Mask": False,
-            "Voice VLAN": True,
-            "Switch Hostname": True,
-            "Switch Port": True,
-            "Phone Port Speed": False,
-            "PC Port Speed": False,
-            "Switch Port Mode": False,
-            "PC Port Mode": False,
-            "Serial Number": True,
-            "Model Name": True
+        # Define core columns that are enabled by default
+        # All other columns (including new ones from future CSV formats) will be disabled by default
+        core_enabled_columns = {
+            "#", "File Name", "Creation Date", "IP Address", "Line Number",
+            "MAC Address", "Voice VLAN", "Switch Hostname", "Switch Port",
+            "Serial Number", "Model Name"
         }
 
-        # Build column definitions from DESIRED_ORDER, but only include columns that should be in settings
+        # Columns to NEVER expose in settings (internal use only)
+        hidden_columns = {"KEM", "KEM 2"}
+
+        # Custom display labels (shorter names for UI)
         display_labels = {
             "Creation Date": "Date",
             "IP Address": "IP Addr.",
@@ -918,19 +907,24 @@ async def get_available_columns():
             "Serial Number": "Serial",
             "Model Name": "Model",
             "MAC Address 2": "MAC Addr. 2",
-            "Phone Port Speed": "Phone Port Speed",
-            "PC Port Speed": "PC Port Speed",
-            "Switch Port Mode": "Switch Port Mode",
-            "PC Port Mode": "PC Port Mode",
         }
+
+        # Build column definitions from DESIRED_ORDER
+        # New columns will automatically appear here when added to DESIRED_ORDER
         for column_id in DESIRED_ORDER:
-            # Only include columns that are defined in default_enabled (KeyExpansionModule columns are never exposed)
-            if column_id in default_enabled:
-                available_columns.append({
-                    "id": column_id,
-                    "label": display_labels.get(column_id, column_id),
-                    "enabled": default_enabled[column_id]
-                })
+            # Skip hidden/internal columns
+            if column_id in hidden_columns:
+                continue
+
+            # Determine if column should be enabled by default
+            # Core columns: enabled, all others (including new ones): disabled
+            is_enabled = column_id in core_enabled_columns
+
+            available_columns.append({
+                "id": column_id,
+                "label": display_labels.get(column_id, column_id),
+                "enabled": is_enabled
+            })
 
         return {
             "success": True,

@@ -106,13 +106,30 @@ NEW_TO_CANONICAL_HEADER_MAP = {
 _NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
 
 # Define the desired display order for columns (what Frontend should show)
-# KEM and KEM 2 are included in backend processing but merged into Line Number for display
-DESIRED_ORDER = [
-    "#", "File Name", "Creation Date", "IP Address", "Line Number",
-    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
-    "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode", "Serial Number", "Model Name",
-    "CallManager 1", "CallManager 2", "CallManager 3"
-]
+# Special columns (#, File Name, Creation Date) are added first
+# Then all canonical headers from NEW_NETSPEED_HEADERS in their CSV order
+# KEM columns are excluded from display (merged into Line Number internally)
+def _build_desired_order():
+    """Build DESIRED_ORDER dynamically from NEW_NETSPEED_HEADERS + NEW_TO_CANONICAL_HEADER_MAP.
+    This ensures new columns are automatically included when added to NEW_NETSPEED_HEADERS.
+
+    Order is preserved from NEW_NETSPEED_HEADERS to match CSV column order.
+    """
+    # Start with special metadata columns
+    order = ["#", "File Name", "Creation Date"]
+
+    # Add all CSV columns in their original order from NEW_NETSPEED_HEADERS
+    # Exclude KEM columns (they're merged into Line Number for display)
+    excluded_from_display = {"KEM", "KEM 2"}
+
+    for source_header in NEW_NETSPEED_HEADERS:
+        canonical_name = NEW_TO_CANONICAL_HEADER_MAP.get(source_header)
+        if canonical_name and canonical_name not in excluded_from_display:
+            order.append(canonical_name)
+
+    return order
+
+DESIRED_ORDER = _build_desired_order()
 
 # Regex patterns for intelligent column detection
 COLUMN_PATTERNS = {
