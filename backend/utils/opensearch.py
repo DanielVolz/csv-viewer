@@ -114,6 +114,10 @@ class OpenSearchConfig:
                     # Canonical column names for switch/PC port mode
                     "Switch Port Mode": self.keyword_type,
                     "PC Port Mode": self.keyword_type,
+                    # CallManager columns (added for extended format support)
+                    "CallManager 1": self.text_with_keyword,
+                    "CallManager 2": self.text_with_keyword,
+                    "CallManager 3": self.text_with_keyword,
                 },
                 "dynamic_templates": [
                     {

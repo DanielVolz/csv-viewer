@@ -40,6 +40,8 @@ def _canonicalize_header_row(headers: List[str]) -> List[str]:
     return canonical
 
 
+# Legacy KNOWN_HEADERS kept only for old files (< 16 columns)
+# Files with >= 16 columns use automatic detection via NEW_NETSPEED_HEADERS
 KNOWN_HEADERS = {
     11: [  # OLD format
         "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2",
@@ -54,11 +56,6 @@ KNOWN_HEADERS = {
         "IP Address", "Line Number", "Serial Number", "Model Name", "KEM",
         "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Switch Port Mode", "PC Port Mode",
         "Switch Hostname", "Switch Port", "Phone Port Speed", "PC Port Speed"
-    ],
-    16: [  # NEW STANDARD format with KEM columns (current and future files)
-        "IP Address", "Line Number", "Serial Number", "Model Name", "KEM", "KEM 2",
-        "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
-        "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
     ]
 }
 
@@ -79,6 +76,9 @@ NEW_NETSPEED_HEADERS = [
     "SwitchPort",
     "PhonePortSpeed",
     "PCPortSpeed",
+    "CallManager1",
+    "CallManager2",
+    "CallManager3",
 ]
 
 NEW_TO_CANONICAL_HEADER_MAP = {
@@ -98,6 +98,9 @@ NEW_TO_CANONICAL_HEADER_MAP = {
     "SwitchPort": "Switch Port",
     "PhonePortSpeed": "Phone Port Speed",
     "PCPortSpeed": "PC Port Speed",
+    "CallManager1": "CallManager 1",
+    "CallManager2": "CallManager 2",
+    "CallManager3": "CallManager 3",
 }
 
 _NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
@@ -107,7 +110,8 @@ _NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
 DESIRED_ORDER = [
     "#", "File Name", "Creation Date", "IP Address", "Line Number",
     "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN", "Phone Port Speed", "PC Port Speed",
-    "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode", "Serial Number", "Model Name"
+    "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode", "Serial Number", "Model Name",
+    "CallManager 1", "CallManager 2", "CallManager 3"
 ]
 
 # Regex patterns for intelligent column detection
@@ -126,7 +130,10 @@ COLUMN_PATTERNS = {
     "Switch Hostname": re.compile(r'^[A-Za-z0-9\-_.]+\.juwin\.bayern\.de$', re.IGNORECASE),
     "Switch Port": re.compile(r'^(GigabitEthernet|FastEthernet|Ethernet)\d+/\d+/\d+$', re.IGNORECASE),
     "Switch Port Mode": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?)', re.IGNORECASE),
-    "PC Port Mode": re.compile(r'^(Voll|Half|Auto|Abwärts|Aufwärts|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE)
+    "PC Port Mode": re.compile(r'^(Voll|Half|Auto|Abwärts|Aufwärts|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE),
+    "CallManager 1": re.compile(r'^[A-Za-z0-9\-_.]+(\.[A-Za-z0-9\-_.]+)*$'),  # Hostname/FQDN pattern
+    "CallManager 2": re.compile(r'^[A-Za-z0-9\-_.]+(\.[A-Za-z0-9\-_.]+)*$'),  # Hostname/FQDN pattern
+    "CallManager 3": re.compile(r'^[A-Za-z0-9\-_.]+(\.[A-Za-z0-9\-_.]+)*$'),  # Hostname/FQDN pattern
 }
 
 
@@ -263,53 +270,75 @@ def count_unique_data_rows(file_path: str | Path | Any, opener: Optional[Any] = 
         return 0
 
 def _matches_new_header(row: List[str]) -> bool:
+    """Check if row matches known header patterns.
+    Recognizes NEW_NETSPEED_HEADERS (modern format) and legacy KNOWN_HEADERS.
+    """
     normalized = [cell.strip().lstrip("\ufeff") for cell in row]
-    if normalized == NEW_NETSPEED_HEADERS:
-        return True
-    return [cell.lower() for cell in normalized] == _NEW_HEADER_LOWER
+    col_count = len(normalized)
+
+    # Check modern format headers (NEW_NETSPEED_HEADERS - without spaces)
+    if col_count >= 16:  # Modern format
+        if normalized[:col_count] == NEW_NETSPEED_HEADERS[:col_count]:
+            return True
+        if [cell.lower() for cell in normalized] == [h.lower() for h in NEW_NETSPEED_HEADERS[:col_count]]:
+            return True
+
+    # Check legacy format headers (KNOWN_HEADERS - with spaces)
+    if col_count in KNOWN_HEADERS:
+        headers = KNOWN_HEADERS[col_count]
+        if normalized == headers:
+            return True
+        if [cell.lower() for cell in normalized] == [h.lower() for h in headers]:
+            return True
+
+    return False
 
 
 def _map_new_format_row(row: List[str]) -> Dict[str, str]:
-    """Map a row from the new 16-column netspeed export to canonical field names."""
+    """Map a row from the new netspeed export to canonical field names.
+    Automatically handles any number of columns using NEW_TO_CANONICAL_HEADER_MAP.
+    """
     cells = [c.strip() for c in row]
-    mapped: Dict[str, str] = {header: "" for header in KNOWN_HEADERS[16]}
+    mapped: Dict[str, str] = {}
+
+    # Map cells to canonical headers based on NEW_NETSPEED_HEADERS order
+    # This automatically handles 16, 19, or any future column count
     for idx, source_header in enumerate(NEW_NETSPEED_HEADERS):
         if idx >= len(cells):
             break
         canonical = NEW_TO_CANONICAL_HEADER_MAP.get(source_header)
         if canonical:
             mapped[canonical] = cells[idx]
+
     return mapped
 
 
 def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict[str, str]:
     """
     Use intelligent pattern matching to map CSV columns to the correct headers.
+    Dynamically handles different column counts (16, 19, etc.).
     This handles cases where phones without KEM modules have shifted columns.
 
     Args:
         row: List of cell values from a CSV row
+        new_format: Whether this is the new export format with explicit headers
 
     Returns:
         Dictionary mapping column names to values
     """
 
-    full_headers = KNOWN_HEADERS[16]
-    out: Dict[str, str] = {h: "" for h in full_headers}
-
     col_count = len(row)
     cells = [c.strip() for c in row]
 
-    if new_format:
+    # Modern format (>= 16 columns): Use automatic mapping via NEW_TO_CANONICAL_HEADER_MAP
+    # This handles 16, 19, and any future column counts automatically without code changes
+    if new_format or col_count >= 16:
         return _map_new_format_row(cells)
 
-    if col_count >= 16:
-        # Direkt abbilden (überschüssige ignorieren)
-        for i, h in enumerate(full_headers):
-            if i < col_count:
-                out[h] = cells[i]
-        return out
-    elif col_count == 15:
+    # Legacy formats (< 16 columns): Use explicit mapping for old files
+    out: Dict[str, str] = {}
+
+    if col_count == 15:
         mapping_legacy15 = [
             "IP Address",
             "Line Number",
@@ -434,20 +463,23 @@ def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict
 
         return out
     else:
-        # Weniger als 12 Spalten -> best effort: einfach in Reihenfolge füllen
+        # Weniger als 12 Spalten -> very old format, try to map what we can
+        # Use 11-column format as fallback
+        legacy_headers = KNOWN_HEADERS.get(11, [])
         for i, val in enumerate(cells):
-            if i < len(full_headers):
-                out[full_headers[i]] = val
-        # Fehlende KEM Felder absichern
-        if "KEM" not in out:
-            out["KEM"] = ""
-        if "KEM 2" not in out:
-            out["KEM 2"] = ""
+            if i < len(legacy_headers):
+                out[legacy_headers[i]] = val
+        # Ensure all expected fields exist
+        out.setdefault("KEM", "")
+        out.setdefault("KEM 2", "")
+        out.setdefault("Line Number", "")
     return out
 
 def generate_headers(column_count: int) -> List[str]:
     """
     Generate headers for a CSV file based on column count.
+    Modern files (>= 16 columns) use NEW_TO_CANONICAL_HEADER_MAP automatically.
+    Legacy files use KNOWN_HEADERS.
 
     Args:
         column_count: Number of columns in the CSV file
@@ -455,29 +487,27 @@ def generate_headers(column_count: int) -> List[str]:
     Returns:
         List of header names
     """
-    # Check if we have predefined headers for this column count
+    # Modern format (>= 16 columns): Use NEW_TO_CANONICAL_HEADER_MAP
+    # This automatically handles 16, 19, and any future column counts
+    if column_count >= 16:
+        headers = []
+        for i in range(min(column_count, len(NEW_NETSPEED_HEADERS))):
+            source_header = NEW_NETSPEED_HEADERS[i]
+            canonical = NEW_TO_CANONICAL_HEADER_MAP.get(source_header, source_header)
+            headers.append(canonical)
+        # If more columns than known headers, add generic names
+        while len(headers) < column_count:
+            headers.append(f"Column {len(headers) + 1}")
+        return headers
+
+    # Legacy format (< 16 columns): Use KNOWN_HEADERS
     if column_count in KNOWN_HEADERS:
         return KNOWN_HEADERS[column_count].copy()
 
-    # For unknown column counts, use known headers as base and extend
-    base_headers = []
-
-    # Use the largest known format as base
-    if column_count >= 16:
-        base_headers = KNOWN_HEADERS[16].copy()
-    elif column_count >= 14:
-        base_headers = KNOWN_HEADERS[14].copy()
-    elif column_count >= 11:
-        base_headers = KNOWN_HEADERS[11].copy()
-    else:
-        # For very small column counts, create generic headers
-        base_headers = []
-
-    # Extend with generic column names if needed
+    # Fallback for unknown legacy column counts
+    base_headers = KNOWN_HEADERS.get(11, []).copy()
     while len(base_headers) < column_count:
         base_headers.append(f"Column {len(base_headers) + 1}")
-
-    # Truncate if we have too many headers
     return base_headers[:column_count]
 
 
@@ -616,9 +646,10 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
 
             logger.info(f"Detected {most_common_count} columns for {file_path}")
 
-            # Generate headers based on detected column count (we'll use 16-column format as standard)
-            file_headers = KNOWN_HEADERS[16].copy()
-            logger.info(f"Using 16-column standard headers for {file_path}: {file_headers}")
+            # Generate headers based on detected column count
+            # Use the appropriate format based on column count, or generate dynamically
+            file_headers = generate_headers(most_common_count)
+            logger.info(f"Using {most_common_count}-column format for {file_path}: {file_headers}")
 
             # All files will be normalized to 16-column format for consistent processing
             logger.info(f"Processing {file_path} with mixed format support (per-row normalization)")
@@ -731,17 +762,19 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
             raw_rows = list(reader)
 
         if not raw_rows:
-            return KNOWN_HEADERS[16].copy(), []
+            # Return 16-column headers generated from NEW_TO_CANONICAL_HEADER_MAP
+            return generate_headers(16), []
 
         normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in raw_rows[0]] if raw_rows else []
         if _matches_new_header(normalized_first_row):
             new_format_with_header = True
             raw_rows = raw_rows[1:]
-        elif _canonicalize_header_row(normalized_first_row) == KNOWN_HEADERS[16]:
+        elif len(normalized_first_row) >= 14 and _canonicalize_header_row(normalized_first_row) == generate_headers(len(normalized_first_row)):
             raw_rows = raw_rows[1:]
 
-        # Normalize each row to 16 columns
-        headers16 = KNOWN_HEADERS[16].copy()
+        # Normalize each row to standard headers (16+ columns)
+        # For backward compatibility, return 16-column headers
+        headers16 = generate_headers(16)
         normalized_rows: List[Dict[str, Any]] = []
 
         for idx, row in enumerate(raw_rows, 1):
@@ -756,7 +789,7 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
         return headers16, normalized_rows
     except Exception as e:
         logger.error(f"Error normalizing CSV file {file_path}: {e}")
-        return KNOWN_HEADERS[16].copy(), []
+        return generate_headers(16), []
 
 
 def search_field_in_files(
