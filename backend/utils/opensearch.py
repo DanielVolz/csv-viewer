@@ -2665,15 +2665,20 @@ class OpenSearchConfig:
                     logger.info(f"[SERIAL] indices={indices_sn} body={body_sn}")
                     resp_sn = self.client.search(index=indices_sn, body=body_sn)
                     docs_sn = [h.get('_source', {}) for h in resp_sn.get('hits', {}).get('hits', [])]
-                    # Filter out archived filenames; keep only netspeed.csv and netspeed.csv.N
+                    # Filter out archived filenames; keep only netspeed.csv, netspeed_YYYYMMDD-HHMMSS.csv, and netspeed.csv.N
                     def _is_allowed_file(fn: str) -> bool:
                         if not fn:
                             return False
                         if fn == 'netspeed.csv':
                             return True
+                        # Always allow timestamp format (current file)
+                        if re.match(r'^netspeed_\d{8}-\d{6}\.csv$', fn):
+                            return True
+                        # Historical rotation files
                         if allow_historical_files_sn and fn.startswith('netspeed.csv.'):
                             suf = fn.split('netspeed.csv.', 1)[1]
                             return suf.isdigit()
+                        # Archive files
                         if allow_archive_files_sn and fn.startswith('netspeed_'):
                             return True
                         return False
