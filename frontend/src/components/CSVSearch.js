@@ -397,6 +397,7 @@ function CSVSearch() {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
+    setIsTyping(false);
     const cleaned = stripAllWhitespace(searchTerm);
     lastSearchTermRef.current = cleaned;
     const macCanonical = normalizeMacInput(cleaned);
@@ -419,6 +420,10 @@ function CSVSearch() {
   const handleClearSearch = useCallback(() => {
     setSearchTerm('');
     setHasSearched(false);
+    setIsTyping(false);
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
     if (searchFieldRef.current) {
       searchFieldRef.current.focus();
     }
@@ -520,9 +525,6 @@ function CSVSearch() {
               endAdornment: (
                 <InputAdornment position="end">
                   <Box sx={{ display: 'flex', gap: 1 }}>
-                    {isTyping && (
-                      <CircularProgress size={20} />
-                    )}
                     <Tooltip title="MAC history" placement="top" arrow>
                       <span>
                         <IconButton
@@ -687,7 +689,15 @@ function CSVSearch() {
                 variant="contained"
                 onClick={handleSearch}
                 disabled={searchLoading || !searchTerm || searchTerm.length < 3}
-                startIcon={searchLoading ? <CircularProgress size={20} /> : <Search />}
+                startIcon={
+                  searchLoading ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <CircularProgress size={20} />
+                    </Box>
+                  ) : (
+                    <Search />
+                  )
+                }
               >
                 {searchLoading ? 'Searching...' : 'Search'}
               </Button>
