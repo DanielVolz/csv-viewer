@@ -96,6 +96,11 @@ class TestFilesExtraAPI:
             assert r.headers['content-disposition'].startswith('attachment;')
             assert r.headers.get('content-length') == '123'
 
+    @patch('api.files.DESIRED_ORDER', [
+        '#', 'File Name', 'Creation Date', 'IP Address', 'Line Number',
+        'MAC Address', 'Voice VLAN', 'Switch Hostname', 'Switch IP Address',
+        'Switch Port', 'Serial Number', 'Model Name'
+    ])
     def test_columns_success(self):
         r = client.get('/api/files/columns')
         assert r.status_code == 200

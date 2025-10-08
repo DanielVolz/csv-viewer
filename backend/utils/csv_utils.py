@@ -59,48 +59,90 @@ KNOWN_HEADERS = {
     ]
 }
 
-NEW_NETSPEED_HEADERS = [
-    "IPAddress",
-    "PhoneDirectoryNumber",
-    "SerialNumber",
-    "PhoneModel",
-    "KeyExpansionModule1",
-    "KeyExpansionModule2",
-    "MACAddress1",
-    "MACAddress2",
-    "SwitchPortMode",
-    "PCPortMode",
-    "SubNetMask",
-    "VLANId",
-    "SwitchFQDN",
-    "SwitchPort",
-    "PhonePortSpeed",
-    "PCPortSpeed",
-    "CallManager1",
-    "CallManager2",
-    "CallManager3",
-]
+# Auto-generate display names by adding spaces between CamelCase words
+def _camel_to_display(name: str) -> str:
+    """Convert CamelCase to Display Name with spaces.
+    Examples:
+      IPAddress -> IP Address
+      CallManager1 -> Call Manager 1
+      MACAddress2 -> MAC Address 2
+    """
+    import re
+    # Insert space before capitals (except first char and consecutive capitals)
+    result = re.sub(r'(?<!^)(?=[A-Z][a-z])', ' ', name)
+    # Insert space before numbers
+    result = re.sub(r'(?<=[a-z])(?=[0-9])', ' ', result)
+    return result
 
-NEW_TO_CANONICAL_HEADER_MAP = {
+# Optional custom mappings for special cases (override auto-generated names)
+# Only add entries here if you want a different display name than auto-generated
+CUSTOM_DISPLAY_NAMES = {
     "IPAddress": "IP Address",
     "PhoneDirectoryNumber": "Line Number",
-    "SerialNumber": "Serial Number",
     "PhoneModel": "Model Name",
     "KeyExpansionModule1": "KEM",
     "KeyExpansionModule2": "KEM 2",
     "MACAddress1": "MAC Address",
     "MACAddress2": "MAC Address 2",
-    "SwitchPortMode": "Switch Port Mode",
-    "PCPortMode": "PC Port Mode",
     "SubNetMask": "Subnet Mask",
     "VLANId": "Voice VLAN",
     "SwitchFQDN": "Switch Hostname",
-    "SwitchPort": "Switch Port",
-    "PhonePortSpeed": "Phone Port Speed",
-    "PCPortSpeed": "PC Port Speed",
-    "CallManager1": "CallManager 1",
-    "CallManager2": "CallManager 2",
-    "CallManager3": "CallManager 3",
+    # CallManager1-3 will auto-generate as "Call Manager 1", "Call Manager 2", "Call Manager 3"
+    # Add custom entries only if you want different names
+}
+
+def _get_display_name(source_header: str) -> str:
+    """Get display name for a CSV header.
+    First checks CUSTOM_DISPLAY_NAMES, then auto-generates from CamelCase.
+    """
+    return CUSTOM_DISPLAY_NAMES.get(source_header, _camel_to_display(source_header))
+
+# Dynamically discover headers from current netspeed.csv file
+def _discover_csv_headers():
+    """Read headers from the current netspeed CSV file.
+    Falls back to empty list if file not found.
+    """
+    from utils.path_utils import collect_netspeed_files
+    from pathlib import Path
+    import csv
+
+    try:
+        # Find current netspeed file
+        csv_dirs = [Path("/app/data/netspeed"), Path("/app/data")]
+        historical_files, current_file, _ = collect_netspeed_files(csv_dirs)
+
+        if not current_file or not current_file.exists():
+            logger.debug("No current netspeed file found for header discovery")
+            return []
+
+        # Read first line to get headers
+        with open(current_file, 'r', newline='') as f:
+            content = f.read()
+            f.seek(0)
+            delimiter = ';' if ';' in content else ','
+            reader = csv.reader(f, delimiter=delimiter)
+            first_row = next(reader, [])
+
+            # Clean headers (remove BOM, whitespace)
+            headers = [h.strip().lstrip('\ufeff') for h in first_row]
+
+            # Check if first row looks like headers (not data)
+            if headers and not any(h.replace('.', '').replace(':', '').replace('+', '').isdigit() for h in headers[:3]):
+                logger.info(f"Discovered {len(headers)} headers from {current_file.name}")
+                return headers
+
+    except Exception as e:
+        logger.debug(f"Could not discover CSV headers: {e}")
+
+    return []
+
+# Discover headers dynamically, or use empty list if no file found
+NEW_NETSPEED_HEADERS = _discover_csv_headers()
+
+# Build mapping from discovered headers
+NEW_TO_CANONICAL_HEADER_MAP = {
+    header: _get_display_name(header)
+    for header in NEW_NETSPEED_HEADERS
 }
 
 _NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
