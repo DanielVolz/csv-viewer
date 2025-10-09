@@ -852,8 +852,9 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
             raw_rows = list(reader)
 
         if not raw_rows:
-            # Return 16-column headers generated from NEW_TO_CANONICAL_HEADER_MAP
-            return generate_headers(16), []
+            # Dynamically detect column count from NEW_NETSPEED_HEADERS
+            detected_col_count = len(NEW_NETSPEED_HEADERS) if NEW_NETSPEED_HEADERS else 16
+            return generate_headers(detected_col_count), []
 
         normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in raw_rows[0]] if raw_rows else []
         if _matches_new_header(normalized_first_row):
@@ -862,9 +863,10 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
         elif len(normalized_first_row) >= 14 and _canonicalize_header_row(normalized_first_row) == generate_headers(len(normalized_first_row)):
             raw_rows = raw_rows[1:]
 
-        # Normalize each row to standard headers (16+ columns)
-        # For backward compatibility, return 16-column headers
-        headers16 = generate_headers(16)
+        # Dynamically determine column count from discovered headers
+        # This supports 16, 19, and any future column counts automatically
+        detected_col_count = len(NEW_NETSPEED_HEADERS) if NEW_NETSPEED_HEADERS else 16
+        headers_dynamic = generate_headers(detected_col_count)
         normalized_rows: List[Dict[str, Any]] = []
 
         for idx, row in enumerate(raw_rows, 1):
@@ -876,10 +878,12 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
             row_dict = intelligent_column_mapping(cleaned_row, new_format=new_format_with_header)
             normalized_rows.append(row_dict)
 
-        return headers16, normalized_rows
+        return headers_dynamic, normalized_rows
     except Exception as e:
         logger.error(f"Error normalizing CSV file {file_path}: {e}")
-        return generate_headers(16), []
+        # Return dynamically detected column count on error
+        detected_col_count = len(NEW_NETSPEED_HEADERS) if NEW_NETSPEED_HEADERS else 16
+        return generate_headers(detected_col_count), []
 
 
 def search_field_in_files(

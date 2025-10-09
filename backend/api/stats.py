@@ -840,6 +840,8 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                         date_filters.append({"range": {"date": {"gte": start_dt.strftime("%Y-%m-%d"), "lte": end_dt.strftime("%Y-%m-%d")}}})
                     except Exception:
                         pass
+                # Critical fix: Group by file first, then select best file per date in post-processing
+                # This avoids summing duplicate file versions for same date
                 body_series = {
                     "size": 0,
                     "query": {"bool": {"filter": ([
@@ -849,25 +851,31 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                         "by_date": {
                             "date_histogram": {"field": "date", "calendar_interval": "1d"},
                             "aggs": {
-                                "by_city": {
-                                    "terms": {"script": {"source": "doc['key'].value.substring(0,3)"}, "size": len(selected_keys)},
+                                # Group by file FIRST to separate different file versions
+                                "by_file": {
+                                    "terms": {"field": "file", "size": 50},
                                     "aggs": {
-                                        "by_key": {
-                                            "terms": {"field": "key", "size": 10000},
+                                        "by_city": {
+                                            "terms": {"script": {"source": "doc['key'].value.substring(0,3)"}, "size": len(selected_keys)},
                                             "aggs": {
-                                                "mPhones": {"max": {"field": "totalPhones"}},
-                                                "mSwitches": {"max": {"field": "totalSwitches"}},
-                                                "mKEM": {"max": {"field": "phonesWithKEM"}},
+                                                "by_key": {
+                                                    "terms": {"field": "key", "size": 10000},
+                                                    "aggs": {
+                                                        "mPhones": {"max": {"field": "totalPhones"}},
+                                                        "mSwitches": {"max": {"field": "totalSwitches"}},
+                                                        "mKEM": {"max": {"field": "phonesWithKEM"}},
+                                                    }
+                                                },
+                                                "cityPhones": {"sum_bucket": {"buckets_path": "by_key>mPhones"}},
+                                                "citySwitches": {"sum_bucket": {"buckets_path": "by_key>mSwitches"}},
+                                                "cityKEM": {"sum_bucket": {"buckets_path": "by_key>mKEM"}},
                                             }
                                         },
-                                        "cityPhones": {"sum_bucket": {"buckets_path": "by_key>mPhones"}},
-                                        "citySwitches": {"sum_bucket": {"buckets_path": "by_key>mSwitches"}},
-                                        "cityKEM": {"sum_bucket": {"buckets_path": "by_key>mKEM"}},
+                                        "sumPhones": {"sum_bucket": {"buckets_path": "by_city>cityPhones"}},
+                                        "sumSwitches": {"sum_bucket": {"buckets_path": "by_city>citySwitches"}},
+                                        "sumKEM": {"sum_bucket": {"buckets_path": "by_city>cityKEM"}},
                                     }
-                                },
-                                "sumPhones": {"sum_bucket": {"buckets_path": "by_city>cityPhones"}},
-                                "sumSwitches": {"sum_bucket": {"buckets_path": "by_city>citySwitches"}},
-                                "sumKEM": {"sum_bucket": {"buckets_path": "by_city>cityKEM"}},
+                                }
                             }
                         }
                     }
@@ -900,6 +908,55 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
             r_series = client.search(index=opensearch_config.stats_loc_index, body=body_series)
             buckets = r_series.get("aggregations", {}).get("by_date", {}).get("buckets", [])
             by_date: Dict[str, Dict] = {}
+
+            # Helper function to select best file from multiple versions per date
+            def select_best_file(file_buckets):
+                """
+                Prefer netspeed.csv (current), else highest numbered rotation (netspeed.csv.0 > netspeed.csv.29).
+                Returns tuple: (file_name, metrics_dict)
+                """
+                if not file_buckets:
+                    return None, {"totalPhones": 0, "totalSwitches": 0, "phonesWithKEM": 0}
+
+                # Check if netspeed.csv exists
+                for fb in file_buckets:
+                    if fb.get("key") == "netspeed.csv":
+                        return "netspeed.csv", {
+                            "totalPhones": int(fb.get("sumPhones", {}).get("value", 0) or 0),
+                            "totalSwitches": int(fb.get("sumSwitches", {}).get("value", 0) or 0),
+                            "phonesWithKEM": int(fb.get("sumKEM", {}).get("value", 0) or 0),
+                        }
+
+                # Fall back to numbered files - prefer lowest number (most recent rotation)
+                # netspeed.csv.0 is newest rotation, netspeed.csv.29 is oldest
+                numbered_files = []
+                for fb in file_buckets:
+                    fname = fb.get("key", "")
+                    if fname.startswith("netspeed.csv."):
+                        try:
+                            num = int(fname.split(".")[-1])
+                            numbered_files.append((num, fname, fb))
+                        except (ValueError, IndexError):
+                            continue
+
+                if numbered_files:
+                    # Sort by number ascending (0 is best)
+                    numbered_files.sort(key=lambda x: x[0])
+                    _, fname, fb = numbered_files[0]
+                    return fname, {
+                        "totalPhones": int(fb.get("sumPhones", {}).get("value", 0) or 0),
+                        "totalSwitches": int(fb.get("sumSwitches", {}).get("value", 0) or 0),
+                        "phonesWithKEM": int(fb.get("sumKEM", {}).get("value", 0) or 0),
+                    }
+
+                # Fallback: use first file if no recognized pattern
+                fb = file_buckets[0]
+                return fb.get("key"), {
+                    "totalPhones": int(fb.get("sumPhones", {}).get("value", 0) or 0),
+                    "totalSwitches": int(fb.get("sumSwitches", {}).get("value", 0) or 0),
+                    "phonesWithKEM": int(fb.get("sumKEM", {}).get("value", 0) or 0),
+                }
+
             for b in buckets:
                 d = b.get("key_as_string")
                 if not d:
@@ -907,11 +964,12 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                 doc_count = b.get("doc_count")
                 if doc_count is not None and not int(doc_count or 0):
                     continue
-                by_date[d] = {"file": None, "date": d, "metrics": {
-                    "totalPhones": int(b.get("sumPhones", {}).get("value", 0) or 0),
-                    "totalSwitches": int(b.get("sumSwitches", {}).get("value", 0) or 0),
-                    "phonesWithKEM": int(b.get("sumKEM", {}).get("value", 0) or 0),
-                }}
+
+                # Extract file buckets from aggregation
+                file_buckets = b.get("by_file", {}).get("buckets", [])
+                best_file, metrics = select_best_file(file_buckets)
+
+                by_date[d] = {"file": best_file, "date": d, "metrics": metrics}
             series: List[Dict] = []
             if by_date:
                 from datetime import datetime as _dt, timedelta as _td
@@ -928,7 +986,7 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                         current = by_date[dstr]
                     if current is not None:
                         series.append({
-                            "file": None,
+                            "file": current.get("file"),
                             "date": dstr,
                             "metrics": current.get("metrics", {}),
                         })
@@ -936,13 +994,14 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
                 if eff_limit and len(series) > eff_limit:
                     series = series[:eff_limit]
 
+            label_str = (group or "city").lower()
             result = {
                 "success": True,
-                "message": f"Computed {len(series)} top-{label} timeline points (aggregate)",
+                "message": f"Computed {len(series)} top-{label_str} timeline points (aggregate)",
                 "series": series,
                 "selected": selected_keys,
                 "mode": "aggregate",
-                "group": (group or "city").lower()
+                "group": label_str
             }
         else:
             # Per-group series
