@@ -86,14 +86,30 @@ Caching behavior and invalidation
 ## Project-Specific Patterns
 
 ### File Naming Convention
-- `netspeed.csv` - Current/active file (always indexed first)
-- `netspeed.csv.0`, `netspeed.csv.1` - Historical files
-- `netspeed.csv_bak` - Backup files
+- **Modern files**: `netspeed_YYYYMMDD-HHMMSS.csv` (with timestamp, ALWAYS has headers)
+- **Legacy files**: `netspeed.csv.0-29` (no headers, variable column counts 11-15)
+- Legacy files archived after: **2025-10-27**
 
-### CSV Format Detection
-The system auto-detects two CSV formats:
-- **Old format**: 11 columns
-- **New format**: 14 columns
+### CSV Format Handling - CRITICAL ARCHITECTURE
+
+The system uses **TWO COMPLETELY SEPARATE approaches** for modern vs legacy files:
+
+#### MODERN Files (with timestamp, >= 16 columns)
+- **Fully Automatic**: Headers read from first row of EACH file
+- **No code changes needed**: New columns automatically recognized
+- **No container restart needed**: Headers detected per-file at read time
+- **Implementation**: `_map_modern_format_row()` + `_read_headers_from_file()`
+- **Key principle**: Never cache headers, always read from file
+
+#### LEGACY Files (no timestamp, < 16 columns)
+- **Pattern Detection**: Detects fields by analyzing data (IP, MAC, hostname patterns)
+- **Temporary Solution**: Code marked for removal after 2025-10-27
+- **Implementation**: `_map_legacy_format_with_pattern_detection()`
+- **Known formats**: 11, 14, 15 columns (defined in `KNOWN_HEADERS`)
+- **Purpose**: Bridge until all legacy files archived
+
+**NEVER mix these approaches!** Modern files must NEVER use pattern detection.
+Legacy files must NEVER use header-based mapping.
 
 Handle both in `utils/csv_utils.py` with format detection logic.
 

@@ -3,8 +3,6 @@ from datetime import datetime
 from typing import Optional
 import logging
 
-from utils.csv_utils import NEW_NETSPEED_HEADERS
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -108,34 +106,59 @@ class FileModel(BaseModel):
             date = None
 
         # Determine format based on file content or name patterns
-        new_header_lower = [h.lower() for h in NEW_NETSPEED_HEADERS]
-        format_type = "new"
+        # MODERN files: Have timestamp in filename OR have headers in first row
+        # LEGACY files: No timestamp, no headers (netspeed.csv.0-29)
+        format_type = "new"  # Default to modern
 
         try:
-            with open(file_path, 'r', newline='') as f:
-                content = f.read()
-                f.seek(0)
+            # Check if filename has timestamp pattern (always modern)
+            if NETSPEED_TIMESTAMP_PATTERN and NETSPEED_TIMESTAMP_PATTERN.match(name):
+                format_type = "new"
+                local_logger.debug(f"Detected modern format (timestamp) for {name}")
+            # Check if it's a numbered legacy file (netspeed.csv.N)
+            elif name.startswith("netspeed.csv.") and name.split(".")[-1].isdigit():
+                format_type = "old"
+                local_logger.debug(f"Detected legacy format (numbered) for {name}")
+            else:
+                # Check first row to determine if it has headers
+                with open(file_path, 'r', newline='') as f:
+                    content = f.read()
+                    f.seek(0)
 
-                delimiter = ';' if ';' in content else ','
-                local_logger.debug(f"Detected delimiter '{delimiter}' for file {file_path}")
+                    delimiter = ';' if ';' in content else ','
+                    local_logger.debug(f"Detected delimiter '{delimiter}' for file {file_path}")
 
-                csv_reader = csv.reader(f, delimiter=delimiter)
-                first_row = next(csv_reader, [])
-                normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in first_row]
-                header_lower = [cell.lower() for cell in normalized_first_row]
+                    csv_reader = csv.reader(f, delimiter=delimiter)
+                    first_row = next(csv_reader, [])
+                    normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in first_row]
 
-                if not normalized_first_row:
-                    format_type = "new"
-                elif header_lower == new_header_lower:
-                    format_type = "new"
-                elif len(normalized_first_row) == len(NEW_NETSPEED_HEADERS):
-                    format_type = "new"
-                else:
-                    format_type = "old"
+                    if not normalized_first_row:
+                        format_type = "new"
+                    else:
+                        # Check if first row looks like headers (not data)
+                        # Modern headers are CamelCase (IPAddress, PhoneModel)
+                        # Data rows start with IP address or phone number
+                        first_cells = normalized_first_row[:3]
+                        has_data_pattern = any(
+                            cell.replace('.', '').replace(':', '').replace('+', '').isdigit()
+                            for cell in first_cells
+                        )
+
+                        if has_data_pattern:
+                            # First row looks like data -> legacy format (no headers)
+                            format_type = "old"
+                            local_logger.debug(f"Detected legacy format (no headers) for {name}")
+                        else:
+                            # First row looks like headers -> modern format
+                            format_type = "new"
+                            local_logger.debug(f"Detected modern format (has headers) for {name}")
         except Exception as e:
             local_logger.error(f"Error detecting format for {file_path}: {e}")
-            if name != "netspeed.csv":
+            # Default to old format for safety if we can't determine
+            if name.startswith("netspeed.csv.") or name != "netspeed.csv":
                 format_type = "old"
+            else:
+                format_type = "new"
 
         return cls(
             name=name,

@@ -9,7 +9,7 @@ import subprocess
 
 from models.file import FileModel
 from config import settings, get_settings
-from utils.csv_utils import read_csv_file, DESIRED_ORDER, count_unique_data_rows
+from utils.csv_utils import read_csv_file, DEFAULT_DISPLAY_ORDER, count_unique_data_rows
 from tasks.tasks import index_all_csv_files, app
 from utils.index_state import load_state, save_state
 from celery import current_app
@@ -885,7 +885,8 @@ async def get_available_columns():
         List of column definitions with id, label, and default enabled state
     """
     try:
-        # Use DESIRED_ORDER from csv_utils which defines the current 16-column format
+        # Use DEFAULT_DISPLAY_ORDER from csv_utils which defines the standard column order
+        # For modern files with headers, columns are dynamically built from CSV headers
         available_columns = []
 
         # Define core columns that are enabled by default
@@ -909,9 +910,9 @@ async def get_available_columns():
             "MAC Address 2": "MAC Addr. 2",
         }
 
-        # Build column definitions from DESIRED_ORDER
-        # New columns will automatically appear here when added to DESIRED_ORDER
-        for column_id in DESIRED_ORDER:
+        # Build column definitions from DEFAULT_DISPLAY_ORDER
+        # This provides fallback column order for legacy files
+        for column_id in DEFAULT_DISPLAY_ORDER:
             # Skip hidden/internal columns
             if column_id in hidden_columns:
                 continue

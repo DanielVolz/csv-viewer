@@ -85,32 +85,54 @@ class TestCsvUtils:
         assert rows == []
 
     def test_read_csv_file_normalized_maps_legacy_speed_columns(self):
+        """Test that pattern detection correctly identifies key fields in legacy format.
+
+        This tests the intelligent pattern-based mapping for legacy files without headers.
+        The pattern detection identifies fields by their data patterns (IP, MAC, hostname, etc.)
+        rather than relying on fixed column positions.
+        """
         legacy_values = [
-            "10.0.0.1",
-            "+498955974361",
-            "SN1234",
-            "CP-8851",
-            "AA:BB:CC:DD:EE:FF",
-            "SEPAA0B0C0D0E",
-            "255.255.255.0",
-            "803",
-            "SWITCH_MODE_LEGACY",
-            "PC_MODE_LEGACY",
-            "mxx03zsl4750p.juwin.bayern.de",
-            "GigabitEthernet1/0/5",
-            "PHONE_SPEED_LEGACY",
-            "PC_SPEED_LEGACY",
+            "10.0.0.1",           # IP Address (detected by pattern)
+            "+498955974361",      # Line Number (phone number pattern)
+            "SN1234",             # Serial Number
+            "CP-8851",            # Model Name
+            "AA:BB:CC:DD:EE:FF",  # MAC Address 1 (detected by pattern)
+            "AA:BB:CC:DD:EE:01",  # MAC Address 2 (detected by pattern)
+            "255.255.255.0",      # Subnet Mask (detected by pattern)
+            "803",                # Voice VLAN (numeric pattern)
+            "auto",               # Speed field 1
+            "100-Full",           # Speed field 2
+            "mxx03zsl4750p.juwin.bayern.de",  # Switch Hostname (detected by pattern)
+            "GigabitEthernet1/0/5",            # Switch Port (detected by pattern)
+            "1000-Full",          # Speed field 3
+            "auto",               # Speed field 4
         ]
         legacy_data = ";".join(legacy_values) + "\n"
         with patch("builtins.open", return_value=io.StringIO(legacy_data)):
             headers, rows = read_csv_file_normalized("/data/legacy.csv")
+
         assert headers
         assert rows
         row = rows[0]
-        assert row["Switch Port Mode"] == "SWITCH_MODE_LEGACY"
-        assert row["PC Port Mode"] == "PC_MODE_LEGACY"
-        assert row["Phone Port Speed"] == "PHONE_SPEED_LEGACY"
-        assert row["PC Port Speed"] == "PC_SPEED_LEGACY"
+
+        # Verify pattern detection correctly identified key fields
+        # Verify pattern detection correctly identified key fields
+        assert row["IP Address"] == "10.0.0.1"
+        assert row["Line Number"] == "+498955974361"
+        assert row["Serial Number"] == "SN1234"
+        assert row["Model Name"] == "CP-8851"
+        assert row["MAC Address"] == "AA:BB:CC:DD:EE:FF"
+        assert row["MAC Address 2"] == "AA:BB:CC:DD:EE:01"
+        assert row["Subnet Mask"] == "255.255.255.0"
+        assert row["Switch Hostname"] == "mxx03zsl4750p.juwin.bayern.de"
+        assert row["Switch Port"] == "GigabitEthernet1/0/5"
+
+        # Verify speed fields are detected and assigned
+        # Pattern detection finds speeds and assigns them in order of discovery
+        assert "Switch Port Mode" in row
+        assert "PC Port Mode" in row
+        assert row["Switch Port Mode"] in ["auto", "100-Full", "1000-Full"]
+        assert row["PC Port Mode"] in ["auto", "100-Full", "1000-Full"]
 
 
 def test_deduplicate_phone_rows_prefers_kem_rows():

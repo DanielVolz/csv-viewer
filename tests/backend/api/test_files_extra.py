@@ -96,7 +96,7 @@ class TestFilesExtraAPI:
             assert r.headers['content-disposition'].startswith('attachment;')
             assert r.headers.get('content-length') == '123'
 
-    @patch('api.files.DESIRED_ORDER', [
+    @patch('api.files.DEFAULT_DISPLAY_ORDER', [
         '#', 'File Name', 'Creation Date', 'IP Address', 'Line Number',
         'MAC Address', 'Voice VLAN', 'Switch Hostname', 'Switch IP Address',
         'Switch Port', 'Serial Number', 'Model Name'

@@ -40,8 +40,9 @@ def _canonicalize_header_row(headers: List[str]) -> List[str]:
     return canonical
 
 
-# Legacy KNOWN_HEADERS kept only for old files (< 16 columns)
-# Files with >= 16 columns use automatic detection via NEW_NETSPEED_HEADERS
+# LEGACY KNOWN_HEADERS - TEMPORARY (remove after 2025-10-27)
+# Used only for legacy files without headers (netspeed.csv.0-29)
+# Modern files (with timestamp) read headers from first row
 KNOWN_HEADERS = {
     11: [  # OLD format
         "IP Address", "Serial Number", "Model Name", "MAC Address", "MAC Address 2",
@@ -97,115 +98,77 @@ def _get_display_name(source_header: str) -> str:
     """
     return CUSTOM_DISPLAY_NAMES.get(source_header, _camel_to_display(source_header))
 
-# Cache for discovered headers (lazy loading to avoid slow imports in tests)
-_DISCOVERED_HEADERS_CACHE = None
+# ============================================================================
+# MODERN FORMAT: Header-based (fully automatic for any column count)
+# ============================================================================
 
-# Dynamically discover headers from current netspeed.csv file
-def _discover_csv_headers():
-    """Read headers from the current netspeed CSV file.
-    Falls back to empty list if file not found.
-    Uses caching to avoid repeated file I/O.
+def _read_headers_from_file(file_path: str, delimiter: str = ',') -> List[str]:
+    """Read headers from a CSV file's first row.
 
-    Performance: Fast path that directly checks known locations instead of
-    calling collect_netspeed_files() which does expensive filesystem operations.
+    This is used for MODERN files (with timestamps) that always have headers.
+    Makes the system truly automatic - any new column in the CSV will be
+    automatically recognized without code changes or container restarts.
+
+    Args:
+        file_path: Path to the CSV file
+        delimiter: CSV delimiter (comma or semicolon)
+
+    Returns:
+        List of header names from first row, or empty list if not found
     """
-    global _DISCOVERED_HEADERS_CACHE
-
-    # Return cached result if available
-    if _DISCOVERED_HEADERS_CACHE is not None:
-        return _DISCOVERED_HEADERS_CACHE
-
-    from pathlib import Path
-    import csv
-
-    # Fast path: Check most common locations directly (avoids expensive glob operations)
-    candidate_paths = [
-        Path("/app/data/netspeed/netspeed.csv"),
-        Path("/app/data/netspeed.csv"),
-    ]
-
-    # Also check for timestamped files in common locations (newest first)
     try:
-        netspeed_dir = Path("/app/data/netspeed")
-        if netspeed_dir.exists() and netspeed_dir.is_dir():
-            # Get timestamped files, sorted by name (YYYYMMDD-HHMMSS pattern sorts correctly)
-            timestamped = sorted(
-                [f for f in netspeed_dir.glob("netspeed_*.csv") if f.is_file()],
-                reverse=True  # Newest first
-            )
-            candidate_paths = timestamped[:1] + candidate_paths  # Check newest timestamped file first
-    except Exception:
-        pass
+        with open(file_path, 'r', newline='') as f:
+            reader = csv.reader(f, delimiter=delimiter)
+            first_row = next(reader, [])
 
-    try:
-        for current_file in candidate_paths:
-            if not current_file.exists() or not current_file.is_file():
-                continue
+            # Clean headers (remove BOM, whitespace)
+            headers = [h.strip().lstrip('\ufeff') for h in first_row]
 
-            # Read first line to get headers
-            with open(current_file, 'r', newline='') as f:
-                # Quick delimiter detection
-                first_bytes = f.read(1024)
-                f.seek(0)
-                delimiter = ';' if ';' in first_bytes else ','
-
-                reader = csv.reader(f, delimiter=delimiter)
-                first_row = next(reader, [])
-
-                # Clean headers (remove BOM, whitespace)
-                headers = [h.strip().lstrip('\ufeff') for h in first_row]
-
-                # Check if first row looks like headers (not data)
-                if headers and not any(h.replace('.', '').replace(':', '').replace('+', '').isdigit() for h in headers[:3]):
-                    logger.info(f"Discovered {len(headers)} headers from {current_file.name}")
-                    _DISCOVERED_HEADERS_CACHE = headers
-                    return headers
-
+            # Verify first row looks like headers (not data)
+            if headers and not any(h.replace('.', '').replace(':', '').replace('+', '').isdigit() for h in headers[:3]):
+                return headers
     except Exception as e:
-        logger.debug(f"Could not discover CSV headers: {e}")
+        logger.debug(f"Could not read headers from {file_path}: {e}")
 
-    _DISCOVERED_HEADERS_CACHE = []
     return []
 
-# Discover headers with caching (called once at module import, but fast due to cache)
-NEW_NETSPEED_HEADERS = _discover_csv_headers()
+def _build_display_order_from_headers(source_headers: List[str]) -> List[str]:
+    """Build display order from CSV headers.
 
-# Build mapping from discovered headers
-NEW_TO_CANONICAL_HEADER_MAP = {
-    header: _get_display_name(header)
-    for header in NEW_NETSPEED_HEADERS
-}
+    For MODERN files: Uses actual headers from the file.
+    For LEGACY files: Uses KNOWN_HEADERS mappings.
 
-_NEW_HEADER_LOWER = [h.lower() for h in NEW_NETSPEED_HEADERS]
+    Args:
+        source_headers: Headers from CSV file (CamelCase for modern, spaces for legacy)
 
-# Define the desired display order for columns (what Frontend should show)
-# Special columns (#, File Name, Creation Date) are added first
-# Then all canonical headers from NEW_NETSPEED_HEADERS in their CSV order
-# KEM columns are excluded from display (merged into Line Number internally)
-def _build_desired_order():
-    """Build DESIRED_ORDER dynamically from NEW_NETSPEED_HEADERS + NEW_TO_CANONICAL_HEADER_MAP.
-    This ensures new columns are automatically included when added to NEW_NETSPEED_HEADERS.
-
-    Order is preserved from NEW_NETSPEED_HEADERS to match CSV column order.
+    Returns:
+        List of column names in display order
     """
     # Start with special metadata columns
     order = ["#", "File Name", "Creation Date"]
 
-    # Add all CSV columns in their original order from NEW_NETSPEED_HEADERS
-    # Exclude KEM columns (they're merged into Line Number for display)
+    # Exclude KEM columns (merged into Line Number for display)
     excluded_from_display = {"KEM", "KEM 2"}
 
-    for source_header in NEW_NETSPEED_HEADERS:
-        canonical_name = NEW_TO_CANONICAL_HEADER_MAP.get(source_header)
+    # Convert source headers to display names
+    for header in source_headers:
+        canonical_name = _get_display_name(header)
         if canonical_name and canonical_name not in excluded_from_display:
             order.append(canonical_name)
 
     return order
 
-DESIRED_ORDER = _build_desired_order()
+# Default display order for legacy files (used as fallback)
+DEFAULT_DISPLAY_ORDER = [
+    "#", "File Name", "Creation Date",
+    "IP Address", "Line Number", "Serial Number", "Model Name",
+    "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN",
+    "Switch Port Mode", "PC Port Mode", "Switch Hostname", "Switch Port",
+    "Phone Port Speed", "PC Port Speed"
+]
 
-# COLUMN_PATTERNS and detect_column_type() were removed as they're unused
-# Column detection now happens automatically via NEW_NETSPEED_HEADERS discovery
+# MODERN format: Column detection happens automatically by reading headers from CSV
+# LEGACY format: Uses pattern detection (see _map_legacy_format_with_pattern_detection)
 
 
 def _normalize_field(value: Any, uppercase: bool = False) -> str:
@@ -317,21 +280,21 @@ def count_unique_data_rows(file_path: str | Path | Any, opener: Optional[Any] = 
         logger.debug("Failed to count unique rows for %s: %s", file_path, exc)
         return 0
 
-def _matches_new_header(row: List[str]) -> bool:
-    """Check if row matches known header patterns.
-    Recognizes NEW_NETSPEED_HEADERS (modern format) and legacy KNOWN_HEADERS.
+def _is_header_row(row: List[str]) -> bool:
+    """Check if row looks like headers (not data).
+
+    Modern files: Headers are CamelCase without spaces (IPAddress, PhoneModel, etc.)
+    Legacy files: Headers have spaces (IP Address, Phone Model, etc.)
+
+    Returns True if row appears to be headers.
     """
+    if not row:
+        return False
+
     normalized = [cell.strip().lstrip("\ufeff") for cell in row]
     col_count = len(normalized)
 
-    # Check modern format headers (NEW_NETSPEED_HEADERS - without spaces)
-    if col_count >= 16:  # Modern format
-        if normalized[:col_count] == NEW_NETSPEED_HEADERS[:col_count]:
-            return True
-        if [cell.lower() for cell in normalized] == [h.lower() for h in NEW_NETSPEED_HEADERS[:col_count]]:
-            return True
-
-    # Check legacy format headers (KNOWN_HEADERS - with spaces)
+    # Check if it matches known legacy header patterns
     if col_count in KNOWN_HEADERS:
         headers = KNOWN_HEADERS[col_count]
         if normalized == headers:
@@ -339,216 +302,259 @@ def _matches_new_header(row: List[str]) -> bool:
         if [cell.lower() for cell in normalized] == [h.lower() for h in headers]:
             return True
 
+    # For modern files: Check if cells look like CamelCase headers (not data)
+    # Data rows typically start with IP address, phone number, or serial number
+    # Headers contain letters and no dots/colons/plus signs in first few cells
+    first_cells = normalized[:3]
+    if not any(h.replace('.', '').replace(':', '').replace('+', '').isdigit() for h in first_cells):
+        # Looks like headers - contains mostly letters
+        return True
+
     return False
 
 
-def _map_new_format_row(row: List[str]) -> Dict[str, str]:
-    """Map a row from the new netspeed export to canonical field names.
-    Automatically handles any number of columns using NEW_TO_CANONICAL_HEADER_MAP.
+def _map_modern_format_row(row: List[str], headers: List[str]) -> Dict[str, str]:
+    """Map a row from MODERN netspeed files to canonical field names.
+
+    MODERN files always have headers in the first row.
+    This function makes the system fully automatic - any new column in the CSV
+    will be recognized without code changes.
+
+    Args:
+        row: Data cells from CSV row
+        headers: Header names from first row of CSV file
+
+    Returns:
+        Dictionary mapping canonical field names to values
     """
     cells = [c.strip() for c in row]
     mapped: Dict[str, str] = {}
 
-    # Map cells to canonical headers based on NEW_NETSPEED_HEADERS order
-    # This automatically handles 16, 19, or any future column count
-    for idx, source_header in enumerate(NEW_NETSPEED_HEADERS):
+    # Map each cell to its canonical name based on CSV headers
+    # This automatically handles ANY column count and ANY new columns
+    for idx, source_header in enumerate(headers):
         if idx >= len(cells):
             break
-        canonical = NEW_TO_CANONICAL_HEADER_MAP.get(source_header)
+        canonical = _get_display_name(source_header)
         if canonical:
             mapped[canonical] = cells[idx]
 
     return mapped
 
 
-def intelligent_column_mapping(row: List[str], new_format: bool = False) -> Dict[str, str]:
+def intelligent_column_mapping(row: List[str], headers: Optional[List[str]] = None) -> Dict[str, str]:
     """
-    Use intelligent pattern matching to map CSV columns to the correct headers.
-    Dynamically handles different column counts (16, 19, etc.).
-    This handles cases where phones without KEM modules have shifted columns.
+    Map CSV row to canonical field names.
+
+    MODERN files (with headers): Uses header-based mapping - fully automatic.
+    LEGACY files (no headers): Uses pattern detection - temporary solution.
 
     Args:
         row: List of cell values from a CSV row
-        new_format: Whether this is the new export format with explicit headers
+        headers: Headers from CSV file (for modern files with headers)
+                 If None, assumes legacy format without headers
+
+    Returns:
+        Dictionary mapping canonical field names to values
+    """
+    col_count = len(row)
+    cells = [c.strip() for c in row]
+
+    # MODERN format: Has headers, fully automatic
+    if headers:
+        return _map_modern_format_row(cells, headers)
+
+    # LEGACY format: No headers, use pattern detection
+    # TODO: Remove this after 2025-10-27 when legacy files are archived
+    return _map_legacy_format_with_pattern_detection(cells)
+
+
+# ============================================================================
+# LEGACY FORMAT: Pattern-based detection (TEMPORARY - remove after 2025-10-27)
+# ============================================================================
+# Legacy files have NO headers and variable column counts (11-15 columns).
+# After 2025-10-27, these files will only exist in archives.
+# This entire section can be removed after that date.
+# ============================================================================
+
+def _map_legacy_format_with_pattern_detection(cells: List[str]) -> Dict[str, str]:
+    """
+    Map LEGACY format rows using pattern detection.
+
+    LEGACY files (netspeed.csv.0-29) have no headers and inconsistent columns.
+    This function detects field types by analyzing data patterns.
+
+    TEMPORARY: Remove this function after 2025-10-27 when legacy files are archived.
+
+    Args:
+        cells: List of cell values from a CSV row
 
     Returns:
         Dictionary mapping column names to values
     """
-
-    col_count = len(row)
-    cells = [c.strip() for c in row]
-
-    # Modern format (>= 16 columns): Use automatic mapping via NEW_TO_CANONICAL_HEADER_MAP
-    # This handles 16, 19, and any future column counts automatically without code changes
-    if new_format or col_count >= 16:
-        return _map_new_format_row(cells)
-
-    # Legacy formats (< 16 columns): Use explicit mapping for old files
+    col_count = len(cells)
     out: Dict[str, str] = {}
 
+    # Helper functions to detect field types based on data patterns
+    def is_ip_address(s: str) -> bool:
+        if not s or s.count('.') != 3:
+            return False
+        try:
+            parts = s.split('.')
+            return len(parts) == 4 and all(0 <= int(p) <= 255 for p in parts)
+        except (ValueError, AttributeError):
+            return False
+
+    def is_phone_number(s: str) -> bool:
+        return s.startswith('+') and len(s) > 8 and s[1:].replace(' ', '').isdigit()
+
+    def is_mac_address(s: str) -> bool:
+        s_clean = s.replace(':', '').replace('-', '').upper()
+        return len(s_clean) == 12 and all(c in '0123456789ABCDEF' for c in s_clean)
+
+    def is_hostname(s: str) -> bool:
+        s_lower = s.lower()
+        return 'zsl' in s_lower and ('.juwin.bayern.de' in s_lower or '.de' in s_lower)
+
+    def is_port_name(s: str) -> bool:
+        s_lower = s.lower()
+        return 'gigabit' in s_lower or 'ethernet' in s_lower or s_lower.startswith('gi')
+
+    def is_subnet_mask(s: str) -> bool:
+        return s.startswith('255.') and s.count('.') == 3
+
+    def is_vlan(s: str) -> bool:
+        try:
+            return s.isdigit() and 1 <= int(s) <= 4094
+        except:
+            return False
+
+    def is_speed(s: str) -> bool:
+        s_lower = s.lower()
+        return ('auto' in s_lower or 'voll' in s_lower or 'full' in s_lower or
+                'half' in s_lower or 'down' in s_lower or 'abwärts' in s_lower or
+                any(str(speed) in s for speed in ['10', '100', '1000']))
+
+    # Special handling for 15-column format (has explicit KEM column)
     if col_count == 15:
         mapping_legacy15 = [
-            "IP Address",
-            "Line Number",
-            "Serial Number",
-            "Model Name",
-            "KEM",
-            "MAC Address",
-            "MAC Address 2",
-            "Subnet Mask",
-            "Voice VLAN",
-            "Switch Port Mode",
-            "PC Port Mode",
-            "Switch Hostname",
-            "Switch Port",
-            "Phone Port Speed",
-            "PC Port Speed",
+            "IP Address", "Line Number", "Serial Number", "Model Name", "KEM",
+            "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN",
+            "Switch Port Mode", "PC Port Mode", "Switch Hostname", "Switch Port",
+            "Phone Port Speed", "PC Port Speed"
         ]
         for idx, header in enumerate(mapping_legacy15):
-            if idx >= col_count:
-                break
-            out[header] = cells[idx]
-        if not out.get("KEM 2"):
-            out["KEM 2"] = ""
-        return out
-    elif col_count >= 13:  # 13 oder 14 Spalten
-        # Erkennung von defekten CP-8832 Zeilen anhand der Datenstruktur
-        # Normale Zeile: Spalte 5 und 6 sind MAC-Adressen, Spalte 10 ist Switch Hostname
-        # Defekte Zeile: Spalte 5 und 6 sind MAC-Adressen, aber Spalte 9 ist Switch Hostname (verschoben)
-
-        # Prüfe ob Spalte 9 wie ein Switch Hostname aussieht (enthält Domain)
-        is_defective_cp8832 = False
-        if col_count >= 10:
-            col9_content = cells[9] if len(cells) > 9 else ""
-            col10_content = cells[10] if len(cells) > 10 else ""
-
-            # Defekte Zeile wenn Spalte 9 einen Switch Hostname enthält
-            # (Format: xxxZSL####P.juwin.bayern.de)
-            is_defective_cp8832 = (
-                "ZSL" in col9_content and ".juwin.bayern.de" in col9_content
-            )
-
-        if is_defective_cp8832:
-            # DEFEKTE CP-8832 Zeile: PC Port Speed fehlt, daher ist alles ab Switch Hostname verschoben
-            # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, Speed1, SwitchHost, SwitchPort, SpeedSw, [eventuell leer]
-            mapping_defective = [
-                "IP Address",        # 0
-                "Line Number",       # 1
-                "Serial Number",     # 2
-                "Model Name",        # 3
-                "MAC Address",       # 4
-                "MAC Address 2",     # 5
-                "Subnet Mask",       # 6
-                "Voice VLAN",        # 7
-                "Phone Port Speed",  # 8
-                "Switch Hostname",   # 9  ← Hierher verschoben!
-                "Switch Port",       # 10
-                "Switch Port Mode"   # 11
-            ]
-
-            for i, header in enumerate(mapping_defective):
-                if i < min(col_count, len(mapping_defective)):
-                    out[header] = cells[i]
-
-            # Fehlende Felder leer lassen
-            out["KEM"] = ""
-            out["KEM 2"] = ""
-            out["PC Port Speed"] = ""
-            out["PC Port Mode"] = ""
-
-        else:
-            mapping_legacy14 = [
-                "IP Address",
-                "Line Number",
-                "Serial Number",
-                "Model Name",
-                "MAC Address",
-                "MAC Address 2",
-                "Subnet Mask",
-                "Voice VLAN",
-                "Switch Port Mode",
-                "PC Port Mode",
-                "Switch Hostname",
-                "Switch Port",
-                "Phone Port Speed",
-                "PC Port Speed",
-            ]
-            for idx, header in enumerate(mapping_legacy14):
-                if idx >= col_count:
-                    break
-                out[header] = cells[idx]
-            out["KEM"] = out.get("KEM", "")
-            out["KEM 2"] = out.get("KEM 2", "")
-        return out
-    elif col_count == 12:
-        # SPECIAL CASE: CP-8832 und ähnliche Telefone ohne KEM-Spalten haben nur 12 Spalten
-        # Diese Telefone haben KEINE KEM-Spalte, daher sind alle Spalten ab MAC Address um 2 nach links verschoben
-    # Format: IP, Line, Serial, Model, MAC, MAC2, Subnet, VLAN, PhoneSpeed, SwitchHost, SwitchPort, SwitchSpeed
-        mapping_12 = [
-            "IP Address",        # 0
-            "Line Number",       # 1
-            "Serial Number",     # 2
-            "Model Name",        # 3
-            "MAC Address",       # 4 (keine KEM-Spalten davor)
-            "MAC Address 2",     # 5
-            "Subnet Mask",       # 6
-            "Voice VLAN",        # 7
-            "Phone Port Speed",  # 8
-            "Switch Hostname",   # 9 (verschoben von Spalte 11 auf 9!)
-            "Switch Port",       # 10
-            "Switch Port Mode"   # 11
-        ]
-
-        for i, header in enumerate(mapping_12):
-            if i < col_count:
-                out[header] = cells[i]
-
-        # KEM-Felder leer lassen
-        out["KEM"] = ""
-        out["KEM 2"] = ""
-        out["PC Port Speed"] = ""  # PC Port Speed fehlt bei 12-Spalten Format
-        out["PC Port Mode"] = ""  # Auch PC Port Mode fehlt
-
-        return out
-    else:
-        # Weniger als 12 Spalten -> very old format, try to map what we can
-        # Use 11-column format as fallback
-        legacy_headers = KNOWN_HEADERS.get(11, [])
-        for i, val in enumerate(cells):
-            if i < len(legacy_headers):
-                out[legacy_headers[i]] = val
-        # Ensure all expected fields exist
-        out.setdefault("KEM", "")
+            out[header] = cells[idx] if idx < col_count else ""
         out.setdefault("KEM 2", "")
-        out.setdefault("Line Number", "")
+        return out
+
+    # Intelligent pattern-based mapping for any other column count
+    # Detect key fields by their data patterns
+    ip_idx = mac1_idx = mac2_idx = hostname_idx = port_idx = -1
+
+    for i, cell in enumerate(cells):
+        if ip_idx == -1 and is_ip_address(cell):
+            ip_idx = i
+        elif mac1_idx == -1 and is_mac_address(cell) and 'SEP' not in cell.upper():
+            mac1_idx = i
+        elif mac2_idx == -1 and is_mac_address(cell) and i > mac1_idx:
+            mac2_idx = i
+        elif hostname_idx == -1 and is_hostname(cell):
+            hostname_idx = i
+        elif port_idx == -1 and is_port_name(cell) and i > hostname_idx:
+            port_idx = i
+
+    # Build mapping based on detected positions
+    # Standard legacy format: IP, [Line], Serial, Model, [KEM], MAC1, MAC2, Subnet, VLAN, [Speeds], Hostname, Port, [Speeds]
+
+    if ip_idx >= 0:
+        out["IP Address"] = cells[ip_idx]
+
+        # Line number usually right after IP
+        if ip_idx + 1 < col_count and is_phone_number(cells[ip_idx + 1]):
+            out["Line Number"] = cells[ip_idx + 1]
+            out["Serial Number"] = cells[ip_idx + 2] if ip_idx + 2 < col_count else ""
+            out["Model Name"] = cells[ip_idx + 3] if ip_idx + 3 < col_count else ""
+        else:
+            # Very old format without line number
+            out["Line Number"] = ""
+            out["Serial Number"] = cells[ip_idx + 1] if ip_idx + 1 < col_count else ""
+            out["Model Name"] = cells[ip_idx + 2] if ip_idx + 2 < col_count else ""
+
+    # MAC addresses
+    if mac1_idx >= 0:
+        out["MAC Address"] = cells[mac1_idx]
+    if mac2_idx >= 0:
+        out["MAC Address 2"] = cells[mac2_idx]
+
+    # Hostname and Port
+    if hostname_idx >= 0:
+        out["Switch Hostname"] = cells[hostname_idx]
+    if port_idx >= 0:
+        out["Switch Port"] = cells[port_idx]
+
+    # Find subnet mask and VLAN (between MAC and Hostname)
+    if mac2_idx >= 0 and hostname_idx >= 0:
+        for i in range(mac2_idx + 1, hostname_idx):
+            if i < col_count:
+                if is_subnet_mask(cells[i]):
+                    out["Subnet Mask"] = cells[i]
+                    out["Voice VLAN"] = cells[i]
+
+    # Detect speeds (before and after hostname)
+    speed_candidates = []
+    if hostname_idx >= 0:
+        # Speeds before hostname
+        for i in range(max(mac2_idx + 1, 0), hostname_idx):
+            if i < col_count and is_speed(cells[i]):
+                speed_candidates.append((i, cells[i]))
+        # Speeds after port
+        if port_idx >= 0:
+            for i in range(port_idx + 1, col_count):
+                if is_speed(cells[i]):
+                    speed_candidates.append((i, cells[i]))
+
+    # Assign speeds to appropriate fields
+    if len(speed_candidates) >= 1:
+        out["Switch Port Mode"] = speed_candidates[0][1]
+    if len(speed_candidates) >= 2:
+        out["PC Port Mode"] = speed_candidates[1][1]
+    if len(speed_candidates) >= 3:
+        out["Phone Port Speed"] = speed_candidates[2][1]
+    if len(speed_candidates) >= 4:
+        out["PC Port Speed"] = speed_candidates[3][1]
+
+    # Check for KEM column (usually between Model and MAC1)
+    if mac1_idx > 4 and ip_idx >= 0:
+        kem_idx = ip_idx + 4  # Position after Model Name
+        if kem_idx < mac1_idx and kem_idx < col_count:
+            kem_value = cells[kem_idx]
+            if kem_value and kem_value.upper() == 'KEM':
+                out["KEM"] = kem_value
+
+    # Fill in missing fields with empty strings
+    for field in ["IP Address", "Line Number", "Serial Number", "Model Name",
+                  "KEM", "KEM 2", "MAC Address", "MAC Address 2", "Subnet Mask",
+                  "Voice VLAN", "Switch Port Mode", "PC Port Mode", "Switch Hostname",
+                  "Switch Port", "Phone Port Speed", "PC Port Speed"]:
+        out.setdefault(field, "")
+
     return out
 
-def generate_headers(column_count: int) -> List[str]:
+def generate_headers_for_legacy_file(column_count: int) -> List[str]:
     """
-    Generate headers for a CSV file based on column count.
-    Modern files (>= 16 columns) use NEW_TO_CANONICAL_HEADER_MAP automatically.
-    Legacy files use KNOWN_HEADERS.
+    Generate headers for LEGACY files without headers.
+
+    TEMPORARY: Only used for legacy netspeed.csv.0-29 files.
+    Remove after 2025-10-27 when legacy files are archived.
 
     Args:
-        column_count: Number of columns in the CSV file
+        column_count: Number of columns in the legacy CSV file
 
     Returns:
-        List of header names
+        List of canonical header names
     """
-    # Modern format (>= 16 columns): Use NEW_TO_CANONICAL_HEADER_MAP
-    # This automatically handles 16, 19, and any future column counts
-    if column_count >= 16:
-        headers = []
-        for i in range(min(column_count, len(NEW_NETSPEED_HEADERS))):
-            source_header = NEW_NETSPEED_HEADERS[i]
-            canonical = NEW_TO_CANONICAL_HEADER_MAP.get(source_header, source_header)
-            headers.append(canonical)
-        # If more columns than known headers, add generic names
-        while len(headers) < column_count:
-            headers.append(f"Column {len(headers) + 1}")
-        return headers
-
-    # Legacy format (< 16 columns): Use KNOWN_HEADERS
+    # Legacy format: Use KNOWN_HEADERS
     if column_count in KNOWN_HEADERS:
         return KNOWN_HEADERS[column_count].copy()
 
@@ -563,6 +569,9 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
     """
     Filter headers and data to show only desired columns in frontend.
 
+    DEPRECATED: This function is only used for legacy compatibility.
+    Modern code should use _build_display_order_from_headers() instead.
+
     Args:
         headers: List of all available headers
         data: List of data dictionaries
@@ -573,9 +582,12 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
     # Normalize headers to canonical names (handles legacy Speed Switch-Port naming)
     canonical_headers = _canonicalize_header_row(headers or [])
 
-    # Filter headers to only include desired columns
+    # Build display order dynamically from headers
+    display_order = _build_display_order_from_headers(canonical_headers)
+
+    # Filter headers to only include columns present in data
     display_headers: List[str] = []
-    for header in DESIRED_ORDER:
+    for header in display_order:
         if header in canonical_headers:
             display_headers.append(header)
 
@@ -598,14 +610,15 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
 def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
     """Read a CSV file and return headers and rows as dictionaries.
 
-    Detects whether the file is in the old or new format and handles accordingly.
+    MODERN files (with timestamp): Reads headers from first row - fully automatic.
+    LEGACY files (without headers): Uses pattern detection - temporary solution.
 
     Args:
         file_path: Path to the CSV file
 
     Returns:
         Tuple containing (headers, rows)
-        - headers: List of column names
+        - headers: List of column names for display
         - rows: List of dictionaries where keys are headers and values are cell values
     """
     try:
@@ -614,27 +627,21 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         # Get file information
         file_name = os.path.basename(file_path)
         file_stat = os.stat(file_path)
-        # Format the date to match the OpenSearch mapping format (yyyy-MM-dd)
-        # This will remove any time component that may cause parsing issues
-        creation_date = datetime.fromtimestamp(
-            file_stat.st_ctime
-        ).strftime('%Y-%m-%d')
+        creation_date = datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d')
 
-        # Log the formatted date for debugging
-        logger.info(f"Formatted date for {file_path}: {creation_date}")
+        logger.info(f"Reading CSV file: {file_path}")
 
-        # First try with semicolon delimiter, then comma if needed
+        # Read and parse CSV
         all_rows = []
-
-        new_format_with_header = False
+        file_headers = None  # Will be populated if file has headers
 
         with open(file_path, 'r', newline='') as csv_file:
             content = csv_file.read()
-            csv_file.seek(0)  # Reset file pointer to start
+            csv_file.seek(0)
 
-            # Detect if file uses semicolons
+            # Detect delimiter
             delimiter = ';' if ';' in content else ','
-            logger.info(f"Detected delimiter '{delimiter}' for file {file_path}")
+            logger.info(f"Detected delimiter '{delimiter}' for {file_path}")
 
             # Custom CSV reader that handles trailing delimiters
             class TrailingDelimiterReader:
@@ -647,126 +654,85 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
 
                 def __next__(self):
                     row = next(self.reader)
-                    # If the last element is empty and there was a trailing delimiter,
-                    # remove the last element
                     if row and row[-1] == '':
-                        # Check if the original line ended with a delimiter by reconstructing it
                         original_line = self.delimiter.join(row)
                         if original_line.endswith(self.delimiter):
                             return row[:-1]
                     return row
 
-            # Create the custom reader and process all rows
             reader = TrailingDelimiterReader(csv_file, delimiter)
             all_rows = list(reader)
 
-            if all_rows:
-                normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in all_rows[0]]
-                if _matches_new_header(normalized_first_row):
-                    logger.info(f"Detected new-format header for {file_path}")
-                    new_format_with_header = True
-                    all_rows = all_rows[1:]
-                # Check if first row is a legacy header (KNOWN_HEADERS only contains 11, 14, 15)
-                elif len(normalized_first_row) in KNOWN_HEADERS:
-                    if _canonicalize_header_row(normalized_first_row) == KNOWN_HEADERS[len(normalized_first_row)]:
-                        logger.info(f"Detected legacy {len(normalized_first_row)}-column header row for {file_path}")
-                        all_rows = all_rows[1:]
+        if not all_rows:
+            logger.warning(f"Empty file: {file_path}")
+            return DEFAULT_DISPLAY_ORDER, []
 
-            # Determine format based on number of columns
-            if len(all_rows) == 0:
-                logger.warning(f"Empty file: {file_path}")
-                return DESIRED_ORDER, []
+        # Check if first row is headers
+        first_row = [cell.strip().lstrip("\ufeff") for cell in all_rows[0]]
+        if _is_header_row(first_row):
+            file_headers = first_row
+            all_rows = all_rows[1:]  # Skip header row
+            logger.info(f"Detected {len(file_headers)}-column header row: {file_headers[:5]}...")
+        else:
+            logger.info(f"No header row detected - using pattern detection for legacy format")
 
-            # Detect column count from first few data rows
-            num_rows_to_check = min(5, len(all_rows))  # Check up to 5 rows
+        if not all_rows:
+            logger.warning(f"No data rows in {file_path}")
+            return DEFAULT_DISPLAY_ORDER, []
 
-            # Find the most common column count
-            column_counts = [len(row) for row in all_rows[:num_rows_to_check] if len(row) > 0]
+        # Build display order based on file headers or default for legacy
+        if file_headers:
+            display_order = _build_display_order_from_headers(file_headers)
+        else:
+            display_order = DEFAULT_DISPLAY_ORDER
 
-            if not column_counts:
-                logger.warning(f"No valid rows found in {file_path}")
-                return DESIRED_ORDER, []
+        # Process data rows
+        for idx, row in enumerate(all_rows, 1):
+            if not row:
+                continue
 
-            # Use the most common column count
-            most_common_count = max(set(column_counts), key=column_counts.count)
+            cleaned_row = [cell.strip() for cell in row]
 
-            # Log the actual column counts for debugging
-            for i, row in enumerate(all_rows[:num_rows_to_check]):
-                logger.info(f"Row {i+1} in {file_path} has {len(row)} columns")
+            # Map row using headers (modern) or pattern detection (legacy)
+            row_dict = intelligent_column_mapping(cleaned_row, headers=file_headers)
 
-            logger.info(f"Detected {most_common_count} columns for {file_path}")
+            # Merge KEM information into Line Number for display
+            line_number = row_dict.get("Line Number", "")
+            kem_info_parts = []
+            if row_dict.get("KEM", "").strip():
+                kem_info_parts.append(row_dict["KEM"].strip())
+            if row_dict.get("KEM 2", "").strip():
+                kem_info_parts.append(row_dict["KEM 2"].strip())
 
-            # Generate headers based on detected column count
-            # Use the appropriate format based on column count, or generate dynamically
-            file_headers = generate_headers(most_common_count)
-            logger.info(f"Using {most_common_count}-column format for {file_path}: {file_headers}")
+            if kem_info_parts:
+                kem_info = " " + " ".join(kem_info_parts)
+                row_dict["Line Number"] = f"{line_number}{kem_info}".strip()
 
-            # All files will be normalized to 16-column format for consistent processing
-            logger.info(f"Processing {file_path} with mixed format support (per-row normalization)")
+            # Add metadata
+            row_dict["File Name"] = file_name
+            row_dict["Creation Date"] = creation_date
+            row_dict["#"] = str(idx)
 
-            # Process rows with intelligent column detection
-            for idx, row in enumerate(all_rows, 1):  # Start counting from 1
-                # Skip empty rows
-                if len(row) == 0:
-                    logger.warning(f"Skipping empty row {idx} in {file_path}")
-                    continue
+            # Filter to display columns only
+            filtered_row = {}
+            for header in display_order:
+                if header in row_dict:
+                    filtered_row[header] = row_dict[header]
 
-                # Clean row data
-                cleaned_row = [cell.strip() for cell in row]
-
-                # Use intelligent column mapping instead of positional mapping
-                logger.debug(f"Row {idx}: Processing {len(cleaned_row)} columns with intelligent mapping (new_format={new_format_with_header})")
-                row_dict = intelligent_column_mapping(cleaned_row, new_format=new_format_with_header)
-
-                # Merge KEM information into Line Number for display (but keep KEM columns in data)
-                line_number = row_dict.get("Line Number", "")
-                kem_info_parts = []
-
-                if row_dict.get("KEM", "").strip():
-                    kem_info_parts.append(row_dict["KEM"].strip())
-
-                if row_dict.get("KEM 2", "").strip():
-                    kem_info_parts.append(row_dict["KEM 2"].strip())
-
-                # Merge KEM info into Line Number for display
-                if kem_info_parts:
-                    kem_info = " " + " ".join(kem_info_parts)
-                    row_dict["Line Number"] = f"{line_number}{kem_info}".strip()
-
-                # Add file name, creation date, and row number
-                row_dict["File Name"] = file_name
-                row_dict["Creation Date"] = creation_date
-                row_dict["#"] = str(idx)
-
-                # Filter row to only include desired columns for consistent frontend display
-                filtered_row = {}
-                for header in DESIRED_ORDER:
-                    if header in row_dict:
-                        filtered_row[header] = row_dict[header]
-
-                rows.append(filtered_row)
+            rows.append(filtered_row)
 
         logger.info(f"Successfully read {len(rows)} rows from {file_path}")
 
-        # Create headers list for frontend display (filtered for known columns only)
+        # Build display headers from actual data
         if rows:
-            # Get all unique headers from the rows
             all_headers = set()
             for row in rows:
                 all_headers.update(row.keys())
 
-            # Build final headers list with only desired columns (for frontend display)
-            display_headers = []
-            for header in DESIRED_ORDER:
-                if header in all_headers:
-                    display_headers.append(header)
-
-            # Note: We don't include "Column X" headers in frontend display
-            # But they remain in the data for search functionality
-
+            display_headers = [h for h in display_order if h in all_headers]
             return display_headers, rows
         else:
-            return DESIRED_ORDER, rows
+            return display_order, rows
 
     except Exception as e:
         logger.error(f"Error reading CSV file {file_path}: {e}")
@@ -774,18 +740,22 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
 
 
 def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
-    """Read a CSV file and return per-row normalized dictionaries using the 16-column standard.
+    """Read a CSV file and return normalized dictionaries with ALL fields preserved.
 
-    This variant preserves the original KEM/KEM 2 fields and does not merge them into
-    Line Number or filter columns. It is intended for backend analytics (e.g., statistics)
-    where full access to all fields is required.
+    MODERN files (with timestamp): Reads headers from first row - fully automatic.
+    LEGACY files (without headers): Uses pattern detection - temporary solution.
 
-    Returns a tuple of (headers, rows) where headers are the 16 standard column names.
+    This variant preserves original KEM/KEM 2 fields (doesn't merge into Line Number).
+    Intended for backend analytics (statistics) where full field access is required.
+
+    Returns:
+        Tuple of (headers, rows) where headers are canonical field names
     """
     try:
-        new_format_with_header = False
+        # Read and parse CSV
+        all_rows = []
+        file_headers = None
 
-        # Detect delimiter by sampling content
         with open(file_path, 'r', newline='') as csv_file:
             content = csv_file.read()
             csv_file.seek(0)
@@ -809,41 +779,44 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
                     return row
 
             reader = TrailingDelimiterReader(csv_file, delimiter)
-            raw_rows = list(reader)
+            all_rows = list(reader)
 
-        if not raw_rows:
-            # Dynamically detect column count from NEW_NETSPEED_HEADERS
-            detected_col_count = len(NEW_NETSPEED_HEADERS) if NEW_NETSPEED_HEADERS else 16
-            return generate_headers(detected_col_count), []
+        if not all_rows:
+            return generate_headers_for_legacy_file(16), []
 
-        normalized_first_row = [cell.strip().lstrip("\ufeff") for cell in raw_rows[0]] if raw_rows else []
-        if _matches_new_header(normalized_first_row):
-            new_format_with_header = True
-            raw_rows = raw_rows[1:]
-        elif len(normalized_first_row) >= 14 and _canonicalize_header_row(normalized_first_row) == generate_headers(len(normalized_first_row)):
-            raw_rows = raw_rows[1:]
+        # Check if first row is headers
+        first_row = [cell.strip().lstrip("\ufeff") for cell in all_rows[0]]
+        if _is_header_row(first_row):
+            file_headers = first_row
+            all_rows = all_rows[1:]  # Skip header row
 
-        # Dynamically determine column count from discovered headers
-        # This supports 16, 19, and any future column counts automatically
-        detected_col_count = len(NEW_NETSPEED_HEADERS) if NEW_NETSPEED_HEADERS else 16
-        headers_dynamic = generate_headers(detected_col_count)
+        if not all_rows:
+            if file_headers:
+                return [_get_display_name(h) for h in file_headers], []
+            return generate_headers_for_legacy_file(16), []
+
+        # Process data rows
         normalized_rows: List[Dict[str, Any]] = []
-
-        for idx, row in enumerate(raw_rows, 1):
+        for row in all_rows:
             if not row:
                 continue
-            cleaned_row = [cell.strip() for cell in row]
 
-            # Use intelligent column mapping instead of positional mapping
-            row_dict = intelligent_column_mapping(cleaned_row, new_format=new_format_with_header)
+            cleaned_row = [cell.strip() for cell in row]
+            row_dict = intelligent_column_mapping(cleaned_row, headers=file_headers)
             normalized_rows.append(row_dict)
 
-        return headers_dynamic, normalized_rows
+        # Determine headers list
+        if file_headers:
+            headers_list = [_get_display_name(h) for h in file_headers]
+        else:
+            # Legacy: Use standard headers
+            headers_list = generate_headers_for_legacy_file(16)
+
+        return headers_list, normalized_rows
+
     except Exception as e:
         logger.error(f"Error normalizing CSV file {file_path}: {e}")
-        # Return dynamically detected column count on error
-        detected_col_count = len(NEW_NETSPEED_HEADERS) if NEW_NETSPEED_HEADERS else 16
-        return generate_headers(detected_col_count), []
+        return generate_headers_for_legacy_file(16), []
 
 
 # search_field_in_files() was removed as it's unused (replaced by OpenSearch-based search in tasks.py)

@@ -1273,8 +1273,8 @@ class OpenSearchConfig:
             from datetime import datetime
             file_creation_date = datetime.now().strftime('%Y-%m-%d')
 
-        # Import DESIRED_ORDER for consistent column filtering
-        from utils.csv_utils import DESIRED_ORDER
+        # Import DEFAULT_DISPLAY_ORDER for consistent column filtering
+        from utils.csv_utils import DEFAULT_DISPLAY_ORDER
 
         for idx, row in enumerate(rows, start=1):
             # Clean up data as needed (handle nulls, etc.)
@@ -1798,7 +1798,7 @@ class OpenSearchConfig:
             return kem_query
 
         if field:
-            from utils.csv_utils import DESIRED_ORDER
+            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
             qn = query.strip() if isinstance(query, str) else query
             # Phone-like Line Number exact-only
             if field == "Line Number" and isinstance(query, str):
@@ -1883,7 +1883,7 @@ class OpenSearchConfig:
 
             # Switch Hostname-like (FQDN) exact-only: contains dot and letters (not IP)
             if isinstance(qn, str) and any(c.isalpha() for c in qn) and "." in qn and "/" not in qn and " " not in qn:
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 return {
                     "query": {
                         "bool": {
@@ -1917,7 +1917,7 @@ class OpenSearchConfig:
             # Switch Hostname pattern without domain: 3 letters + 2 digits + other chars (like ABX01ZSL5210P)
             hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if isinstance(qn, str) else None
             if hostname_pattern_match and '.' not in qn and len(qn) >= 13:
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 q_lower = qn.lower()
                 return {
                     "query": {
@@ -2083,7 +2083,7 @@ class OpenSearchConfig:
                         is_hostname_prefix = True
 
             if is_hostname_prefix:
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 q_lower = qn.lower()
                 q_upper = qn.upper()
                 # Prefix search: matches ABX01*, ABX01ZSL*, etc.
@@ -2114,7 +2114,7 @@ class OpenSearchConfig:
             # Switch hostname codes (e.g., ABX01ZSL4750P) - exact match with 13+ characters
             hostname_code_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
             if hostname_code_match and '.' not in qn and len(qn) >= 13:
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 q_lower = qn.lower()
                 should_clauses = [
                     {"term": {"Switch Hostname.lower": q_lower}},
@@ -2161,7 +2161,7 @@ class OpenSearchConfig:
             # MAC exact-only when 12-hex provided
             mac_core = re.sub(r"[^A-Fa-f0-9]", "", qn)
             if len(mac_core) == 12:
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 mac_up = mac_core.upper()
                 return {
                     "query": {"bool": {"should": [
@@ -2180,7 +2180,7 @@ class OpenSearchConfig:
 
             # 4-digit Model pattern (e.g., "8832", "8851") - search ONLY for exact model matches
             if re.fullmatch(r"\d{4}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 return {
                     "query": {"bool": {"should": [
                         # ONLY exact model name matches - no text matches to avoid partial matches
@@ -2203,7 +2203,7 @@ class OpenSearchConfig:
 
             # Phone number (Line Number) exact-only branch: enforce strict matching
             if re.fullmatch(r"\+?\d{7,15}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 cleaned = qn.lstrip('+')
                 variants = []
                 if qn.startswith('+'):
@@ -2245,7 +2245,7 @@ class OpenSearchConfig:
                 and " " not in qn
                 and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or "")
             ):
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 return {
                     "query": {
                         "bool": {
@@ -2281,7 +2281,7 @@ class OpenSearchConfig:
             # Partial IPv4: 10.216.10 or 10.216 (1-3 octets) - prefix match
             if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
                 # Full IPv4 address - exact match first, then prefix
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 return {
                     "query": {"bool": {"should": [
                         {"term": {"IP Address.keyword": {"value": qn, "boost": 100.0}}},
@@ -2302,7 +2302,7 @@ class OpenSearchConfig:
                 }
             elif re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
                 # Partial IPv4 address - prefix match only
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 clean_query = qn.rstrip('.')
                 return {
                     "query": {"bool": {"should": [
@@ -2325,7 +2325,7 @@ class OpenSearchConfig:
 
             # Serial Number prefix branch: alphanumeric tokens 3-10 chars use prefix wildcards
             if re.fullmatch(r"[A-Za-z0-9]{3,10}", qn or ""):
-                from utils.csv_utils import DESIRED_ORDER
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
 
                 variants = []
                 if qn:
@@ -2460,7 +2460,7 @@ class OpenSearchConfig:
             except Exception as e:
                 logger.warning(f"Failed to add model name variants for '{query}': {e}")
 
-        from utils.csv_utils import DESIRED_ORDER, LEGACY_COLUMN_RENAMES
+        from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER, LEGACY_COLUMN_RENAMES
         legacy_fields = list(LEGACY_COLUMN_RENAMES.keys())
         search_query["_source"] = list(dict.fromkeys(DESIRED_ORDER + legacy_fields))
 
@@ -2524,7 +2524,7 @@ class OpenSearchConfig:
                 try:
                     curr_indices_first = self.get_search_indices(False)
                     mac_upper_first = str(canonical_mac)
-                    from utils.csv_utils import DESIRED_ORDER as _DO
+                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO
                     must_clauses_first: List[Dict[str, Any]] = []
                     if preferred_files:
                         must_clauses_first.append({"terms": {"File Name": preferred_files[:5]}})
@@ -2586,7 +2586,7 @@ class OpenSearchConfig:
                     else:
                         digits = qn_phone
                         cands = [digits, f"+{digits}"] if digits else []
-                    from utils.csv_utils import DESIRED_ORDER
+                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                     if include_historical:
                         # Return one exact match per netspeed file, newest first
                         netspeed_files = self._netspeed_filenames()
@@ -2696,7 +2696,7 @@ class OpenSearchConfig:
                     up = qn_sn.upper()
                     if up != qn_sn:
                         variants.append(up)
-                    from utils.csv_utils import DESIRED_ORDER
+                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                     indices_sn = self.get_search_indices(include_historical)
                     indices_sn_list = indices_sn if isinstance(indices_sn, list) else [indices_sn]
                     allow_archive_files_sn = any(idx == self.archive_index for idx in indices_sn_list)
@@ -2776,7 +2776,7 @@ class OpenSearchConfig:
             if looks_like_hostname_early and not looks_like_mac_first:
                 try:
                     qn_hn = query.strip()
-                    from utils.csv_utils import DESIRED_ORDER
+                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                     indices_hn = self.get_search_indices(include_historical)
                     indices_hn_list = indices_hn if isinstance(indices_hn, list) else [indices_hn]
                     allow_archive_files_hn = any(idx == self.archive_index for idx in indices_hn_list)
@@ -2958,7 +2958,7 @@ class OpenSearchConfig:
                             if fname in present_files:
                                 continue  # already represented
                             try:
-                                from utils.csv_utils import DESIRED_ORDER as _DO2
+                                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO2
                                 seed_body = {
                                     'query': {
                                         'bool': {
@@ -3032,7 +3032,7 @@ class OpenSearchConfig:
             if looks_like_mac_fb and not any((d.get('File Name') or '') == 'netspeed.csv' for d in unique_documents):
                 try:
                     mac_upper_fb = str(mac_core_fb)
-                    from utils.csv_utils import DESIRED_ORDER as _DO3
+                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO3
                     fb_body = {
                         "query": {
                             "bool": {
@@ -3129,7 +3129,7 @@ class OpenSearchConfig:
                 logger.info(f"Capped results from {before} to {cap}")
 
             # Apply display column filtering for consistency
-            from utils.csv_utils import DESIRED_ORDER
+            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
 
             # Enhance documents with KEM information in Line Number field for icon display
             enhanced_documents = []
