@@ -881,13 +881,29 @@ async def get_available_columns():
     """
     Get the available columns from the current CSV format.
 
+    Dynamically reads headers from the current netspeed.csv file to include
+    all available columns (including new ones added to the CSV format).
+
     Returns:
         List of column definitions with id, label, and default enabled state
     """
     try:
-        # Use DEFAULT_DISPLAY_ORDER from csv_utils which defines the standard column order
-        # For modern files with headers, columns are dynamically built from CSV headers
-        available_columns = []
+        # Try to get columns from current CSV file first (dynamic for modern files)
+        csv_file = resolve_current_file(_extra_search_paths())
+        actual_columns = []
+
+        if csv_file and Path(csv_file).exists():
+            try:
+                headers, _ = read_csv_file(str(csv_file))
+                # Headers from read_csv_file already include "#", "File Name", "Creation Date"
+                actual_columns = headers if headers else []
+            except Exception as e:
+                logger.warning(f"Could not read headers from {csv_file}: {e}")
+
+        # Fallback to DEFAULT_DISPLAY_ORDER if we couldn't read from file
+        if not actual_columns:
+            logger.info("Using DEFAULT_DISPLAY_ORDER as fallback for /columns endpoint")
+            actual_columns = DEFAULT_DISPLAY_ORDER.copy()
 
         # Define core columns that are enabled by default
         # All other columns (including new ones from future CSV formats) will be disabled by default
@@ -910,9 +926,9 @@ async def get_available_columns():
             "MAC Address 2": "MAC Addr. 2",
         }
 
-        # Build column definitions from DEFAULT_DISPLAY_ORDER
-        # This provides fallback column order for legacy files
-        for column_id in DEFAULT_DISPLAY_ORDER:
+        # Build column definitions from actual columns
+        available_columns = []
+        for column_id in actual_columns:
             # Skip hidden/internal columns
             if column_id in hidden_columns:
                 continue
