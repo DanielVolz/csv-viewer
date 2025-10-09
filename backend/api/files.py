@@ -9,7 +9,7 @@ import subprocess
 
 from models.file import FileModel
 from config import settings, get_settings
-from utils.csv_utils import read_csv_file, DEFAULT_DISPLAY_ORDER, count_unique_data_rows
+from utils.csv_utils import read_csv_file, read_csv_file_normalized, DEFAULT_DISPLAY_ORDER, count_unique_data_rows
 from tasks.tasks import index_all_csv_files, app
 from utils.index_state import load_state, save_state
 from celery import current_app
@@ -20,7 +20,9 @@ from utils.path_utils import (
     NETSPEED_TIMESTAMP_PATTERN,
     get_data_root,
 )
+
 from utils.opensearch import OpenSearchUnavailableError, opensearch_config
+from utils.preview_cache import preview_cache
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -439,7 +441,22 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         Returns:
         Dictionary with headers, preview rows, and file creation date
     """
+    # Only cache preview for default (no loc filter, netspeed.csv, not fallback)
+    cache_key = None
     try:
+        if (filename == "netspeed.csv" and (not loc or loc.strip() == "")):
+            # Use current file mtime as part of cache key
+            extras = _extra_search_paths()
+            inventory, _, current_file, _ = _collect_inventory(extras)
+            candidate = inventory.get("netspeed.csv")
+            mtime = None
+            if candidate and candidate.exists():
+                mtime = str(candidate.stat().st_mtime)
+            cache_key = f"preview:{filename}:{limit}:{mtime}"
+            cached = preview_cache.get(cache_key)
+            if cached:
+                return cached
+
         extras = _extra_search_paths()
         inventory, historical_files, current_file, _ = _collect_inventory(extras)
 
@@ -516,10 +533,39 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         except Exception:
             creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
-        # Read CSV file
-        headers, rows = read_csv_file(str(file_path))
+        # Read CSV file with all columns (normalized)
+        csv_headers, rows = read_csv_file_normalized(str(file_path))
 
-    # Optional: filter by location code/prefix if provided
+        # Add metadata fields and apply same ordering as search results
+        # Order: metadata → alphabetical → Call Manager at end, hide KEM fields
+        metadata_fields = ["#", "File Name", "Creation Date"]
+        call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
+        hidden_fields = {"KEM", "KEM 2"}  # Internal fields not shown to users
+
+        # Build ordered headers
+        headers = metadata_fields.copy()
+        data_cols = [col for col in csv_headers
+                    if col not in call_manager_fields and col not in hidden_fields]
+        data_cols.sort()
+        headers.extend(data_cols)
+        headers.extend([col for col in call_manager_fields if col in csv_headers])
+
+        # Add metadata to each row and filter out hidden fields
+        enriched_rows = []
+        for i, row in enumerate(rows, start=1):
+            enriched_row = {
+                "#": str(i),
+                "File Name": actual_filename,
+                "Creation Date": creation_date
+            }
+            # Add data fields, excluding hidden ones
+            for key, value in row.items():
+                if key not in hidden_fields:
+                    enriched_row[key] = value
+            enriched_rows.append(enriched_row)
+        rows = enriched_rows
+
+        # Optional: filter by location code/prefix if provided
         loc_filter = (loc or "").strip().upper()
         if loc_filter:
             # Accept either 3-letter prefix (AAA) or 5-char code (AAA01)
@@ -557,7 +603,7 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
             f" (using data from {actual_filename} until the next export is available)" if using_fallback else ""
         )
 
-        return {
+        result = {
             "success": True,
             "message": (f"Showing first {len(preview_rows)} entries of "
                         f"{len(rows)} total" + (f" (filtered by {loc_filter})" if loc_filter else "") + fallback_message),
@@ -570,7 +616,9 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
             "using_fallback": using_fallback,
             "fallback_file": actual_filename if using_fallback else None
         }
-
+        if cache_key and not using_fallback and not loc_filter:
+            preview_cache.set(cache_key, result)
+        return result
     except Exception as e:
         logger.error(f"Error getting file preview: {e}")
         raise HTTPException(
@@ -884,6 +932,8 @@ async def get_available_columns():
     Dynamically reads headers from the current netspeed.csv file to include
     all available columns (including new ones added to the CSV format).
 
+    Returns columns in the SAME ORDER as search results to ensure consistent UX.
+
     Returns:
         List of column definitions with id, label, and default enabled state
     """
@@ -894,16 +944,18 @@ async def get_available_columns():
 
         if csv_file and Path(csv_file).exists():
             try:
-                headers, _ = read_csv_file(str(csv_file))
-                # Headers from read_csv_file already include "#", "File Name", "Creation Date"
-                actual_columns = headers if headers else []
+                # Use read_csv_file_normalized to get ALL data columns from CSV
+                csv_headers, _ = read_csv_file_normalized(str(csv_file))
+                actual_columns = csv_headers if csv_headers else []
             except Exception as e:
                 logger.warning(f"Could not read headers from {csv_file}: {e}")
 
         # Fallback to DEFAULT_DISPLAY_ORDER if we couldn't read from file
         if not actual_columns:
             logger.info("Using DEFAULT_DISPLAY_ORDER as fallback for /columns endpoint")
-            actual_columns = DEFAULT_DISPLAY_ORDER.copy()
+            # DEFAULT_DISPLAY_ORDER includes metadata, so strip them for consistency
+            actual_columns = [col for col in DEFAULT_DISPLAY_ORDER
+                            if col not in ["#", "File Name", "Creation Date"]]
 
         # Define core columns that are enabled by default
         # All other columns (including new ones from future CSV formats) will be disabled by default
@@ -926,9 +978,29 @@ async def get_available_columns():
             "MAC Address 2": "MAC Addr. 2",
         }
 
-        # Build column definitions from actual columns
+        # Apply the SAME ordering as search results (_build_headers_from_documents logic)
+        # Order: metadata fields → alphabetical data fields → Call Manager at end
+        metadata_fields = ["#", "File Name", "Creation Date"]
+        call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
+
+        # Start with metadata fields
+        ordered_columns = metadata_fields.copy()
+
+        # Separate CSV data columns into categories (excluding metadata which we already added)
+        call_manager_cols = [col for col in actual_columns if col in call_manager_fields]
+        data_cols = [col for col in actual_columns
+                    if col not in call_manager_fields]
+
+        # Sort data columns alphabetically and add to ordered list
+        data_cols.sort()
+        ordered_columns.extend(data_cols)
+
+        # Add Call Manager fields at the end
+        ordered_columns.extend(call_manager_cols)
+
+        # Build column definitions from ordered columns
         available_columns = []
-        for column_id in actual_columns:
+        for column_id in ordered_columns:
             # Skip hidden/internal columns
             if column_id in hidden_columns:
                 continue
@@ -946,7 +1018,7 @@ async def get_available_columns():
         return {
             "success": True,
             "columns": available_columns,
-            "message": f"Retrieved {len(available_columns)} available columns"
+            "message": f"Retrieved {len(available_columns)} available columns in search result order"
         }
 
     except Exception as e:

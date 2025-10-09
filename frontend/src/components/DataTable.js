@@ -33,7 +33,8 @@ function DataTable({
   showRowNumbers = false,
   onMacAddressClick,
   onSwitchPortClick,
-  labelMap
+  labelMap,
+  ignoreSettings = false // New prop to bypass settings filter for search results
 }) {
   const { columns, sshUsername, navigateToSettings } = useSettings();
 
@@ -77,19 +78,24 @@ function DataTable({
   };
 
   // Get custom column configuration from settings
-  const enabledHeaders = React.useMemo(() => {
-    if (Array.isArray(columns) && columns.length > 0) {
-      return columns.filter(c => c.enabled).map(c => c.id);
+  const filteredHeaders = React.useMemo(() => {
+    // If ignoreSettings is true, show all headers in original order
+    if (ignoreSettings) {
+      return Array.isArray(headers) ? headers.filter(h => h !== '#') : [];
     }
-    // Fallback: if columns not loaded yet, allow all provided headers
-    return Array.isArray(headers) ? headers : [];
-  }, [columns, headers]);
 
-  // Filter headers based on settings, but keep the original order from the settings
-  // Also remove any CSV header literally named '#' to avoid a duplicate '#' column
-  const filteredHeaders = enabledHeaders
-    .filter(header => header !== '#')
-    .filter(header => headers.includes(header));
+    // Use settings configuration
+    if (Array.isArray(columns) && columns.length > 0) {
+      // Get enabled columns in Settings order (respects user drag & drop)
+      const headersSet = new Set(Array.isArray(headers) ? headers : []);
+      return columns
+        .filter(c => c.enabled && headersSet.has(c.id) && c.id !== '#')
+        .map(c => c.id);
+    }
+
+    // Fallback: if columns not loaded yet, allow all provided headers
+    return Array.isArray(headers) ? headers.filter(h => h !== '#') : [];
+  }, [columns, headers, ignoreSettings]);
 
   // Utility used by sorting and UI: ensure defined before usage
 

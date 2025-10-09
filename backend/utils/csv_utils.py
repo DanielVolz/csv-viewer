@@ -258,7 +258,11 @@ def count_unique_data_rows(file_path: str | Path | Any, opener: Optional[Any] = 
     open_fn = opener or open
     try:
         # Determine a suitable target for the opener while accommodating mocks in unit tests
-        if isinstance(file_path, (str, bytes, os.PathLike)) or isinstance(file_path, Path):
+        try:
+            is_path = isinstance(file_path, Path)
+        except TypeError:
+            is_path = False
+        if isinstance(file_path, (str, bytes, os.PathLike)) or is_path:
             target = file_path
         else:
             target = str(file_path)

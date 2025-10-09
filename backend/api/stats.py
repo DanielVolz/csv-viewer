@@ -127,34 +127,14 @@ except Exception as _e:
 
 
 def _resolve_data_path(name: str | Path) -> Path:
-    """Resolve a path relative to the configured data root.
-
-    When tests patch ``Path`` with a mock, defer to the patched object so
-    mocked ``exists()`` or ``resolve()`` chains continue to work.
-    """
+    """Resolve a path relative to the configured data root."""
     base = get_data_root()
-    path_cls = Path
-    # When Path is patched (e.g., MagicMock), forward operations to the mock so
-    # tests can control chaining behavior.
-    if not isinstance(path_cls, type(pathlib.Path)):
-        try:
-            base_obj = path_cls(str(base))
-        except Exception:
-            base_obj = path_cls
-        try:
-            candidate = base_obj / str(name)  # type: ignore[operator]
-        except Exception:
-            candidate = base_obj
-        try:
-            resolved = candidate.resolve()  # type: ignore[assignment]
-            if resolved:
-                return cast(Path, resolved)
-        except Exception:
-            pass
-        return cast(Path, candidate)
-
-    if isinstance(name, Path):
-        return name if name.is_absolute() else base / name
+    try:
+        if isinstance(name, Path):
+            return name if name.is_absolute() else base / name
+    except TypeError:
+        # Handle case where Path is mocked (MagicMock) in tests
+        pass
     text = str(name)
     if os.path.isabs(text):
         return Path(text)
@@ -288,22 +268,6 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
     try:
         file_path = _resolve_data_path(filename)
 
-        if not file_path.exists():
-            return {
-                "success": False,
-                "message": f"File {filename} not found",
-                "data": {
-                    "totalPhones": 0,
-                    "totalSwitches": 0,
-                    "totalLocations": 0,
-                    "phonesWithKEM": 0,
-                    "phonesByModel": [],
-                    "totalCities": 0,
-                    "cities": [],
-                },
-                "file": {"name": filename, "date": None},
-            }
-
         # Get file metadata
         file_model = FileModel.from_path(str(file_path))
         date_str = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
@@ -397,7 +361,7 @@ async def get_current_stats(filename: str = "netspeed.csv") -> Dict:
         else:
             return {
                 "success": False,
-                "message": f"Cannot determine date for {filename}",
+                "message": f"File {filename} not found or cannot determine date",
                 "data": {
                     "totalPhones": 0,
                     "totalSwitches": 0,
@@ -581,12 +545,14 @@ async def get_stats_timeline_by_location(q: str, limit: int = 0) -> Dict:
             try:
                 c = client.count(index=opensearch_config.stats_loc_index, body={"query": {"match_all": {}}})
                 if int(c.get("count", 0)) == 0:
-                    from tasks.tasks import backfill_location_snapshots
-                    backfill_location_snapshots()
-                    try:
-                        client.indices.refresh(index=opensearch_config.stats_loc_index)
-                    except Exception:
-                        pass
+                    # Location snapshots need rebuilding - instruct client to trigger rebuild
+                    logger.warning("Location stats index exists but is empty - needs rebuilding")
+                    return {
+                        "success": False,
+                        "message": "Location snapshots need rebuilding — call the rebuild endpoint or trigger the backfill task manually",
+                        "series": [],
+                        "selected": []
+                    }
             except Exception:
                 pass
 
@@ -719,15 +685,12 @@ async def get_stats_timeline_top_locations(count: int = 10, extra: str = "", lim
         except Exception:
             exists = False
         if not exists:
-            try:
-                from tasks.tasks import backfill_location_snapshots
-                backfill_location_snapshots(str(get_data_root()))
-                try:
-                    client.indices.refresh(index=opensearch_config.stats_loc_index)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+            return {
+                "success": False,
+                "message": "Location stats index not found. Please trigger reindex first.",
+                "series": [],
+                "selected": []
+            }
 
         # Latest snapshot date (prefer netspeed.csv; fallback: any file)
         latest_date = None
@@ -1842,22 +1805,7 @@ async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
         except Exception:
             idx_exists = False
         if not idx_exists:
-            try:
-                from tasks.tasks import backfill_location_snapshots
-                backfill_location_snapshots(str(get_data_root()))
-                try:
-                    opensearch_config.client.indices.refresh(index=opensearch_config.stats_loc_index)
-                except Exception:
-                    pass
-                # Re-check existence after best-effort backfill
-                try:
-                    idx_exists = opensearch_config.client.indices.exists(index=opensearch_config.stats_loc_index)
-                except Exception:
-                    idx_exists = False
-            except Exception:
-                idx_exists = False
-        if not idx_exists:
-            return {"success": False, "message": "Location index not found", "suggestions": []}
+            return {"success": False, "message": "Location index not found. Please trigger reindex first.", "suggestions": []}
 
         suggestions: list[dict] = []
 

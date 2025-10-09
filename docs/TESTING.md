@@ -239,9 +239,17 @@ jobs:
 
 ### Import-Fehler
 **Problem**: `ModuleNotFoundError: No module named 'tasks'`
-**Lösung**: Tests müssen mit `PYTHONPATH` ausgeführt werden:
+**Lösung**: Tests müssen mit `PYTHONPATH` ausgeführt werden. Verwende einen relativen Pfad oder eine Umgebungsvariable:
 ```bash
-PYTHONPATH=/home/volzd/docker/csv-viewer/backend:$PYTHONPATH pytest tests/backend/
+# Option 1: Relative zum aktuellen Verzeichnis (vom Projekt-Root aus)
+PYTHONPATH=$(pwd)/backend:$PYTHONPATH pytest tests/backend/
+
+# Option 2: Mit Umgebungsvariable
+export PROJECT_ROOT=/path/to/csv-viewer
+PYTHONPATH=$PROJECT_ROOT/backend:$PYTHONPATH pytest tests/backend/
+
+# Option 3: Direkt vom backend-Verzeichnis aus
+cd backend && PYTHONPATH=.:$PYTHONPATH pytest tests/backend/
 ```
 
 ### Mock nicht gefunden

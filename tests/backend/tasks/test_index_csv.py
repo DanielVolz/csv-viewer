@@ -9,9 +9,12 @@ from config import settings
 
 @pytest.fixture(autouse=True)
 def restore_settings():
-    original = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
+    original = getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", None)
     yield
-    setattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", original)
+    if original is not None:
+        setattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", original)
+    else:
+        delattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY")
 
 
 def test_index_csv_skips_when_wait_disabled(monkeypatch):

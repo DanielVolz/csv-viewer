@@ -117,4 +117,5 @@ class TestArchivePath:
         result = archive_path('/app/data/data.csv', '/app/data')
 
         # Should create archive directory
-        assert result['status'] in ['success', 'error']
+        assert result['status'] == 'success'
+        mock_archive_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)

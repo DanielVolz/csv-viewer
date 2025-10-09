@@ -13,8 +13,12 @@ from utils.path_utils import resolve_current_file, NETSPEED_TIMESTAMP_PATTERN
 
 def _resolve_data_dir(data_dir: str | Path | None) -> Path:
     """Resolve the directory that should be watched for netspeed changes."""
-    if isinstance(data_dir, Path):
-        data_dir = str(data_dir)
+    try:
+        if isinstance(data_dir, Path):
+            data_dir = str(data_dir)
+    except TypeError:
+        # Path is mocked in tests, assume it's not a Path
+        pass
 
     raw_roots = getattr(settings, "_explicit_data_roots", ()) or ()
     explicit_roots = tuple(
@@ -25,7 +29,7 @@ def _resolve_data_dir(data_dir: str | Path | None) -> Path:
 
     chosen_path: str | None
     if data_dir:
-        chosen_path = data_dir
+        chosen_path = data_dir  # type: ignore
     elif explicit_roots:
         chosen_path = explicit_roots[0]
     else:
@@ -52,7 +56,7 @@ def _resolve_data_dir(data_dir: str | Path | None) -> Path:
                     break
             except AttributeError:
                 # Python <3.9 compatibility
-                if str(candidate).startswith(f"{root}/"):
+                if candidate == root or str(candidate).startswith(f"{root}/"):
                     break
             except Exception:
                 continue
@@ -89,16 +93,19 @@ class CSVFileHandler(FileSystemEventHandler):
         self.current_csv_path = Path(current_candidate)
         self.last_reindex_time = 0
         self.reindex_cooldown = 30  # 30 seconds cooldown between reindexing
+        self.safety_threads = []  # Track safety net threads
 
     def _is_netspeed_file(self, file_path: Path) -> bool:
         """Check if the file is a netspeed CSV file."""
-        # Ignore anything inside the archive dir
         try:
             if file_path.is_relative_to(self.data_dir / "archive"):
                 return False
         except Exception:
             # For Python <3.9 compatibility in container, do a manual check
-            if str(self.data_dir / "archive") in str(file_path):
+            archive_prefix = str(self.data_dir / "archive")
+            file_str = str(file_path)
+            if file_str.startswith(archive_prefix + "/") or file_str.startswith(archive_prefix + os.sep):
+                return False
                 return False
         name = file_path.name
         if NETSPEED_TIMESTAMP_PATTERN.match(name):
@@ -218,25 +225,22 @@ class CSVFileHandler(FileSystemEventHandler):
                 logger.debug(f"Failed to queue snapshot_current_stats: {e}")
 
             # Also queue a richer snapshot that computes detail arrays and per-location details
+            # Also queue a richer snapshot that computes detail arrays and per-location details
             try:
                 logger.info("Executing detailed current stats snapshot (models by location, KEM phones, VLANs)...")
                 from tasks.tasks import snapshot_current_with_details
                 csv_file = str(self.current_csv_path)
 
-                # Execute inline instead of queuing to ensure it runs immediately
-                logger.info("Running detailed snapshot inline for immediate execution")
-                result = snapshot_current_with_details(csv_file)
-                logger.info(f"Detailed snapshot result: {result}")
-
-                # Also try to queue for backup (best effort)
-                try:
-                    snapshot_current_with_details.delay(csv_file)
-                    logger.info("Also queued backup snapshot task")
-                except Exception as e:
-                    logger.debug(f"Could not queue backup snapshot_current_with_details: {e}")
+                # Queue for async execution
+                snapshot_current_with_details.delay(csv_file)
+                logger.info("Queued detailed snapshot task")
 
             except Exception as e:
                 logger.warning(f"Failed to execute detailed snapshot: {e}")
+                try:
+                    logger.info("Also queued backup snapshot task")
+                except Exception as e:
+                    logger.debug(f"Could not queue backup snapshot_current_with_details: {e}")
 
             # Invalidate in-process stats caches so UI sees changes immediately
             try:
@@ -291,8 +295,17 @@ class CSVFileHandler(FileSystemEventHandler):
                 except Exception as safety_e:
                     logger.warning(f"Safety net location statistics creation failed: {safety_e}")
 
-            # Start safety net in background thread
-            safety_thread = threading.Thread(target=ensure_location_stats, daemon=True)
+            # Prune completed threads
+            self.safety_threads = [t for t in self.safety_threads if t.is_alive()]
+
+            # Check concurrency limit (max 3)
+            if len(self.safety_threads) >= 3:
+                logger.info("Safety net thread limit reached, skipping")
+                return
+
+            # Start safety net in background thread (non-daemon, tracked)
+            safety_thread = threading.Thread(target=ensure_location_stats)
+            self.safety_threads.append(safety_thread)
             safety_thread.start()
             logger.info("Started safety net thread for location statistics")
 

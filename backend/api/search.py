@@ -110,14 +110,13 @@ async def search_files(
                         include_historical=include_historical,
                         size=limit or 200,
                     )
-                    from utils.csv_utils import filter_display_columns
-                    filtered_headers, filtered_documents = filter_display_columns(headers, documents)
+                    # Return all columns without filtering
                     took_ms = int((perf_counter() - t0) * 1000)
                     return {
                         "success": True,
-                        "message": f"Found {len(filtered_documents)} results for '{query}'",
-                        "headers": filtered_headers,
-                        "data": filtered_documents,
+                        "message": f"Found {len(documents)} results for '{query}'",
+                        "headers": headers,
+                        "data": documents,
                         "took_ms": took_ms,
                     }
                 except Exception as e:

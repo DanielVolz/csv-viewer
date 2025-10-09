@@ -122,8 +122,10 @@ def test_build_query_general_serial_prefix_wildcard():
     # Use a shorter string that triggers the Serial Number prefix logic (3-10 chars alphanumeric)
     body = cfg._build_query_body("ABC1234", field=None, size=10)
     shoulds = _find_should_terms(body)
-    # Serial Number prefix logic only generates wildcard queries, not exact term queries
+    # Serial Number prefix logic should generate wildcard queries, not exact term queries
     assert any("wildcard" in c and c["wildcard"].get("Serial Number") == "ABC1234*" for c in shoulds)
+    # Ensure no exact term was generated for the full serial value
+    assert not any("term" in c and c["term"].get("Serial Number") == "ABC1234" for c in shoulds)
 
 
 def test_build_query_general_serial_prefix():

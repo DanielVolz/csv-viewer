@@ -60,19 +60,14 @@ def search_opensearch(query: str,
             size=size,
         )
 
-        # Ensure consistent display columns (idempotent if already filtered)
-        try:
-            from utils.csv_utils import filter_display_columns
-            filtered_headers, filtered_documents = filter_display_columns(headers, documents)
-        except Exception:
-            filtered_headers, filtered_documents = headers, documents
-
+        # Return all columns from OpenSearch without filtering
+        # This allows search results to display all available columns from any CSV format
         took_ms = int((perf_counter() - t0) * 1000)
         return {
             "status": "success",
-            "message": f"Found {len(filtered_documents)} results for '{query}'",
-            "headers": filtered_headers or [],
-            "data": filtered_documents or [],
+            "message": f"Found {len(documents)} results for '{query}'",
+            "headers": headers or [],
+            "data": documents or [],
             "took_ms": took_ms,
         }
     except Exception as e:

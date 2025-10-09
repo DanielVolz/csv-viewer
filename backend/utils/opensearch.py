@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Generator, Optional, Tuple
-from .csv_utils import read_csv_file
+from .csv_utils import read_csv_file, read_csv_file_normalized
 from utils.path_utils import collect_netspeed_files, get_data_root, _configured_roots, _within_allowed_roots
 import os
 
@@ -824,7 +824,9 @@ class OpenSearchConfig:
             return None
 
     def preview_index_rows(self, index_name: str, limit: int = 25) -> tuple[list[str], list[dict[str, Any]]]:
-        """Fetch a small preview from the given netspeed index."""
+        """Fetch a small preview from the given netspeed index.
+        Returns headers in standard order (metadata → alphabetical → Call Manager) with hidden fields filtered.
+        """
         try:
             sort_clause = [{"Creation Date": {"order": "desc"}}, {"_doc": {"order": "asc"}}]
             if index_name == self.archive_index:
@@ -840,24 +842,17 @@ class OpenSearchConfig:
             )
             hits = res.get("hits", {}).get("hits", []) if isinstance(res, dict) else []
             rows = [hit.get("_source", {}) for hit in hits]
-            all_headers: list[str] = []
-            seen = set()
+
+            # Use same header building logic as search for consistency
+            headers = self._build_headers_from_documents(rows)
+
+            # Filter row data to only include visible headers (removes KEM, KEM 2)
+            filtered_rows = []
             for row in rows:
-                for key in row.keys():
-                    if key not in seen:
-                        seen.add(key)
-                        all_headers.append(key)
+                filtered_row = {k: v for k, v in row.items() if k in headers}
+                filtered_rows.append(filtered_row)
 
-            # Align with CSV display columns when possible
-            try:
-                from utils.csv_utils import filter_display_columns
-                headers, filtered_rows = filter_display_columns(all_headers, rows)
-                if headers:
-                    return headers, filtered_rows
-            except Exception:
-                pass
-
-            return all_headers, rows
+            return headers, filtered_rows
         except Exception as exc:
             logger.warning(f"preview_index_rows failed for {index_name}: {exc}")
             return [], []
@@ -1224,7 +1219,8 @@ class OpenSearchConfig:
         Yields:
             Dict[str, Any]: Action for bulk indexing
         """
-        _, rows = read_csv_file(file_path)
+        # Use read_csv_file_normalized to preserve ALL columns for indexing
+        _, rows = read_csv_file_normalized(file_path)
 
         # Note: Data repair is now handled separately after all files are indexed
         # This ensures historical data is available when repairing the current file
@@ -1272,9 +1268,6 @@ class OpenSearchConfig:
         if not file_creation_date:
             from datetime import datetime
             file_creation_date = datetime.now().strftime('%Y-%m-%d')
-
-        # Import DEFAULT_DISPLAY_ORDER for consistent column filtering
-        from utils.csv_utils import DEFAULT_DISPLAY_ORDER
 
         for idx, row in enumerate(rows, start=1):
             # Clean up data as needed (handle nulls, etc.)
@@ -2170,7 +2163,6 @@ class OpenSearchConfig:
                         {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
                         {"multi_match": {"query": mac_up, "fields": ["*"], "boost": 0.01}}
                     ], "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
                     "size": size,
                     "sort": [
                         self._preferred_file_sort_clause(),
@@ -2460,9 +2452,9 @@ class OpenSearchConfig:
             except Exception as e:
                 logger.warning(f"Failed to add model name variants for '{query}': {e}")
 
-        from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER, LEGACY_COLUMN_RENAMES
-        legacy_fields = list(LEGACY_COLUMN_RENAMES.keys())
-        search_query["_source"] = list(dict.fromkeys(DESIRED_ORDER + legacy_fields))
+        # Return all fields from OpenSearch instead of limiting to DEFAULT_DISPLAY_ORDER
+        # This allows filter_display_columns to work with complete data
+        # search_query["_source"] is intentionally not set - returns all fields
 
         search_query["sort"] = [
             {"_script": {"type": "number", "order": "asc", "script": {
@@ -2476,6 +2468,31 @@ class OpenSearchConfig:
         ]
 
         return search_query
+
+    def _build_headers_from_documents(self, documents: List[Dict[str, Any]]) -> List[str]:
+        """Build headers list from documents, with metadata fields first, then alphabetically."""
+        if not documents:
+            return []
+
+        all_keys = set()
+        for doc in documents:
+            all_keys.update(doc.keys())
+
+        # Order headers: metadata fields first, then alphabetically, Call Manager fields at the end
+        metadata_fields = ["#", "File Name", "Creation Date"]
+        call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
+
+        headers = [h for h in metadata_fields if h in all_keys]
+
+        # Add other headers (excluding metadata and call manager fields)
+        other_headers = sorted([h for h in all_keys
+                               if h not in metadata_fields and h not in call_manager_fields])
+        headers.extend(other_headers)
+
+        # Add Call Manager fields at the end
+        headers.extend([h for h in call_manager_fields if h in all_keys])
+
+        return headers
 
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False,
               size: int = 20000) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -2542,7 +2559,6 @@ class OpenSearchConfig:
                                 "minimum_should_match": 1
                             }
                         },
-                        "_source": _DO,
                         "size": 200
                     }
                     logger.info(f"[MAC-first] indices={curr_indices_first} body={targeted_first}")
@@ -2613,20 +2629,19 @@ class OpenSearchConfig:
                                     results.append(hit)
                             except Exception as _e:
                                 logger.debug(f"[PHONE] per-file seed failed for {fname}: {_e}")
-                        return DESIRED_ORDER, results
+                        return self._build_headers_from_documents(results), results
                     else:
                         # Only current file (netspeed.csv): try exact (size=1), then fallback to partial wildcard if not found
                         indices_phone = self.get_search_indices(False)
                         phone_body_exact = {
                             "query": {"bool": {"should": [{"term": {"Line Number.keyword": c}} for c in cands], "minimum_should_match": 1}},
-                            "_source": DESIRED_ORDER,
                             "size": 1
                         }
                         logger.info(f"[PHONE-exact] indices={indices_phone} body={phone_body_exact}")
                         resp_phone = self.client.search(index=indices_phone, body=phone_body_exact)
                         phone_hit = next((h.get('_source', {}) for h in resp_phone.get('hits', {}).get('hits', [])), None)
                         if phone_hit:
-                            return DESIRED_ORDER, [phone_hit]
+                            return self._build_headers_from_documents([phone_hit]), [phone_hit]
                         # Fallback: partial match within current netspeed.csv
                         digits = qn_phone.lstrip('+')
                         if digits:
@@ -2635,7 +2650,6 @@ class OpenSearchConfig:
                                     {"wildcard": {"Line Number.keyword": f"*{digits}*"}},
                                     {"wildcard": {"Line Number.keyword": f"*+{digits}*"}}
                                 ], "minimum_should_match": 1}},
-                                "_source": DESIRED_ORDER,
                                 "size": 20000,
                                 "sort": [{"Creation Date": {"order": "desc"}}]
                             }
@@ -2644,8 +2658,8 @@ class OpenSearchConfig:
                             docs_part = [h.get('_source', {}) for h in resp_part.get('hits', {}).get('hits', [])]
                             # Deduplicate by MAC+File to avoid repeated identical rows
                             docs_part = self._deduplicate_documents_preserve_order(docs_part)
-                            return DESIRED_ORDER, docs_part
-                        return DESIRED_ORDER, []
+                            return self._build_headers_from_documents(docs_part), docs_part
+                        return [], []
                 except Exception as e:
                     logger.warning(f"Phone exact search failed, falling back to general: {e}")
 
@@ -2761,7 +2775,7 @@ class OpenSearchConfig:
                             seen_files.add(fn)
                             dedup_by_file.append(d)
                         docs_sn = dedup_by_file
-                    return DESIRED_ORDER, docs_sn
+                    return self._build_headers_from_documents(docs_sn), docs_sn
                 except Exception as e:
                     logger.warning(f"Serial exact search failed, falling back to general: {e}")
 
@@ -2824,7 +2838,7 @@ class OpenSearchConfig:
                             return True
                         return False
                     docs_hn = [d for d in docs_hn if _is_allowed_file((d.get('File Name') or '').strip())]
-                    return DESIRED_ORDER, docs_hn
+                    return self._build_headers_from_documents(docs_hn), docs_hn
                 except Exception as e:
                     logger.warning(f"Hostname exact search failed, falling back to general: {e}")
 
@@ -3132,6 +3146,8 @@ class OpenSearchConfig:
             from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
 
             # Enhance documents with KEM information in Line Number field for icon display
+            # and remove KEM columns from display
+            hidden_fields = {"KEM", "KEM 2"}  # Internal fields not shown to users
             enhanced_documents = []
             for doc in unique_documents:
                 enhanced_doc = doc.copy()
@@ -3152,22 +3168,16 @@ class OpenSearchConfig:
                 if kem_parts:
                     enhanced_doc['Line Number'] = f"{line_number} {' '.join(kem_parts)}"
 
+                # Remove hidden fields from display
+                for hidden in hidden_fields:
+                    enhanced_doc.pop(hidden, None)
+
                 enhanced_documents.append(enhanced_doc)
 
-            # Filter documents to only include desired columns
-            filtered_documents = []
-            for doc in enhanced_documents:
-                filtered_doc = {}
-                for header in DESIRED_ORDER:
-                    if header in doc:
-                        filtered_doc[header] = doc[header]
-                filtered_documents.append(filtered_doc)
-
-            # Use only desired headers that exist in the filtered data
-            headers = [h for h in DESIRED_ORDER if any(h in doc for doc in filtered_documents)]
-
-            logger.info(f"Found {len(filtered_documents)} unique results for query '{query}' from {len(documents)} total matches")
-            return headers, filtered_documents
+            # Build headers from filtered documents (KEM fields already removed)
+            headers = self._build_headers_from_documents(enhanced_documents)
+            logger.info(f"Found {len(enhanced_documents)} unique results for query '{query}' with {len(headers)} columns")
+            return headers, enhanced_documents
 
         except Exception as e:
             logger.error(f"Error searching for '{query}': {e}")

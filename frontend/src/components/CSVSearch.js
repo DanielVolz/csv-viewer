@@ -50,7 +50,7 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
       <DataTable
         headers={previewData.headers}
         data={previewData.data}
-        showRowNumbers={false}
+        showRowNumbers={true}
         onMacAddressClick={handleMacAddressClick}
         onSwitchPortClick={handleSwitchPortClick}
         labelMap={{
@@ -130,54 +130,8 @@ function CSVSearch() {
   // Block only while actively loading initial preview; allow searches even if file is missing
   const searchBlocked = previewLoading; // execution blocked only during preview loading
 
-  // Debug: detailed logging + transition tracking
+  // Tracking for component lifecycle
   const prevRef = useRef({});
-  useEffect(() => {
-    const prev = prevRef.current;
-    const current = {
-      previewLoading,
-      previewData_success: previewData?.success,
-      previewData_message: previewData?.message,
-      previewHasHeaders: Array.isArray(previewData?.headers),
-      previewHeadersLen: Array.isArray(previewData?.headers) ? previewData.headers.length : null,
-      previewRows: Array.isArray(previewData?.data) ? previewData.data.length : null,
-      missingPreview,
-      searchBlocked,
-      previewError,
-      searchTerm,
-      hasSearched,
-      searchLoading,
-      timestamp: new Date().toISOString()
-    };
-
-    // Only print diff rather than full state spam (but keep full snapshot once)
-    if (!prev.__initialized) {
-      console.debug('[CSVSearch][init-state]', current);
-    } else {
-      const diff = {};
-      Object.keys(current).forEach(k => {
-        if (current[k] !== prev[k]) diff[k] = { prev: prev[k], next: current[k] };
-      });
-      if (Object.keys(diff).length > 0) {
-        console.debug('[CSVSearch][state-diff]', diff);
-      }
-      if (prev.searchBlocked !== current.searchBlocked) {
-        if (current.searchBlocked) {
-          console.warn('[CSVSearch][transition] searchBlocked became TRUE', {
-            reason: previewLoading ? 'previewLoading' : (missingPreview ? 'missingPreview' : 'unknown'),
-            previewLoading,
-            missingPreview,
-            previewError,
-            previewData_success: previewData?.success,
-            previewData_message: previewData?.message
-          });
-        } else {
-          console.info('[CSVSearch][transition] searchBlocked became FALSE');
-        }
-      }
-    }
-    prevRef.current = { ...current, __initialized: true };
-  }, [previewLoading, previewData, missingPreview, searchBlocked, previewError, searchTerm, hasSearched, searchLoading]);
 
   // Remove all whitespace characters from a value
   const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
@@ -194,16 +148,13 @@ function CSVSearch() {
   }, [stripAllWhitespace]);
 
   useEffect(() => {
-    console.debug('[CSVSearch] mounted');
     mountedRef.current = true;
     try {
       const params = new URLSearchParams(window.location.search);
       const q = params.get('q');
       if (q && typeof q === 'string') {
-        // Show raw first; sanitize later only if MAC-like
         setSearchTerm(q);
         initialQueryRef.current = q;
-        console.debug('[CSVSearch] initial query param detected', { q });
         // Delayed sanitize for MAC-like inputs
         if (sanitizeTimeoutRef.current) clearTimeout(sanitizeTimeoutRef.current);
         sanitizeTimeoutRef.current = setTimeout(() => {
@@ -247,17 +198,11 @@ function CSVSearch() {
     }
   }, [searchBlocked, includeHistorical, missingPreview, recordMac, searchAll, normalizeMacInput, stripAllWhitespace]);
 
-  // No stuck timer needed anymore
-
   const typingTimeoutRef = useRef(null);
   const lastSearchTermRef = useRef('');
   const [isTyping, setIsTyping] = useState(false);
   const [historyAnchor, setHistoryAnchor] = useState(null);
   const historyOpen = Boolean(historyAnchor);
-
-
-
-  // Removed unused isMacLike helper to satisfy lint
 
   // Derive 5-char location (ABC01) from a row's Switch Hostname; exclude ABWRT
   const deriveLocationFromRow = useCallback((row) => {
@@ -303,7 +248,6 @@ function CSVSearch() {
     // Use raw term for display; only strip whitespace for search
     const cleaned = stripAllWhitespace(term);
     if (searchBlocked) {
-      console.debug('[CSVSearch][executeSearch] prevented (blocked)', { term, previewLoading, missingPreview });
       return;
     }
     if (cleaned.length >= 3 && cleaned !== lastSearchTermRef.current) {
@@ -364,7 +308,6 @@ function CSVSearch() {
       }
     }, 1000);
     setIsTyping(true);
-    console.debug('[CSVSearch][handleInputChange] value', { term });
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -384,16 +327,8 @@ function CSVSearch() {
   }, [executeSearch, normalizeMacInput, stripAllWhitespace, searchTerm]);
 
   const handleSearch = useCallback(() => {
-    if (searchBlocked) {
-      console.debug('[CSVSearch][handleSearch] prevented manual search (blocked)', {
-        searchTerm,
-        previewLoading,
-        missingPreview
-      });
-      return;
-    }
-    if (!searchTerm) return;
-    console.debug('[CSVSearch][handleSearch] initiating search', { term: searchTerm });
+    if (searchBlocked || !searchTerm) return;
+
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
@@ -412,7 +347,6 @@ function CSVSearch() {
       if (!mountedRef.current) return;
       if (success) {
         setHasSearched(true);
-        console.debug('[CSVSearch][handleSearch] search executed', { term: cleaned });
       }
     });
   }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac, normalizeMacInput, getLocationForMac, previewLoading, missingPreview, stripAllWhitespace]);
@@ -723,8 +657,6 @@ function CSVSearch() {
         </Box>
       )}
 
-      {/* Long preview load hint removed with simplified logic */}
-
       {/* Error State */}
       {(searchError || previewError) && (
         <Alert
@@ -834,6 +766,7 @@ function CSVSearch() {
               showRowNumbers={true}
               onMacAddressClick={handleMacAddressClick}
               onSwitchPortClick={handleSwitchPortClick}
+              ignoreSettings={false} // Respect settings configuration
               labelMap={{
                 'Creation Date': 'Date',
                 'IP Address': 'IP Addr.',

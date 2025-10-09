@@ -57,30 +57,50 @@ export const SettingsProvider = ({ children }) => {
         }
       }
 
-      // Merge backend columns with saved preferences preserving saved order
+      // Merge backend columns with saved preferences
       let mergedColumns = [];
       if (Array.isArray(savedColumns) && savedColumns.length > 0) {
-        // Use saved order; for each saved col, take backend definition if exists
         const backendById = new Map(availableColumns.map(c => [c.id, c]));
-        mergedColumns = savedColumns
-          .map(savedCol => {
-            const backendCol = backendById.get(savedCol.id);
-            if (!backendCol) return null; // drop unknown/removed columns
-            return {
-              ...backendCol,
-              // preserve backend label (display name), ignore any stale saved label
-              label: backendCol.label,
-              enabled: typeof savedCol.enabled === 'boolean' ? savedCol.enabled : backendCol.enabled
-            };
-          })
-          .filter(Boolean);
+        const savedById = new Map(savedColumns.map(c => [c.id, c]));
 
-        // Append any new backend columns not present in saved settings
-        const savedIds = new Set(savedColumns.map(c => c.id));
-        const newOnes = availableColumns
-          .filter(c => !savedIds.has(c.id))
-          .map(c => ({ ...c }));
-        mergedColumns = [...mergedColumns, ...newOnes];
+        // Check if saved columns have the correct metadata order (#, File Name, Creation Date at start)
+        const metadataFields = ['#', 'File Name', 'Creation Date'];
+        const savedMetadataOrder = savedColumns
+          .filter(c => metadataFields.includes(c.id))
+          .map(c => c.id);
+        const hasCorrectOrder =
+          savedMetadataOrder.length === metadataFields.length &&
+          savedMetadataOrder[0] === '#' &&
+          savedMetadataOrder[1] === 'File Name' &&
+          savedMetadataOrder[2] === 'Creation Date';
+
+        if (hasCorrectOrder) {
+          // Saved order is good, use it
+          mergedColumns = savedColumns
+            .map(savedCol => {
+              const backendCol = backendById.get(savedCol.id);
+              if (!backendCol) return null;
+              return {
+                ...backendCol,
+                label: backendCol.label,
+                enabled: typeof savedCol.enabled === 'boolean' ? savedCol.enabled : backendCol.enabled
+              };
+            })
+            .filter(Boolean);
+
+          // Append any new backend columns
+          const savedIds = new Set(savedColumns.map(c => c.id));
+          const newOnes = availableColumns.filter(c => !savedIds.has(c.id));
+          mergedColumns = [...mergedColumns, ...newOnes];
+        } else {
+          // Migrate to new order: use backend order but preserve enabled states
+          mergedColumns = availableColumns.map(backendCol => ({
+            ...backendCol,
+            enabled: savedById.has(backendCol.id)
+              ? savedById.get(backendCol.id).enabled
+              : backendCol.enabled
+          }));
+        }
       } else {
         // No saved settings; use backend order as-is
         mergedColumns = availableColumns.map(c => ({ ...c }));
