@@ -204,50 +204,8 @@ def _build_desired_order():
 
 DESIRED_ORDER = _build_desired_order()
 
-# Regex patterns for intelligent column detection
-COLUMN_PATTERNS = {
-    "IP Address": re.compile(r'^(?:10\.|172\.|192\.|169\.254\.|127\.)[0-9.]+$'),  # More specific IP ranges
-    "Line Number": re.compile(r'^\+?\d{7,15}$'),  # Phone numbers with 7-15 digits
-    "Serial Number": re.compile(r'^[A-Z][A-Z0-9]{8,14}$'),  # Cisco serial numbers starting with letter
-    "Model Name": re.compile(r'^(CP-\d+|DP-\d+)$'),  # Cisco phone models
-    "KEM": re.compile(r'^KEM[12]?$', re.IGNORECASE),
-    "MAC Address": re.compile(r'^[0-9A-F]{12}$', re.IGNORECASE),  # Pure MAC without SEP prefix
-    "MAC Address 2": re.compile(r'^SEP[0-9A-F]{12}$', re.IGNORECASE),  # SEP prefixed MAC
-    "Subnet Mask": re.compile(r'^255\.[\d.]+$'),  # Subnet masks starting with 255
-    "Voice VLAN": re.compile(r'^\d{1,4}$'),  # VLAN IDs (1-4 digits)
-    "Phone Port Speed": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
-    "PC Port Speed": re.compile(r'^(Autom\.|Auto|Fixed|\d+\s*(Mbps|Kbps)?|[0-9.]+).*', re.IGNORECASE),
-    "Switch Hostname": re.compile(r'^[A-Za-z0-9\-_.]+\.juwin\.bayern\.de$', re.IGNORECASE),
-    "Switch Port": re.compile(r'^(GigabitEthernet|FastEthernet|Ethernet)\d+/\d+/\d+$', re.IGNORECASE),
-    "Switch Port Mode": re.compile(r'^(Voll|Half|Auto|[0-9.]+\s*(Mbps|Kbps)?)', re.IGNORECASE),
-    "PC Port Mode": re.compile(r'^(Voll|Half|Auto|Abwärts|Aufwärts|[0-9.]+\s*(Mbps|Kbps)?|\d+)', re.IGNORECASE),
-    "CallManager 1": re.compile(r'^[A-Za-z0-9\-_.]+(\.[A-Za-z0-9\-_.]+)*$'),  # Hostname/FQDN pattern
-    "CallManager 2": re.compile(r'^[A-Za-z0-9\-_.]+(\.[A-Za-z0-9\-_.]+)*$'),  # Hostname/FQDN pattern
-    "CallManager 3": re.compile(r'^[A-Za-z0-9\-_.]+(\.[A-Za-z0-9\-_.]+)*$'),  # Hostname/FQDN pattern
-}
-
-
-def detect_column_type(value: str) -> Optional[str]:
-    """
-    Detect the type of a column value using regex patterns.
-
-    Args:
-        value: The cell value to analyze
-
-    Returns:
-        The detected column type or None if no pattern matches
-    """
-    if not value or not value.strip():
-        return None
-
-    value = value.strip()
-
-    # Check each pattern
-    for column_type, pattern in COLUMN_PATTERNS.items():
-        if pattern.match(value):
-            return column_type
-
-    return None
+# COLUMN_PATTERNS and detect_column_type() were removed as they're unused
+# Column detection now happens automatically via NEW_NETSPEED_HEADERS discovery
 
 
 def _normalize_field(value: Any, uppercase: bool = False) -> str:
@@ -708,9 +666,11 @@ def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
                     logger.info(f"Detected new-format header for {file_path}")
                     new_format_with_header = True
                     all_rows = all_rows[1:]
-                elif _canonicalize_header_row(normalized_first_row) == KNOWN_HEADERS[16]:
-                    logger.info(f"Detected legacy header row for {file_path}")
-                    all_rows = all_rows[1:]
+                # Check if first row is a legacy header (KNOWN_HEADERS only contains 11, 14, 15)
+                elif len(normalized_first_row) in KNOWN_HEADERS:
+                    if _canonicalize_header_row(normalized_first_row) == KNOWN_HEADERS[len(normalized_first_row)]:
+                        logger.info(f"Detected legacy {len(normalized_first_row)}-column header row for {file_path}")
+                        all_rows = all_rows[1:]
 
             # Determine format based on number of columns
             if len(all_rows) == 0:
@@ -886,90 +846,4 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
         return generate_headers(detected_col_count), []
 
 
-def search_field_in_files(
-    directory_path: str,
-    search_term: str,
-    field_name: Optional[str] = None,
-    include_historical: bool = False
-) -> Tuple[List[str], List[Dict[str, Any]]]:
-    """Search for a term in any field or a specific field in CSV files.
-
-    Args:
-        directory_path: Path to the directory containing CSV files
-        search_term: Term to search for
-        field_name: Optional specific field name to search in
-            (if None, searches all fields)
-        include_historical: Whether to include historical files
-
-    Returns:
-        Tuple containing (headers, matching_rows)
-    """
-    try:
-        dir_path = Path(directory_path)
-
-        if not dir_path.exists() or not dir_path.is_dir():
-            logger.error(
-                f"Directory {directory_path} does not exist or is not a directory"
-            )
-            return [], []
-
-        historical_files, current_file, _ = collect_netspeed_files([dir_path])
-
-        files_to_search: List[Path] = []
-        if current_file:
-            files_to_search.append(current_file)
-
-        if include_historical:
-            files_to_search.extend(historical_files)
-
-        if not files_to_search:
-            fallback = dir_path / "netspeed.csv"
-            if fallback.exists():
-                files_to_search.append(fallback)
-
-        logger.info(f"Searching for term '{search_term}' in {len(files_to_search)} files")
-
-        # Normalize the search term (lowercase)
-        normalized_search_term = search_term.lower()
-
-        # Store matching rows
-        matching_rows = []
-        headers = []
-
-        # Search each file
-        for file_path in files_to_search:
-            file_headers, rows = read_csv_file(str(file_path))
-
-            # Store headers from first file (should be consistent across files)
-            if not headers and file_headers:
-                headers = file_headers
-
-            # Search for term in each row
-            for row in rows:
-                # If a specific field is provided, only search that field
-                if field_name:
-                    if (field_name in row and row[field_name] and
-                            normalized_search_term in str(row[field_name]).lower()):
-                        matching_rows.append(row)
-                # Otherwise, search all fields
-                else:
-                    for key, value in row.items():
-                        if value and normalized_search_term in str(value).lower():
-                            matching_rows.append(row)
-                            break  # Found in one field, no need to check others
-
-        logger.info(
-            f"Found {len(matching_rows)} matches for term '{search_term}'"
-        )
-
-        # Return headers and matching rows
-        if current_file and current_file.exists() and not headers:
-            headers, _ = read_csv_file(str(current_file))
-
-        return headers, matching_rows
-
-    except Exception as e:
-        logger.error(
-            f"Error searching in directory {directory_path}: {e}"
-        )
-        return [], []
+# search_field_in_files() was removed as it's unused (replaced by OpenSearch-based search in tasks.py)
