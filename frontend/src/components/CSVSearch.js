@@ -707,50 +707,50 @@ function CSVSearch() {
               overflow: 'hidden'
             }}
           >
-          <Table>
-            <TableHead>
-              <TableRow>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-                  <TableCell key={i}>
-                    <Skeleton variant="text" width="100%" height={30} animation="wave" />
-                  </TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {[1, 2, 3, 4, 5, 6, 7].map((row) => (
-                <TableRow key={row}>
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((col) => (
-                    <TableCell key={col}>
-                      <Skeleton variant="text" width="100%" height={20} animation="wave" />
+            <Table>
+              <TableHead>
+                <TableRow>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                    <TableCell key={i}>
+                      <Skeleton variant="text" width="100%" height={30} animation="wave" />
                     </TableCell>
                   ))}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {/* Shimmer overlay */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 0,
-              left: '-100%',
-              width: '200%',
-              height: '100%',
-              background: (theme) =>
-                theme.palette.mode === 'dark'
-                  ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
-                  : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
-              animation: 'shimmer 2s ease-in-out infinite',
-              pointerEvents: 'none',
-              zIndex: 10,
-              '@keyframes shimmer': {
-                '0%': { transform: 'translateX(0)' },
-                '100%': { transform: 'translateX(50%)' }
-              }
-            }}
-          />
-        </Paper>
+              </TableHead>
+              <TableBody>
+                {[1, 2, 3, 4, 5, 6, 7].map((row) => (
+                  <TableRow key={row}>
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((col) => (
+                      <TableCell key={col}>
+                        <Skeleton variant="text" width="100%" height={20} animation="wave" />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {/* Shimmer overlay */}
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: '-100%',
+                width: '200%',
+                height: '100%',
+                background: (theme) =>
+                  theme.palette.mode === 'dark'
+                    ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
+                    : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+                animation: 'shimmer 2s ease-in-out infinite',
+                pointerEvents: 'none',
+                zIndex: 10,
+                '@keyframes shimmer': {
+                  '0%': { transform: 'translateX(0)' },
+                  '100%': { transform: 'translateX(50%)' }
+                }
+              }}
+            />
+          </Paper>
         </Box>
       )}
 
@@ -770,50 +770,50 @@ function CSVSearch() {
               overflow: 'hidden'
             }}
           >
-          <Table>
-            <TableHead>
-              <TableRow>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-                  <TableCell key={i}>
-                    <Skeleton variant="text" width="100%" height={30} animation="wave" />
-                  </TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {[1, 2, 3, 4, 5].map((row) => (
-                <TableRow key={row}>
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((col) => (
-                    <TableCell key={col}>
-                      <Skeleton variant="text" width="100%" height={20} animation="wave" />
+            <Table>
+              <TableHead>
+                <TableRow>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                    <TableCell key={i}>
+                      <Skeleton variant="text" width="100%" height={30} animation="wave" />
                     </TableCell>
                   ))}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {/* Shimmer overlay */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 0,
-              left: '-100%',
-              width: '200%',
-              height: '100%',
-              background: (theme) =>
-                theme.palette.mode === 'dark'
-                  ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
-                  : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
-              animation: 'shimmer 2s ease-in-out infinite',
-              pointerEvents: 'none',
-              zIndex: 10,
-              '@keyframes shimmer': {
-                '0%': { transform: 'translateX(0)' },
-                '100%': { transform: 'translateX(50%)' }
-              }
-            }}
-          />
-        </Paper>
+              </TableHead>
+              <TableBody>
+                {[1, 2, 3, 4, 5].map((row) => (
+                  <TableRow key={row}>
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((col) => (
+                      <TableCell key={col}>
+                        <Skeleton variant="text" width="100%" height={20} animation="wave" />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {/* Shimmer overlay */}
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: '-100%',
+                width: '200%',
+                height: '100%',
+                background: (theme) =>
+                  theme.palette.mode === 'dark'
+                    ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
+                    : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+                animation: 'shimmer 2s ease-in-out infinite',
+                pointerEvents: 'none',
+                zIndex: 10,
+                '@keyframes shimmer': {
+                  '0%': { transform: 'translateX(0)' },
+                  '100%': { transform: 'translateX(50%)' }
+                }
+              }}
+            />
+          </Paper>
         </Box>
       )}
 

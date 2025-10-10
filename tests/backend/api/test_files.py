@@ -95,12 +95,12 @@ class TestFilesAPI:
         assert response.status_code == 500
         assert response.json()["detail"] == "Failed to list CSV files"
 
-    @patch('api.files.read_csv_file_normalized')
+    @patch('api.files.read_csv_file_preview')
     @patch('api.files.FileModel')
     @patch('api.files._collect_inventory')
     @patch('api.files._extra_search_paths')
-    def test_preview_file(self, mock_extra_paths, mock_collect_inventory, mock_file_model, mock_read_csv_file_normalized):
-        # The endpoint uses read_csv_file_normalized which returns CSV headers (no metadata)
+    def test_preview_file(self, mock_extra_paths, mock_collect_inventory, mock_file_model, mock_read_csv_file_preview):
+        # The endpoint uses read_csv_file_preview which returns (headers, rows, total_count)
         csv_headers = ["Col1", "Col2", "Col3"]
         rows = [
             {"Col1": "val1", "Col2": "val2", "Col3": "val3"},
@@ -126,7 +126,7 @@ class TestFilesAPI:
         model_instance.date = MagicMock()
         model_instance.date.strftime.return_value = "2025-01-01"
         mock_file_model.from_path.return_value = model_instance
-        mock_read_csv_file_normalized.return_value = (csv_headers, rows)
+        mock_read_csv_file_preview.return_value = (csv_headers, rows, 2)
 
         response = client.get("/api/files/preview?limit=10")
         assert response.status_code == 200
@@ -149,10 +149,10 @@ class TestFilesAPI:
         assert ("not found" in (data.get("message") or "").lower()) or ("no netspeed.csv found" in (data.get("message") or "").lower())
 
     @patch('api.files._opensearch_preview', return_value=None)
-    @patch('api.files.read_csv_file_normalized')
+    @patch('api.files.read_csv_file_preview')
     @patch('api.files._collect_inventory')
     @patch('api.files._extra_search_paths')
-    def test_preview_file_exception(self, mock_extra_paths, mock_collect_inventory, mock_read_csv_file_normalized, mock_opensearch_preview):
+    def test_preview_file_exception(self, mock_extra_paths, mock_collect_inventory, mock_read_csv_file_preview, mock_opensearch_preview):
         mock_extra_paths.return_value = [Path("/app/data")]
         preview_file = MagicMock()
         preview_file.exists.return_value = True
@@ -164,8 +164,8 @@ class TestFilesAPI:
             preview_file,
             [],
         )
-        # Mock the normalized CSV reader to fail
-        mock_read_csv_file_normalized.side_effect = Exception("Test exception")
+        # Mock the CSV reader to fail
+        mock_read_csv_file_preview.side_effect = Exception("Test exception")
         # Mock OpenSearch fallback to also fail (returns None)
         mock_opensearch_preview.return_value = None
 
