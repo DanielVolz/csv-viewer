@@ -48,8 +48,8 @@ function DataTable({
     'Voice VLAN': 72,
     'Switch Hostname': 180,
     'Switch Port': 140,
-    'Serial Number': 160,
-    'Model Name': 180,
+    'Serial Number': 100,
+    'Model Name': 85,
     'Line Number': 110,
   }), []);
 

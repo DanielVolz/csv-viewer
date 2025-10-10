@@ -1,109 +1,193 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
+const CACHE_KEY = 'csvviewer_preview_cache';
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Custom hook for fetching a preview of the current CSV file from the backend API
- * @param {number} limit - Maximum number of entries to fetch
- * @returns {Object} { previewData, loading, error }
+ * Implements client-side caching to avoid redundant API calls
+ * @param {Object} options - { enabled: boolean }
+ * @returns {Object} { previewData, loading, error, refetch }
  */
-function useFilePreview(options = {}) { // Optional: { enabled: boolean }
+function useFilePreview(options = {}) {
   const { enabled = true } = options;
   const [previewData, setPreviewData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const mountedRef = useRef(true);
+  const fetchingRef = useRef(false);
+
+  // Try to load from cache first
+  const loadFromCache = () => {
+    try {
+      const cached = sessionStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        const age = Date.now() - timestamp;
+        if (age < CACHE_DURATION_MS) {
+          console.debug('[useFilePreview] Cache HIT (age:', Math.round(age / 1000), 's)');
+          return data;
+        } else {
+          console.debug('[useFilePreview] Cache expired (age:', Math.round(age / 1000), 's)');
+          sessionStorage.removeItem(CACHE_KEY);
+        }
+      }
+    } catch (err) {
+      console.debug('[useFilePreview] Cache read error:', err);
+    }
+    return null;
+  };
+
+  // Save to cache
+  const saveToCache = (data) => {
+    try {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+        data,
+        timestamp: Date.now()
+      }));
+      console.debug('[useFilePreview] Cache saved');
+    } catch (err) {
+      console.debug('[useFilePreview] Cache write error:', err);
+    }
+  };
+
+  const fetchPreview = useCallback(async (force = false) => {
+    if (fetchingRef.current) {
+      console.debug('[useFilePreview] Already fetching, skipping');
+      return;
+    }
+
+    // Try cache first (unless forced)
+    if (!force) {
+      const cached = loadFromCache();
+      if (cached) {
+        setPreviewData(cached);
+        setLoading(false);
+        setError(null);
+        return;
+      }
+    }
+
+    const abortController = new AbortController();
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, 15000);
+
+    try {
+      fetchingRef.current = true;
+      setLoading(true);
+      console.debug('[useFilePreview] Fetching from API');
+
+      // Single API call - backend preview includes all needed info
+      const response = await axios.get('/api/files/preview', {
+        params: { limit: 105 },
+        signal: abortController.signal
+      });
+
+      if (!mountedRef.current) {
+        fetchingRef.current = false;
+        return;
+      }
+
+      const data = response.data;
+      console.debug('[useFilePreview] API response:', {
+        success: data?.success,
+        rows: data?.data?.length || 0,
+        file: data?.actual_file_name || data?.file_name
+      });
+
+      setPreviewData(data);
+      setError(null);
+      saveToCache(data);
+    } catch (err) {
+      if (!mountedRef.current) {
+        fetchingRef.current = false;
+        return;
+      }
+
+      if (axios.isCancel(err) || err?.name === 'CanceledError') {
+        if (timedOut) {
+          setError('Preview request timed out.');
+          toast.error('Preview request timed out.', { autoClose: 4000 });
+        } else {
+          console.debug('[useFilePreview] Request cancelled (ignored)');
+        }
+      } else {
+        console.error('[useFilePreview] Error:', err);
+        const errorMessage = 'Failed to fetch file preview. Please try again later.';
+        setError(errorMessage);
+        toast.error(errorMessage, { position: 'top-right', autoClose: 5000 });
+        setPreviewData({ success: false, message: 'Error connecting to backend', headers: [], data: [] });
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      fetchingRef.current = false;
+      if (mountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     if (!enabled) {
-      // Skip fetching preview entirely when disabled (e.g., when arriving with a query)
       setLoading(false);
       setPreviewData(null);
       setError(null);
-      return; // do not set up effect
+      return;
     }
-    const abortController = new AbortController();
-    const timeoutRef = { current: null };
-    let timedOut = false;
-    let mounted = true;
-    console.debug('[useFilePreview] effect start');
 
-    const fetchPreview = async () => {
-      try {
-        setLoading(true);
-        console.debug('[useFilePreview] fetchPreview START');
-        // Safety timeout (15s)
-        timeoutRef.current = setTimeout(() => {
-          if (!timedOut && mounted) {
-            timedOut = true;
-            abortController.abort();
-          }
-        }, 15000);
+    // Check cache IMMEDIATELY on mount (synchronously)
+    const cached = loadFromCache();
+    if (cached) {
+      console.debug('[useFilePreview] Mount: Using cached data');
+      setPreviewData(cached);
+      setLoading(false);
+      setError(null);
+      return; // Don't fetch if cache is valid
+    }
 
-        const infoResponse = await axios.get('/api/files/netspeed_info', { signal: abortController.signal });
-        console.debug('[useFilePreview] netspeed_info response', infoResponse.data);
-        const fileInfo = infoResponse.data;
+    // No cache - fetch from API
+    console.debug('[useFilePreview] Mount: No cache, fetching from API');
 
-        const response = await axios.get('/api/files/preview', {
-          params: { limit: 105 },
-          signal: abortController.signal
-        });
-        console.debug('[useFilePreview] preview response meta', {
-          success: response.data?.success,
-          message: response.data?.message,
-          headersLen: Array.isArray(response.data?.headers) ? response.data.headers.length : null,
-          rows: Array.isArray(response.data?.data) ? response.data.data.length : null
-        });
-
-        // Get the original data
-        const originalData = response.data;
-
-        // Use headers and data as provided by backend (backend controls what's displayed)
-        const nextData = {
-          ...originalData,
-          line_count: fileInfo.line_count || 0
-        };
-        console.debug('[useFilePreview] setPreviewData', nextData);
-        setPreviewData(nextData);
-
-        setError(null);
-      } catch (err) {
-        if (!mounted) return; // Ignore after unmount
-        if (axios.isCancel(err) || err?.name === 'CanceledError') {
-          // Distinguish between deliberate timeout and React StrictMode double-invoke abort
-          if (timedOut) {
-            setError('Preview request timed out.');
-            toast.error('Preview request timed out.', { autoClose: 4000 });
-          } else {
-            // Silent cancellation (StrictMode/unmount) — no UI noise
-            console.debug('Preview request cancelled (ignored).');
-          }
-        } else {
-          console.error('Error fetching file preview:', err);
-          const errorMessage = 'Failed to fetch file preview. Please try again later.';
-          setError(errorMessage);
-          toast.error(errorMessage, { position: 'top-right', autoClose: 5000 });
-          setPreviewData({ success: false, message: 'Error connecting to backend', headers: [], data: [] });
-        }
-      } finally {
-        if (mounted) {
-          clearTimeout(timeoutRef.current);
-          setLoading(false);
-          // Avoid capturing previewData here to keep deps stable
-          console.debug('[useFilePreview] fetchPreview END', { timedOut });
-        }
+    // Small delay to avoid double-fetch in StrictMode
+    const timer = setTimeout(() => {
+      if (mountedRef.current) {
+        fetchPreview();
       }
-    };
+    }, 10);
 
-    fetchPreview();
     return () => {
-      mounted = false;
-      clearTimeout(timeoutRef.current);
-      abortController.abort();
-      console.debug('[useFilePreview] cleanup');
+      clearTimeout(timer);
+      mountedRef.current = false;
+      fetchingRef.current = false;
     };
-  }, [enabled]);
+  }, [enabled, fetchPreview]);
 
-  return { previewData, loading, error };
+  // Expose refetch function for manual refresh
+  const refetch = () => {
+    if (enabled) {
+      sessionStorage.removeItem(CACHE_KEY); // Clear cache
+      fetchPreview(true);
+    }
+  };
+
+  return { previewData, loading, error, refetch };
 }
+
+// Export cache invalidation for external use (e.g., after file upload/change)
+export const invalidatePreviewCache = () => {
+  try {
+    sessionStorage.removeItem(CACHE_KEY);
+    console.debug('[useFilePreview] Cache invalidated externally');
+  } catch (err) {
+    console.debug('[useFilePreview] Cache invalidation error:', err);
+  }
+};
 
 export default useFilePreview;

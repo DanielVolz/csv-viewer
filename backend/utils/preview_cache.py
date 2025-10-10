@@ -2,7 +2,7 @@ import threading
 import time
 
 class PreviewCache:
-    def __init__(self, max_age_seconds=60):
+    def __init__(self, max_age_seconds=300):
         self._cache = {}
         self._lock = threading.Lock()
         self.max_age = max_age_seconds
@@ -31,4 +31,4 @@ class PreviewCache:
                 for k in to_del:
                     del self._cache[k]
 
-preview_cache = PreviewCache(max_age_seconds=30)
+preview_cache = PreviewCache(max_age_seconds=300)

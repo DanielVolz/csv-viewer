@@ -9,7 +9,7 @@ import subprocess
 
 from models.file import FileModel
 from config import settings, get_settings
-from utils.csv_utils import read_csv_file, read_csv_file_normalized, DEFAULT_DISPLAY_ORDER, count_unique_data_rows
+from utils.csv_utils import read_csv_file, read_csv_file_normalized, read_csv_file_preview, DEFAULT_DISPLAY_ORDER, count_unique_data_rows
 from tasks.tasks import index_all_csv_files, app
 from utils.index_state import load_state, save_state
 from celery import current_app
@@ -379,6 +379,7 @@ async def get_netspeed_info():
         line_count = _count_lines(file_to_use)
 
         fb_name = fallback_file.name if (using_fallback and fallback_file is not None) else None
+        actual_name = file_to_use.name if file_to_use else None
         result = {
             "success": True,
             "message": (
@@ -389,7 +390,8 @@ async def get_netspeed_info():
             "line_count": line_count,
             "last_modified": modification_time,
             "using_fallback": using_fallback,
-            "fallback_file": fb_name
+            "fallback_file": fb_name,
+            "actual_file_name": actual_name
         }
         return JSONResponse(content=result)
 
@@ -441,22 +443,8 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         Returns:
         Dictionary with headers, preview rows, and file creation date
     """
-    # Only cache preview for default (no loc filter, netspeed.csv, not fallback)
-    cache_key = None
     try:
-        if (filename == "netspeed.csv" and (not loc or loc.strip() == "")):
-            # Use current file mtime as part of cache key
-            extras = _extra_search_paths()
-            inventory, _, current_file, _ = _collect_inventory(extras)
-            candidate = inventory.get("netspeed.csv")
-            mtime = None
-            if candidate and candidate.exists():
-                mtime = str(candidate.stat().st_mtime)
-            cache_key = f"preview:{filename}:{limit}:{mtime}"
-            cached = preview_cache.get(cache_key)
-            if cached:
-                return cached
-
+        # Optimized: Only one inventory lookup, fast cache, minimal row processing
         extras = _extra_search_paths()
         inventory, historical_files, current_file, _ = _collect_inventory(extras)
 
@@ -464,6 +452,23 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         using_fallback = False
         actual_filename = filename
 
+        # Only cache preview for default (no loc filter, netspeed.csv, not fallback)
+        cache_key = None
+        cache_enabled = (filename == "netspeed.csv" and (not loc or loc.strip() == ""))
+        mtime = None
+        if cache_enabled:
+            candidate = inventory.get("netspeed.csv")
+            if candidate and candidate.exists():
+                mtime = str(candidate.stat().st_mtime)
+                cache_key = f"preview:{filename}:{limit}:{mtime}"
+                cached = preview_cache.get(cache_key)
+                if cached:
+                    logger.info(f"Preview cache HIT for key: {cache_key}")
+                    return cached
+                else:
+                    logger.info(f"Preview cache MISS for key: {cache_key}")
+
+        # File selection logic
         if filename == "netspeed.csv":
             candidate = inventory.get("netspeed.csv")
             if candidate and candidate.exists():
@@ -533,19 +538,16 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         except Exception:
             creation_date = file_model.date.strftime('%Y-%m-%d') if file_model.date else None
 
-        # Read CSV file with all columns (normalized)
-        csv_headers, rows = read_csv_file_normalized(str(file_path))
+        # Read only the first N rows from the CSV file (fast preview)
+        csv_headers, rows, total_count = read_csv_file_preview(str(file_path), limit=limit)
 
         # Add metadata fields and apply same ordering as search results
-        # Order: metadata → alphabetical → Call Manager at end, hide KEM fields
         metadata_fields = ["#", "File Name", "Creation Date"]
         call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
-        hidden_fields = {"KEM", "KEM 2"}  # Internal fields not shown to users
+        hidden_fields = {"KEM", "KEM 2"}
 
-        # Build ordered headers
         headers = metadata_fields.copy()
-        data_cols = [col for col in csv_headers
-                    if col not in call_manager_fields and col not in hidden_fields]
+        data_cols = [col for col in csv_headers if col not in call_manager_fields and col not in hidden_fields]
         data_cols.sort()
         headers.extend(data_cols)
         headers.extend([col for col in call_manager_fields if col in csv_headers])
@@ -558,7 +560,6 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                 "File Name": actual_filename,
                 "Creation Date": creation_date
             }
-            # Add data fields, excluding hidden ones
             for key, value in row.items():
                 if key not in hidden_fields:
                     enriched_row[key] = value
@@ -568,7 +569,6 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         # Optional: filter by location code/prefix if provided
         loc_filter = (loc or "").strip().upper()
         if loc_filter:
-            # Accept either 3-letter prefix (AAA) or 5-char code (AAA01)
             from re import match
             is_prefix = bool(match(r"^[A-Z]{3}$", loc_filter))
             is_code = bool(match(r"^[A-Z]{3}[0-9]{2}$", loc_filter))
@@ -591,24 +591,21 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                     if code == loc_filter:
                         filtered.append(r)
                 else:
-                    # prefix match against first 3 letters of code
                     if code.startswith(loc_filter):
                         filtered.append(r)
             rows = filtered
 
-        # Limit number of rows
-        preview_rows = rows[:limit]
-
+        # No need to slice rows again, already limited
         fallback_message = (
             f" (using data from {actual_filename} until the next export is available)" if using_fallback else ""
         )
 
         result = {
             "success": True,
-            "message": (f"Showing first {len(preview_rows)} entries of "
-                        f"{len(rows)} total" + (f" (filtered by {loc_filter})" if loc_filter else "") + fallback_message),
+            "message": (f"Showing first {len(rows)} entries of "
+                        f"{total_count} total" + (f" (filtered by {loc_filter})" if loc_filter else "") + fallback_message),
             "headers": headers,
-            "data": preview_rows,
+            "data": rows,
             "creation_date": creation_date,
             "file_format": file_model.format,
             "file_name": filename,
@@ -616,8 +613,10 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
             "using_fallback": using_fallback,
             "fallback_file": actual_filename if using_fallback else None
         }
-        if cache_key and not using_fallback and not loc_filter:
+        # Set cache if enabled and not fallback/filtered
+        if cache_enabled and not using_fallback and not loc_filter and cache_key:
             preview_cache.set(cache_key, result)
+            logger.info(f"Preview cache SET for key: {cache_key}")
         return result
     except Exception as e:
         logger.error(f"Error getting file preview: {e}")

@@ -16,7 +16,13 @@ import {
   InputLabel,
   InputAdornment,
   IconButton,
-  Stack
+  Stack,
+  Skeleton,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell
 } from '@mui/material';
 import {
   Search,
@@ -34,7 +40,7 @@ import useMacHistory from '../hooks/useMacHistory';
 import { Popover, List, ListItemButton, ListItemText, Tooltip } from '@mui/material';
 
 // Preview block extracted to reduce re-renders while typing
-const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick }) {
+const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick, loading }) {
   if (!previewData || !previewData.data) return null;
 
   // Show warning for fallback files, info for normal files
@@ -42,25 +48,54 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
   const displayFileName = previewData?.actual_file_name || previewData?.file_name;
 
   return (
-    <Box>
+    <Box sx={{ position: 'relative', overflow: 'hidden' }}>
       <Alert severity={alertSeverity} sx={{ mb: 3 }}>
         {(previewData?.message || "Showing latest entries from the CSV file")}
         {displayFileName ? ` • ${displayFileName}` : ''}
       </Alert>
-      <DataTable
-        headers={previewData.headers}
-        data={previewData.data}
-        showRowNumbers={true}
-        onMacAddressClick={handleMacAddressClick}
-        onSwitchPortClick={handleSwitchPortClick}
-        labelMap={{
-          'Creation Date': 'Date',
-          'IP Address': 'IP Addr.',
-          'Voice VLAN': 'V-VLAN',
-          'Serial Number': 'Serial',
-          'Model Name': 'Model'
-        }}
-      />
+      <Box sx={{
+        position: 'relative',
+        opacity: loading ? 0.6 : 1,
+        transition: 'opacity 0.3s ease'
+      }}>
+        <DataTable
+          headers={previewData.headers}
+          data={previewData.data}
+          showRowNumbers={true}
+          onMacAddressClick={handleMacAddressClick}
+          onSwitchPortClick={handleSwitchPortClick}
+          labelMap={{
+            'Creation Date': 'Date',
+            'IP Address': 'IP Addr.',
+            'Voice VLAN': 'V-VLAN',
+            'Serial Number': 'Serial',
+            'Model Name': 'Model'
+          }}
+        />
+      </Box>
+      {/* Shimmer overlay during loading */}
+      {loading && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 0,
+            left: '-100%',
+            width: '200%',
+            height: '100%',
+            background: (theme) =>
+              theme.palette.mode === 'dark'
+                ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
+                : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+            animation: 'shimmer 2s ease-in-out infinite',
+            pointerEvents: 'none',
+            zIndex: 10,
+            '@keyframes shimmer': {
+              '0%': { transform: 'translateX(0)' },
+              '100%': { transform: 'translateX(50%)' }
+            }
+          }}
+        />
+      )}
     </Box>
   );
 });
@@ -116,22 +151,20 @@ function CSVSearch() {
   const { previewData, loading: previewLoading, error: previewError } = useFilePreview({ enabled: previewEnabled });
   const missingPreview = !previewLoading && previewData && previewData.success === false && (previewData.message || '').toLowerCase().includes('not found');
   // Detect when current netspeed.csv exists but is empty (no rows)
-  const currentEmpty = useRef(false);
-  currentEmpty.current = Boolean(
-    !previewLoading &&
+  const currentFileEmpty = Boolean(
     previewData &&
-    previewData.success === true &&
-    Array.isArray(previewData.data) && previewData.data.length === 0 &&
-    // using_fallback means we're showing yesterday's data, so not "empty current"
-    !previewData.using_fallback &&
-    // If actual_file_name is present, it must be netspeed.csv to be considered empty current
-    ((previewData.actual_file_name && previewData.actual_file_name === 'netspeed.csv') || (!previewData.actual_file_name && previewData.file_name === 'netspeed.csv'))
+    previewData.success &&
+    previewData.data &&
+    previewData.data.length === 0 &&
+    // Empty data and file is indeed empty (not just a small limit)
+    previewData.message &&
+    // Check if this is the current file (not a historical one) - check if it's not a numbered backup
+    ((previewData.actual_file_name && !previewData.actual_file_name.match(/\.csv\.[0-9]+/)) || (!previewData.actual_file_name && previewData.file_name === 'netspeed.csv'))
   );
+  const currentEmpty = useRef(currentFileEmpty);
+  currentEmpty.current = currentFileEmpty;
   // Block only while actively loading initial preview; allow searches even if file is missing
   const searchBlocked = previewLoading; // execution blocked only during preview loading
-
-  // Tracking for component lifecycle
-  const prevRef = useRef({});
 
   // Remove all whitespace characters from a value
   const stripAllWhitespace = useCallback((v) => String(v ?? '').replace(/\s+/g, ''), []);
@@ -196,6 +229,8 @@ function CSVSearch() {
         } catch { }
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchBlocked, includeHistorical, missingPreview, recordMac, searchAll, normalizeMacInput, stripAllWhitespace]);
 
   const typingTimeoutRef = useRef(null);
@@ -267,7 +302,8 @@ function CSVSearch() {
         }
       });
     }
-  }, [includeHistorical, searchAll, searchBlocked, previewLoading, missingPreview, recordMac, normalizeMacInput, getLocationForMac, stripAllWhitespace]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeHistorical, searchAll, searchBlocked, missingPreview, recordMac, normalizeMacInput, getLocationForMac, stripAllWhitespace]);
 
   const handleMacAddressClick = useCallback((macAddress) => {
     const macCanonical = normalizeMacInput(macAddress) || macAddress;
@@ -349,7 +385,8 @@ function CSVSearch() {
         setHasSearched(true);
       }
     });
-  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac, normalizeMacInput, getLocationForMac, previewLoading, missingPreview, stripAllWhitespace]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac, normalizeMacInput, getLocationForMac, missingPreview, stripAllWhitespace]);
 
   const handleClearSearch = useCallback(() => {
     setSearchTerm('');
@@ -574,13 +611,11 @@ function CSVSearch() {
               )}
             </Box>
           </Popover>
-          {(searchBlocked || missingPreview || currentEmpty.current) && (
-            <Alert severity={searchBlocked ? 'info' : 'warning'} sx={{ mt: -1 }}>
-              {searchBlocked
-                ? 'Data preview is loading – Search temporarily disabled'
-                : (missingPreview
-                  ? 'Current file missing: results will be shown from historical netspeed.csv files.'
-                  : 'Current file has no data: results will be shown from historical netspeed.csv files.')}
+          {(missingPreview || currentEmpty.current) && (
+            <Alert severity="warning" sx={{ mt: -1 }}>
+              {missingPreview
+                ? 'Current file missing: results will be shown from historical netspeed.csv files.'
+                : 'Current file has no data: results will be shown from historical netspeed.csv files.'}
             </Alert>
           )}
 
@@ -641,19 +676,144 @@ function CSVSearch() {
         </Stack>
       </Paper>
 
-      {/* Loading State */}
-      {(searchLoading || previewLoading) && (
-        <Box sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 2,
-          py: 6
-        }}>
-          <CircularProgress size={32} />
-          <Typography variant="body1" color="text.secondary">
-            {searchLoading ? 'Searching...' : 'Loading preview...'}
-          </Typography>
+      {/* Loading State - Show skeleton table for both search and preview */}
+      {searchLoading && (
+        <Box>
+          {/* Search Results Header with skeleton */}
+          <Box sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            mb: 3
+          }}>
+            <Box>
+              <Typography variant="h5" fontWeight={700}>
+                Search Results
+              </Typography>
+            </Box>
+          </Box>
+
+          {/* Status Message with skeleton */}
+          <Box sx={{ mb: 3 }}>
+            <Skeleton variant="rectangular" width="100%" height={48} animation="wave" sx={{ borderRadius: 1 }} />
+          </Box>
+
+          <Paper
+            elevation={1}
+            sx={{
+              p: 3,
+              borderRadius: 2,
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+          <Table>
+            <TableHead>
+              <TableRow>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                  <TableCell key={i}>
+                    <Skeleton variant="text" width="100%" height={30} animation="wave" />
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {[1, 2, 3, 4, 5, 6, 7].map((row) => (
+                <TableRow key={row}>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((col) => (
+                    <TableCell key={col}>
+                      <Skeleton variant="text" width="100%" height={20} animation="wave" />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {/* Shimmer overlay */}
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              left: '-100%',
+              width: '200%',
+              height: '100%',
+              background: (theme) =>
+                theme.palette.mode === 'dark'
+                  ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
+                  : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+              animation: 'shimmer 2s ease-in-out infinite',
+              pointerEvents: 'none',
+              zIndex: 10,
+              '@keyframes shimmer': {
+                '0%': { transform: 'translateX(0)' },
+                '100%': { transform: 'translateX(50%)' }
+              }
+            }}
+          />
+        </Paper>
+        </Box>
+      )}
+
+      {previewLoading && !previewData && (
+        <Box>
+          {/* Preview Alert with skeleton */}
+          <Box sx={{ mb: 3 }}>
+            <Skeleton variant="rectangular" width="100%" height={48} animation="wave" sx={{ borderRadius: 1 }} />
+          </Box>
+
+          <Paper
+            elevation={1}
+            sx={{
+              p: 3,
+              borderRadius: 2,
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+          <Table>
+            <TableHead>
+              <TableRow>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                  <TableCell key={i}>
+                    <Skeleton variant="text" width="100%" height={30} animation="wave" />
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {[1, 2, 3, 4, 5].map((row) => (
+                <TableRow key={row}>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((col) => (
+                    <TableCell key={col}>
+                      <Skeleton variant="text" width="100%" height={20} animation="wave" />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {/* Shimmer overlay */}
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              left: '-100%',
+              width: '200%',
+              height: '100%',
+              background: (theme) =>
+                theme.palette.mode === 'dark'
+                  ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
+                  : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+              animation: 'shimmer 2s ease-in-out infinite',
+              pointerEvents: 'none',
+              zIndex: 10,
+              '@keyframes shimmer': {
+                '0%': { transform: 'translateX(0)' },
+                '100%': { transform: 'translateX(50%)' }
+              }
+            }}
+          />
+        </Paper>
         </Box>
       )}
 
@@ -693,6 +853,7 @@ function CSVSearch() {
               previewData={previewData}
               handleMacAddressClick={handleMacAddressClick}
               handleSwitchPortClick={handleSwitchPortClick}
+              loading={previewLoading}
             />
           ) : (
             <Paper

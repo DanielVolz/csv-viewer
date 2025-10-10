@@ -231,7 +231,9 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           borderRadius: 1,
           border: '1px solid',
           borderColor: 'divider',
-          background: 'background.paper'
+          background: 'background.paper',
+          position: 'relative',
+          overflow: 'hidden'
         }}
       >
         <Box sx={{
@@ -239,91 +241,132 @@ const FileInfoBox = React.memo(({ compact = false }) => {
           alignItems: 'center',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
-          gap: 2
+          gap: 2,
+          opacity: (initialLoading || refreshing) ? 0.6 : 1,
+          transition: 'opacity 0.3s ease'
         }}>
-          <Typography variant="body2" color="text.secondary">
-            {(() => {
-              const raw = fileInfo?.date || null; // Expecting YYYY-MM-DD from backend
-              const today = new Date();
-              const yyyy = today.getFullYear();
-              const mm = String(today.getMonth() + 1).padStart(2, '0');
-              const dd = String(today.getDate()).padStart(2, '0');
-              const todayStr = `${yyyy}-${mm}-${dd}`;
-              const isToday = raw === todayStr;
-              // Prefer epoch mtime for local timezone; fallback to server time string or last_modified
-              let timeStr = '';
-              try {
-                if (typeof fileInfo?.mtime === 'number') {
-                  const d = new Date(fileInfo.mtime * 1000);
-                  const hh = String(d.getHours()).padStart(2, '0');
-                  const mi = String(d.getMinutes()).padStart(2, '0');
-                  timeStr = `${hh}:${mi}`;
-                } else if (fileInfo?.time) {
-                  timeStr = String(fileInfo.time);
-                } else if (fileInfo?.last_modified) {
-                  const d = new Date(fileInfo.last_modified * 1000);
-                  const hh = String(d.getHours()).padStart(2, '0');
-                  const mi = String(d.getMinutes()).padStart(2, '0');
-                  timeStr = `${hh}:${mi}`;
-                }
-              } catch { }
-              const dateOut = raw ? (timeStr ? `${raw} ${timeStr}` : raw) : '-';
-              const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
-              return (
-                <>
-                  Current File: <strong>netspeed.csv</strong> • Created: <strong><Box component="span" sx={{ color: isToday ? 'success.main' : 'inherit' }}>{dateOut}</Box></strong> • Records: <strong>{fileInfo?.line_count?.toLocaleString() || '0'}</strong>
-                  {empty && (
-                    <Box component="span" sx={{ ml: 1, color: 'warning.main', fontWeight: 600 }}>
-                      — Keine tagesaktuellen Daten vorhanden (aktuelles File ist leer)
-                    </Box>
-                  )}
-                  {/* Removed verbose fallback text per request */}
-                </>
-              );
-            })()}
-          </Typography>
+          {initialLoading ? (
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flex: 1 }}>
+              <Skeleton variant="text" width={120} height={20} animation="wave" />
+              <Skeleton variant="text" width={180} height={20} animation="wave" />
+              <Skeleton variant="text" width={100} height={20} animation="wave" />
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              {(() => {
+                const raw = fileInfo?.date || null; // Expecting YYYY-MM-DD from backend
+                const today = new Date();
+                const yyyy = today.getFullYear();
+                const mm = String(today.getMonth() + 1).padStart(2, '0');
+                const dd = String(today.getDate()).padStart(2, '0');
+                const todayStr = `${yyyy}-${mm}-${dd}`;
+                const isToday = raw === todayStr;
+                // Prefer epoch mtime for local timezone; fallback to server time string or last_modified
+                let timeStr = '';
+                try {
+                  if (typeof fileInfo?.mtime === 'number') {
+                    const d = new Date(fileInfo.mtime * 1000);
+                    const hh = String(d.getHours()).padStart(2, '0');
+                    const mi = String(d.getMinutes()).padStart(2, '0');
+                    timeStr = `${hh}:${mi}`;
+                  } else if (fileInfo?.time) {
+                    timeStr = String(fileInfo.time);
+                  } else if (fileInfo?.last_modified) {
+                    const d = new Date(fileInfo.last_modified * 1000);
+                    const hh = String(d.getHours()).padStart(2, '0');
+                    const mi = String(d.getMinutes()).padStart(2, '0');
+                    timeStr = `${hh}:${mi}`;
+                  }
+                } catch { }
+                const dateOut = raw ? (timeStr ? `${raw} ${timeStr}` : raw) : '-';
+                const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
+                const displayName = fileInfo?.actual_file_name || fileInfo?.fallback_file || 'netspeed.csv';
+                return (
+                  <>
+                    Current File: <strong>{displayName}</strong> • Created: <strong><Box component="span" sx={{ color: isToday ? 'success.main' : 'inherit' }}>{dateOut}</Box></strong> • Records: <strong>{fileInfo?.line_count?.toLocaleString() || '0'}</strong>
+                    {empty && (
+                      <Box component="span" sx={{ ml: 1, color: 'warning.main', fontWeight: 600 }}>
+                        — Keine tagesaktuellen Daten vorhanden (aktuelles File ist leer)
+                      </Box>
+                    )}
+                    {/* Removed verbose fallback text per request */}
+                  </>
+                );
+              })()}
+            </Typography>
+          )}
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            {(() => {
-              const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
-              const fallbackUsing = Boolean(fileInfo?.using_fallback);
-              if (empty) {
+            {initialLoading ? (
+              <>
+                <Skeleton variant="rounded" width={90} height={24} animation="wave" />
+                <Skeleton variant="circular" width={32} height={32} animation="wave" />
+              </>
+            ) : (
+              (() => {
+                const empty = typeof fileInfo?.line_count === 'number' && fileInfo.line_count <= 0;
+                const fallbackUsing = Boolean(fileInfo?.using_fallback);
+                if (empty) {
+                  return (
+                    <Tooltip title="No up-to-date data available (current file is empty). Searches will use historical files." arrow placement="top">
+                      <Chip label="No data today" color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                    </Tooltip>
+                  );
+                }
+                if (fallbackUsing) {
+                  const fallbackSource = fileInfo?.source;
+                  const label = fallbackSource === 'opensearch' ? 'Using OpenSearch' : 'Using historical';
+                  const tooltip = fallbackSource === 'opensearch'
+                    ? 'Filesystem export missing; showing latest indexed data from OpenSearch.'
+                    : 'Current file missing; using historical netspeed.csv.*';
+                  const color = fallbackSource === 'opensearch' ? 'info' : 'warning';
+                  const icon = fallbackSource === 'opensearch'
+                    ? <CloudQueue sx={{ fontSize: 18 }} />
+                    : <Warning sx={{ fontSize: 18 }} />;
+                  return (
+                    <Tooltip title={tooltip} arrow placement="top">
+                      <Chip label={label} color={color} size="small" variant="filled" sx={{ cursor: 'help' }} icon={icon} />
+                    </Tooltip>
+                  );
+                }
                 return (
-                  <Tooltip title="No up-to-date data available (current file is empty). Searches will use historical files." arrow placement="top">
-                    <Chip label="No data today" color="warning" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<Warning sx={{ fontSize: 18 }} />} />
+                  <Tooltip title={indexStatusLabel()} arrow placement="top">
+                    <Chip label="Active" color="success" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<CheckCircleRounded sx={{ fontSize: 18 }} />} />
                   </Tooltip>
                 );
-              }
-              if (fallbackUsing) {
-                const fallbackSource = fileInfo?.source;
-                const label = fallbackSource === 'opensearch' ? 'Using OpenSearch' : 'Using historical';
-                const tooltip = fallbackSource === 'opensearch'
-                  ? 'Filesystem export missing; showing latest indexed data from OpenSearch.'
-                  : 'Current file missing; using historical netspeed.csv.*';
-                const color = fallbackSource === 'opensearch' ? 'info' : 'warning';
-                const icon = fallbackSource === 'opensearch'
-                  ? <CloudQueue sx={{ fontSize: 18 }} />
-                  : <Warning sx={{ fontSize: 18 }} />;
-                return (
-                  <Tooltip title={tooltip} arrow placement="top">
-                    <Chip label={label} color={color} size="small" variant="filled" sx={{ cursor: 'help' }} icon={icon} />
-                  </Tooltip>
-                );
-              }
-              return (
-                <Tooltip title={indexStatusLabel()} arrow placement="top">
-                  <Chip label="Active" color="success" size="small" variant="filled" sx={{ cursor: 'help' }} icon={<CheckCircleRounded sx={{ fontSize: 18 }} />} />
-                </Tooltip>
-              );
-            })()}
+              })()
+            )}
             <IconButton
               onClick={handleRefresh}
-              disabled={refreshing}
+              disabled={refreshing || initialLoading}
               size="small"
             >
               {refreshing ? <CircularProgress size={16} /> : <Refresh fontSize="small" />}
             </IconButton>
           </Box>
         </Box>
+        {/* Shimmer overlay during refresh */}
+        {refreshing && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              left: '-100%',
+              width: '200%',
+              height: '100%',
+              background: (theme) =>
+                theme.palette.mode === 'dark'
+                  ? 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)'
+                  : 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+              animation: 'shimmer 2s ease-in-out infinite',
+              pointerEvents: 'none',
+              zIndex: 1,
+              '@keyframes shimmer': {
+                '0%': { transform: 'translateX(0)' },
+                '100%': { transform: 'translateX(50%)' }
+              }
+            }}
+          />
+        )}
       </Paper>
     );
   }
@@ -450,7 +493,7 @@ const FileInfoBox = React.memo(({ compact = false }) => {
                         : 'inherit'
                   }
                 >
-                  {label === 'File Name' && 'netspeed.csv'}
+                  {label === 'File Name' && (fileInfo?.actual_file_name || fileInfo?.fallback_file || 'netspeed.csv')}
                   {label === 'Created' && (() => {
                     const d = fileInfo?.date || '';
                     let t = '';

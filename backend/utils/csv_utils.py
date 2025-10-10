@@ -823,4 +823,104 @@ def read_csv_file_normalized(file_path: str) -> Tuple[List[str], List[Dict[str, 
         return generate_headers_for_legacy_file(16), []
 
 
+def read_csv_file_preview(file_path: str, limit: int = 100) -> Tuple[List[str], List[Dict[str, Any]], int]:
+    """Read only the first N rows of a CSV file for fast preview.
+
+    PERFORMANCE-OPTIMIZED: Only reads header + limit rows instead of entire file.
+    Returns headers, limited rows, and total row count (approximate from file size).
+
+    Args:
+        file_path: Path to CSV file
+        limit: Maximum number of data rows to read (default 100)
+
+    Returns:
+        Tuple of (headers, rows, total_count) where:
+        - headers: List of canonical field names
+        - rows: List of at most 'limit' row dictionaries
+        - total_count: Estimated total rows in file
+    """
+    try:
+        file_headers = None
+        rows_read = []
+        total_lines = 0
+
+        with open(file_path, 'r', newline='') as csv_file:
+            # Quick delimiter detection from first few KB
+            sample = csv_file.read(4096)
+            csv_file.seek(0)
+            delimiter = ';' if ';' in sample else ','
+
+            class TrailingDelimiterReader:
+                def __init__(self, csv_file, delimiter):
+                    self.reader = csv.reader(csv_file, delimiter=delimiter)
+                    self.delimiter = delimiter
+
+                def __iter__(self):
+                    return self
+
+                def __next__(self):
+                    row = next(self.reader)
+                    if row and row[-1] == '':
+                        original_line = self.delimiter.join(row)
+                        if original_line.endswith(self.delimiter):
+                            return row[:-1]
+                    return row
+
+            reader = TrailingDelimiterReader(csv_file, delimiter)
+
+            # Read header row
+            try:
+                first_row = next(reader)
+                first_row_cleaned = [cell.strip().lstrip("\ufeff") for cell in first_row]
+                if _is_header_row(first_row_cleaned):
+                    file_headers = first_row_cleaned
+                else:
+                    # No header, this is data - include it
+                    rows_read.append(first_row)
+            except StopIteration:
+                return generate_headers_for_legacy_file(16), [], 0
+
+            # Read only 'limit' data rows
+            for i, row in enumerate(reader):
+                if i >= limit:
+                    break
+                if row:
+                    rows_read.append([cell.strip() for cell in row])
+
+            # Estimate total count by counting remaining lines quickly
+            total_lines = len(rows_read)
+            try:
+                # Quick count of remaining lines
+                for line in csv_file:
+                    if line.strip():
+                        total_lines += 1
+            except Exception:
+                # If counting fails, use what we have
+                pass
+
+        if not rows_read:
+            headers = [_get_display_name(h) for h in file_headers] if file_headers else generate_headers_for_legacy_file(16)
+            return headers, [], 0
+
+        # Process the limited rows
+        normalized_rows: List[Dict[str, Any]] = []
+        for row in rows_read:
+            if not row:
+                continue
+            row_dict = intelligent_column_mapping(row, headers=file_headers)
+            normalized_rows.append(row_dict)
+
+        # Determine headers
+        if file_headers:
+            headers_list = [_get_display_name(h) for h in file_headers]
+        else:
+            headers_list = generate_headers_for_legacy_file(16)
+
+        return headers_list, normalized_rows, total_lines
+
+    except Exception as e:
+        logger.error(f"Error reading CSV preview {file_path}: {e}")
+        return generate_headers_for_legacy_file(16), [], 0
+
+
 # search_field_in_files() was removed as it's unused (replaced by OpenSearch-based search in tasks.py)
