@@ -822,32 +822,30 @@ function CSVSearch() {
         <Alert
           severity="error"
           sx={{ mb: 3 }}
-        >
-          {searchError || previewError}
-        </Alert>
+        />
+      )}
+
+      {/* Error State - Preview Error */}
+      {previewError && !hasSearched && !previewLoading && (
+        <ErrorDisplay
+          type="error"
+          title="Preview-Fehler"
+          message={previewError}
+          variant="paper"
+          sx={{ mb: 3 }}
+        />
       )}
 
       {/* Welcome Message or Preview - Show when no search has been performed */}
       {!searchLoading && !previewLoading && !hasSearched && (
         <>
           {missingPreview ? (
-            <Paper
-              elevation={1}
-              sx={{
-                p: 4,
-                textAlign: 'center',
-                borderRadius: 2,
-                border: '1px solid',
-                borderColor: 'divider'
-              }}
-            >
-              <Typography variant="h6" gutterBottom>
-                No netspeed.csv found
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Place a file in the /app/data directory and refresh the page.
-              </Typography>
-            </Paper>
+            <ErrorDisplay
+              type="warning"
+              title="Keine netspeed.csv gefunden"
+              message="Bitte legen Sie eine Datei im /app/data Verzeichnis ab und laden Sie die Seite neu. Die Suche wird auf historische Daten zurückgreifen."
+              variant="paper"
+            />
           ) : previewData && previewData.data ? (
             <PreviewSection
               previewData={previewData}
