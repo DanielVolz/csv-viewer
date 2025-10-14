@@ -1535,7 +1535,7 @@ class OpenSearchConfig:
                     if response["hits"]["total"]["value"] > 0:
                         # Return the first match immediately - don't search all indices
                         hit = response["hits"]["hits"][0]
-                        logger.debug(f"Found historical data for MAC {self._mask_mac(mac_address)} in index {index}")
+                        logger.debug(f"Found historical data in index {index}")
                         return hit["_source"]
                 except Exception as e:
                     logger.debug(f"Error searching historical index {index} for MAC {mac_address}: {e}")
