@@ -1151,9 +1151,11 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
 
     historical_files, current_file_candidate, backup_files = collect_netspeed_files(extras, include_backups=True)
     ordered_files: List[Path] = []
-    ordered_files.extend(historical_files)
+    # CRITICAL: Index current file FIRST, then historical files
+    # This ensures the most recent data is available immediately for searches
     if current_file_candidate:
         ordered_files.append(current_file_candidate)
+    ordered_files.extend(historical_files)
     ordered_files.extend(backup_files)
 
     scanned_dirs = sorted({str(p.parent) for p in ordered_files})
