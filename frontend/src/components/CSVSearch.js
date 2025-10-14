@@ -35,6 +35,7 @@ import {
 import useSearchCSV from '../hooks/useSearchCSV';
 import useFilePreview from '../hooks/useFilePreview';
 import DataTable from './DataTable';
+import ErrorDisplay from './ErrorDisplay';
 import { toast } from 'react-toastify';
 import useMacHistory from '../hooks/useMacHistory';
 import { Popover, List, ListItemButton, ListItemText, Tooltip } from '@mui/material';

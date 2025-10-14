@@ -541,16 +541,13 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         # Read only the first N rows from the CSV file (fast preview)
         csv_headers, rows, total_count = read_csv_file_preview(str(file_path), limit=limit)
 
-        # Add metadata fields and apply same ordering as search results
-        metadata_fields = ["#", "File Name", "Creation Date"]
-        call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
-        hidden_fields = {"KEM", "KEM 2"}
+        # Use central function as SINGLE SOURCE OF TRUTH for column order
+        from utils.csv_utils import get_csv_column_order
+        all_headers = get_csv_column_order()
 
-        headers = metadata_fields.copy()
-        data_cols = [col for col in csv_headers if col not in call_manager_fields and col not in hidden_fields]
-        data_cols.sort()
-        headers.extend(data_cols)
-        headers.extend([col for col in call_manager_fields if col in csv_headers])
+        # Filter out hidden columns (KEM, KEM 2)
+        hidden_fields = {"KEM", "KEM 2"}
+        headers = [h for h in all_headers if h not in hidden_fields]
 
         # Add metadata to each row and filter out hidden fields
         enriched_rows = []
@@ -937,27 +934,26 @@ async def get_available_columns():
         List of column definitions with id, label, and default enabled state
     """
     try:
-        # Try to get columns from current CSV file first (dynamic for modern files)
-        csv_file = resolve_current_file(_extra_search_paths())
-        actual_columns = []
+        # Find current CSV file
+        extras = _extra_search_paths()
+        inventory, historical_files, current_file, _ = _collect_inventory(extras)
 
-        if csv_file and Path(csv_file).exists():
-            try:
-                # Use read_csv_file_normalized to get ALL data columns from CSV
-                csv_headers, _ = read_csv_file_normalized(str(csv_file))
-                actual_columns = csv_headers if csv_headers else []
-            except Exception as e:
-                logger.warning(f"Could not read headers from {csv_file}: {e}")
+        file_path: Optional[Path] = None
+        if current_file and current_file.exists():
+            file_path = current_file
+        else:
+            sorted_hist = _sorted_existing(historical_files)
+            if sorted_hist:
+                file_path = sorted_hist[0]
 
-        # Fallback to DEFAULT_DISPLAY_ORDER if we couldn't read from file
-        if not actual_columns:
-            logger.info("Using DEFAULT_DISPLAY_ORDER as fallback for /columns endpoint")
-            # DEFAULT_DISPLAY_ORDER includes metadata, so strip them for consistency
-            actual_columns = [col for col in DEFAULT_DISPLAY_ORDER
-                            if col not in ["#", "File Name", "Creation Date"]]
+        if not file_path or not file_path.exists():
+            raise HTTPException(status_code=404, detail="No CSV file available to read columns from")
+
+        # Use central function as SINGLE SOURCE OF TRUTH for column order
+        from utils.csv_utils import get_csv_column_order
+        ordered_columns = get_csv_column_order()
 
         # Define core columns that are enabled by default
-        # All other columns (including new ones from future CSV formats) will be disabled by default
         core_enabled_columns = {
             "#", "File Name", "Creation Date", "IP Address", "Line Number",
             "MAC Address", "Voice VLAN", "Switch Hostname", "Switch Port",
@@ -977,26 +973,6 @@ async def get_available_columns():
             "MAC Address 2": "MAC Addr. 2",
         }
 
-        # Apply the SAME ordering as search results (_build_headers_from_documents logic)
-        # Order: metadata fields → alphabetical data fields → Call Manager at end
-        metadata_fields = ["#", "File Name", "Creation Date"]
-        call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
-
-        # Start with metadata fields
-        ordered_columns = metadata_fields.copy()
-
-        # Separate CSV data columns into categories (excluding metadata which we already added)
-        call_manager_cols = [col for col in actual_columns if col in call_manager_fields]
-        data_cols = [col for col in actual_columns
-                    if col not in call_manager_fields]
-
-        # Sort data columns alphabetically and add to ordered list
-        data_cols.sort()
-        ordered_columns.extend(data_cols)
-
-        # Add Call Manager fields at the end
-        ordered_columns.extend(call_manager_cols)
-
         # Build column definitions from ordered columns
         available_columns = []
         for column_id in ordered_columns:
@@ -1005,7 +981,6 @@ async def get_available_columns():
                 continue
 
             # Determine if column should be enabled by default
-            # Core columns: enabled, all others (including new ones): disabled
             is_enabled = column_id in core_enabled_columns
 
             available_columns.append({
@@ -1017,7 +992,7 @@ async def get_available_columns():
         return {
             "success": True,
             "columns": available_columns,
-            "message": f"Retrieved {len(available_columns)} available columns in search result order"
+            "message": f"Retrieved {len(available_columns)} available columns from CSV"
         }
 
     except Exception as e:

@@ -88,9 +88,20 @@ function DataTable({
     if (Array.isArray(columns) && columns.length > 0) {
       // Get enabled columns in Settings order (respects user drag & drop)
       const headersSet = new Set(Array.isArray(headers) ? headers : []);
-      return columns
+      const filtered = columns
         .filter(c => c.enabled && headersSet.has(c.id) && c.id !== '#')
         .map(c => c.id);
+
+      // Debug log to help diagnose settings issues
+      console.debug('[DataTable] Filtering headers:', {
+        totalColumns: columns.length,
+        enabledColumns: columns.filter(c => c.enabled).length,
+        headersFromBackend: headers?.length || 0,
+        filteredHeaders: filtered.length,
+        missingInBackend: columns.filter(c => c.enabled && !headersSet.has(c.id)).map(c => c.id)
+      });
+
+      return filtered;
     }
 
     // Fallback: if columns not loaded yet, allow all provided headers

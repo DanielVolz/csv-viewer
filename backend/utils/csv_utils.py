@@ -65,7 +65,6 @@ def _camel_to_display(name: str) -> str:
     """Convert CamelCase to Display Name with spaces.
     Examples:
       IPAddress -> IP Address
-      CallManager1 -> Call Manager 1
       MACAddress2 -> MAC Address 2
     """
     import re
@@ -97,6 +96,58 @@ def _get_display_name(source_header: str) -> str:
     First checks CUSTOM_DISPLAY_NAMES, then auto-generates from CamelCase.
     """
     return CUSTOM_DISPLAY_NAMES.get(source_header, _camel_to_display(source_header))
+
+
+def get_column_order(file_path: Optional[str] = None) -> List[str]:
+    """
+    CENTRAL FUNCTION: Get column order for ALL endpoints.
+
+    Returns columns in CSV file order with OpenSearch field names.
+    This is the SINGLE SOURCE OF TRUTH for column ordering.
+
+    Args:
+        file_path: Optional path to CSV file. If None, uses current netspeed.csv
+
+    Returns:
+        List of column names in correct order (metadata + CSV columns)
+    """
+    metadata_fields = ["#", "File Name", "Creation Date"]
+
+    try:
+        # Find current file if not provided
+        if not file_path:
+            from utils.path_utils import resolve_current_file
+            current_file = resolve_current_file()
+            if not current_file or not current_file.exists():
+                logger.warning("Could not find current CSV file for column order")
+                return metadata_fields
+            file_path = str(current_file)
+
+        # Read first line to get CSV headers
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
+            first_line = f.readline().strip()
+            # Determine delimiter
+            if ';' in first_line:
+                raw_headers = first_line.split(';')
+            elif ',' in first_line:
+                raw_headers = first_line.split(',')
+            else:
+                raw_headers = first_line.split()
+
+            # Convert CamelCase headers to OpenSearch display names
+            # _get_display_name uses CUSTOM_DISPLAY_NAMES for proper mapping
+            csv_headers = []
+            for raw_header in raw_headers:
+                display_name = _get_display_name(raw_header.strip())
+                csv_headers.append(display_name)
+
+            # Return metadata + CSV columns
+            return metadata_fields + csv_headers
+
+    except Exception as e:
+        logger.error(f"Error reading column order from {file_path}: {e}")
+        return metadata_fields
+
 
 # ============================================================================
 # MODERN FORMAT: Header-based (fully automatic for any column count)
@@ -573,27 +624,24 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
     """
     Filter headers and data to show only desired columns in frontend.
 
-    DEPRECATED: This function is only used for legacy compatibility.
-    Modern code should use _build_display_order_from_headers() instead.
+    Uses get_column_order() as SINGLE SOURCE OF TRUTH for column ordering.
 
     Args:
-        headers: List of all available headers
+        headers: List of all available headers from the data source (may be alphabetically sorted by OpenSearch)
         data: List of data dictionaries
 
     Returns:
-        Tuple of (filtered_headers, filtered_data)
+        Tuple of (filtered_headers, filtered_data) - all columns in CSV file order
     """
-    # Normalize headers to canonical names (handles legacy Speed Switch-Port naming)
-    canonical_headers = _canonicalize_header_row(headers or [])
+    display_headers = get_csv_column_order()
 
-    # Build display order dynamically from headers
-    display_order = _build_display_order_from_headers(canonical_headers)
+    # Filter to only include columns that exist in headers or data
+    available_headers = []
+    for col in display_headers:
+        if col in headers or any(col in row for row in data):
+            available_headers.append(col)
 
-    # Filter headers to only include columns present in data
-    display_headers: List[str] = []
-    for header in display_order:
-        if header in canonical_headers:
-            display_headers.append(header)
+    display_headers = available_headers
 
     # Filter data to only include displayed columns, copying legacy values when necessary
     filtered_data = []
@@ -604,11 +652,38 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
             if legacy in row_with_aliases and renamed not in row_with_aliases:
                 row_with_aliases[renamed] = row_with_aliases[legacy]
         for header in display_headers:
-            if header in row_with_aliases:
-                filtered_row[header] = row_with_aliases[header]
+            # Include column even if value is missing - will show as empty
+            filtered_row[header] = row_with_aliases.get(header, "")
         filtered_data.append(filtered_row)
 
     return display_headers, filtered_data
+
+
+def get_csv_column_order() -> list:
+    """
+    Liefert die Spaltenreihenfolge (inkl. OpenSearch-Mapping) gemäß aktueller CSV-Datei.
+    Diese Funktion ist die zentrale Quelle für die Spaltenlogik.
+    """
+    metadata_fields = ["#", "File Name", "Creation Date"]
+    csv_headers = []
+    try:
+        from utils.path_utils import resolve_current_file
+        current_file = resolve_current_file()
+        if current_file and current_file.exists():
+            with open(current_file, 'r', encoding='utf-8-sig') as f:
+                first_line = f.readline().strip()
+                if ';' in first_line:
+                    raw_headers = first_line.split(';')
+                elif ',' in first_line:
+                    raw_headers = first_line.split(',')
+                else:
+                    raw_headers = first_line.split()
+                for raw_header in raw_headers:
+                    display_name = _get_display_name(raw_header.strip())
+                    csv_headers.append(display_name)
+    except Exception as e:
+        logger.warning(f"Could not read CSV header order, falling back to default: {e}")
+    return metadata_fields + csv_headers
 
 
 def read_csv_file(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:

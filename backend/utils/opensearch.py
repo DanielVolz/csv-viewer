@@ -114,10 +114,20 @@ class OpenSearchConfig:
                     # Canonical column names for switch/PC port mode
                     "Switch Port Mode": self.keyword_type,
                     "PC Port Mode": self.keyword_type,
-                    # CallManager columns (added for extended format support)
-                    "CallManager 1": self.text_with_keyword,
-                    "CallManager 2": self.text_with_keyword,
-                    "CallManager 3": self.text_with_keyword,
+                    # Call Manager fields (IMPORTANT: Use exact field names as they appear in CSV/OpenSearch)
+                    # These field names MUST match the CSV headers exactly (with spaces)
+                    "Call Manager Active Sub": self.text_with_keyword,
+                    "Call Manager Standby Sub": self.text_with_keyword,
+                    # Additional port configuration fields
+                    "PC Port Duplex": self.keyword_type,
+                    "Switch Port Duplex": self.keyword_type,
+                    "Switch Port Speed": self.keyword_type,
+                    "PC Port Remote Config": self.keyword_type,
+                    "SW Port Remote Config": self.keyword_type,
+                    "Port Auto Link Sync": self.keyword_type,
+                    # KEM fields (Key Expansion Module)
+                    "KEM": self.keyword_type,
+                    "KEM 2": self.keyword_type,
                 },
                 "dynamic_templates": [
                     {
@@ -639,9 +649,29 @@ class OpenSearchConfig:
 
                             logger.warning(f"No index found for current file {current_filename}, falling back to newest index")
                     except Exception as e:
-                        logger.warning(f"Failed to determine current file: {e}, falling back to newest index")
+                        logger.warning(f"Failed to determine current file: {e}, falling back to newest index by filename")
 
-                    # Fallback: use newest index by creation time
+                    # Fallback: use newest index by FILENAME date (not index creation time)
+                    # Extract dates from filenames like netspeed_20251013-061543.csv
+                    newest_by_filename = None
+                    newest_date_str = ""
+                    for entry in netspeed_entries:
+                        idx_name = entry.get("index", "")
+                        file_name = entry.get("file_name", "")
+                        # Extract YYYYMMDD from filename (e.g., netspeed_20251013-061543.csv -> 20251013)
+                        import re
+                        date_match = re.search(r'(\d{8})', file_name)
+                        if date_match:
+                            date_str = date_match.group(1)
+                            if date_str > newest_date_str:
+                                newest_date_str = date_str
+                                newest_by_filename = idx_name
+
+                    if newest_by_filename:
+                        logger.info(f"Using newest netspeed index by filename date: {newest_by_filename}")
+                        return [newest_by_filename]
+
+                    # Ultimate fallback: use first in list (sorted by index creation time)
                     logger.info(f"Using latest netspeed index for current-only search: {netspeed_ordered[0]}")
                     return [netspeed_ordered[0]]
                 if archive_available:
@@ -1907,18 +1937,25 @@ class OpenSearchConfig:
                     ]
                 }
 
-            # Switch Hostname pattern without domain: 3 letters + 2 digits + other chars (like ABX01ZSL5210P)
+            # Switch Hostname pattern without domain: 3 letters + 2 digits + other chars (like ABX01ZSL5210P or Mxx03ZSL)
+            # Minimum length 8: AAA00BBB (location code + 3 chars suffix)
             hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if isinstance(qn, str) else None
-            if hostname_pattern_match and '.' not in qn and len(qn) >= 13:
+            if hostname_pattern_match and '.' not in qn and len(qn) >= 8:
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 q_lower = qn.lower()
                 return {
                     "query": {
                         "bool": {
                             "should": [
+                                # Exact matches
                                 {"term": {"Switch Hostname.lower": q_lower}},
                                 {"term": {"Switch Hostname": qn}},
                                 {"term": {"Switch Hostname": qn.upper()}},
+                                # Prefix matches (hostname without domain or with domain)
+                                {"prefix": {"Switch Hostname.lower": f"{q_lower}"}},
+                                {"prefix": {"Switch Hostname": f"{qn}"}},
+                                {"prefix": {"Switch Hostname": f"{qn.upper()}"}},
+                                # Domain-qualified prefix matches
                                 {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
                                 {"prefix": {"Switch Hostname": f"{qn}."}},
                                 {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
@@ -2074,19 +2111,24 @@ class OpenSearchConfig:
                     # Look for at least 2 consecutive letters
                     if re.search(r'[A-Za-z]{2,}', remaining):
                         is_hostname_prefix = True
-
             if is_hostname_prefix:
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 q_lower = qn.lower()
                 q_upper = qn.upper()
                 # Prefix search: matches ABX01*, ABX01ZSL*, etc.
+                # IMPORTANT: Also search in ALL other fields via multi_match (e.g., Call Manager columns)
                 should_clauses = [
-                    {"prefix": {"Switch Hostname.lower": q_lower}},
-                    {"prefix": {"Switch Hostname": qn}},
-                    {"prefix": {"Switch Hostname": q_upper}},
-                    {"wildcard": {"Switch Hostname.lower": f"{q_lower}*"}},
-                    {"wildcard": {"Switch Hostname": f"{qn}*"}},
-                    {"wildcard": {"Switch Hostname": f"{q_upper}*"}},
+                    # High-priority: Switch Hostname field
+                    {"prefix": {"Switch Hostname.lower": {"value": q_lower, "boost": 3.0}}},
+                    {"prefix": {"Switch Hostname": {"value": qn, "boost": 3.0}}},
+                    {"prefix": {"Switch Hostname": {"value": q_upper, "boost": 3.0}}},
+                    {"wildcard": {"Switch Hostname.lower": {"value": f"{q_lower}*", "boost": 3.0}}},
+                    {"wildcard": {"Switch Hostname": {"value": f"{qn}*", "boost": 3.0}}},
+                    {"wildcard": {"Switch Hostname": {"value": f"{q_upper}*", "boost": 3.0}}},
+                    # Also search in ALL fields (e.g., Call Manager Active/Standby Sub, etc.)
+                    {"multi_match": {"query": qn, "fields": ["*"], "boost": 1.0, "type": "phrase_prefix"}},
+                    {"match_phrase_prefix": {"Call Manager Active Sub": {"query": qn, "boost": 2.0}}},
+                    {"match_phrase_prefix": {"Call Manager Standby Sub": {"query": qn, "boost": 2.0}}},
                 ]
                 return {
                     "query": {
@@ -2229,7 +2271,8 @@ class OpenSearchConfig:
                     ]
                 }
 
-            # FQDN exact-only branch for hostname-like queries
+            # FQDN branch: contains dot and letters (not IP)
+            # Support both exact match and wildcard/prefix search across multiple fields
             if (
                 any(c.isalpha() for c in qn)
                 and "." in qn
@@ -2238,30 +2281,36 @@ class OpenSearchConfig:
                 and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or "")
             ):
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                q_lower = qn.lower()
                 return {
                     "query": {
                         "bool": {
-                            "filter": [
-                                {
-                                    "script": {
-                                        "script": {
-                                            "lang": "painless",
-                                            "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
-                                            "params": {"q": qn}
-                                        }
-                                    }
-                                }
-                            ],
                             "should": [
-                                {"term": {"Switch Hostname": qn}},
-                                {"term": {"Switch Hostname.lower": qn.lower()}}
+                                # Exact matches on Switch Hostname (highest priority)
+                                {"term": {"Switch Hostname": {"value": qn, "boost": 100.0}}},
+                                {"term": {"Switch Hostname.lower": {"value": q_lower, "boost": 100.0}}},
+                                # Wildcard matches on Switch Hostname
+                                {"wildcard": {"Switch Hostname.lower": {"value": f"*{q_lower}*", "boost": 50.0}}},
+                                {"wildcard": {"Switch Hostname": {"value": f"*{qn}*", "boost": 50.0}}},
+                                # Also search across other text fields via multi_match
+                                {"multi_match": {"query": qn, "fields": ["*"], "boost": 10.0}},
+                                # Specific field wildcards for common FQDN locations
+                                {"wildcard": {"IP Address.keyword": f"*{qn}*"}},
+                                {"wildcard": {"Line Number.keyword": f"*{qn}*"}},
+                                {"wildcard": {"Model Name": f"*{qn}*"}},
                             ],
-                            "minimum_should_match": 0
+                            "minimum_should_match": 1
                         }
                     },
                     "_source": DESIRED_ORDER,
                     "size": size,
                     "sort": [
+                        # Exact Switch Hostname matches first
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def q = params.q; def ql = params.ql; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { def v = doc['Switch Hostname'].value; if (v != null && (v.equals(q) || v.toLowerCase().equals(ql))) { return 0; } } return 1;",
+                            "params": {"q": qn, "ql": q_lower}
+                        }}},
                         {"Creation Date": {"order": "desc"}},
                         self._preferred_file_sort_clause(),
                         {"_score": {"order": "desc"}}
@@ -2271,6 +2320,7 @@ class OpenSearchConfig:
             # IP Address search: full or partial IPv4
             # Full IPv4: 10.216.10.7 (4 octets) - exact match only
             # Partial IPv4: 10.216.10 or 10.216 (1-3 octets) - prefix match
+            # IMPORTANT: Must contain at least one dot to be treated as IP address (avoids matching VLANs like "802")
             if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
                 # Full IPv4 address - exact match first, then prefix
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
@@ -2292,8 +2342,9 @@ class OpenSearchConfig:
                         {"_score": {"order": "desc"}}
                     ]
                 }
-            elif re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
+            elif "." in qn and re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
                 # Partial IPv4 address - prefix match only
+                # MUST contain at least one dot to avoid matching pure numbers like "802" (Voice VLAN)
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
                 clean_query = qn.rstrip('.')
                 return {
@@ -2315,8 +2366,24 @@ class OpenSearchConfig:
                     ]
                 }
 
-            # Serial Number prefix branch: alphanumeric tokens 3-10 chars use prefix wildcards
-            if re.fullmatch(r"[A-Za-z0-9]{3,10}", qn or ""):
+            # Voice VLAN search: 3-digit numbers are likely VLAN IDs (e.g., 802, 803, 801)
+            if re.fullmatch(r"\d{3}", qn or ""):
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                return {
+                    "query": {"term": {"Voice VLAN": qn}},
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}}
+                    ]
+                }
+
+            # Serial Number prefix branch: alphanumeric tokens 5-10 chars use prefix wildcards
+            # IMPORTANT: Minimum 5 chars to avoid matching short numbers like VLANs (802, 803)
+            # and must contain at least one letter (alphanumeric, not pure digits)
+            if re.fullmatch(r"[A-Za-z0-9]{5,10}", qn or "") and re.search(r"[A-Za-z]", qn or ""):
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
 
                 variants = []
@@ -2348,7 +2415,7 @@ class OpenSearchConfig:
                 }
 
         # Broad query: allow partials but with exact-first sort
-        # Exclude multi_match for hostname patterns to prevent false matches
+        # ALWAYS include multi_match for comprehensive search across ALL fields
         is_hostname_pattern = isinstance(query, str) and len(query) >= 5 and re.match(r'^[A-Za-z]{3}[0-9]{2}', query)
 
         file_name_boost_clauses = [
@@ -2356,44 +2423,69 @@ class OpenSearchConfig:
             for name in preferred_files[:5]
         ]
 
-        search_query = {
-            "query": {"bool": {"should": [
-                {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
-                *([] if is_hostname_pattern else [{"multi_match": {"query": query, "fields": ["*"]}}]),
-                {"term": {"Line Number.keyword": query}},
-                {"term": {"MAC Address": query}},
-                {"term": {"Line Number.keyword": f"+{query}"}},
-                *file_name_boost_clauses,
 
-                {"wildcard": {"MAC Address.keyword": f"*{str(query).lower()}*"}},
-                {"wildcard": {"MAC Address.keyword": f"*{str(query).upper()}*"}},
-                                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).lower()}*"}},
-                                {"wildcard": {"MAC Address 2.keyword": f"*{str(query).upper()}*"}},
+        # Multi-field search: BALANCED approach for performance and precision
+        # For short queries (like VLANs), prefer exact matches to avoid false positives
+        # For longer queries, use wildcards for flexible matching
+        is_short_numeric = isinstance(query, str) and query.isdigit() and len(query) <= 4
 
-                                {"wildcard": {"Line Number.keyword": f"*{query}*"}},
-                                                *([{"wildcard": {"Line Number.keyword": f"*{str(query).lstrip('+')}*"}}]
-                                    if str(query).startswith('+') and str(query).lstrip('+') else
-                                    [{"wildcard": {"Line Number.keyword": f"*+{query}*"}}]),
+        should_clauses = [
+            # High-priority exact matches for common fields
+            {"term": {"Voice VLAN": {"value": query, "boost": 10.0}}},
+            {"term": {"Subnet Mask": {"value": query, "boost": 10.0}}},
+            {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
+            {"term": {"Serial Number": {"value": query, "boost": 10.0}}},
+            {"term": {"Model Name.keyword": {"value": query, "boost": 10.0}}},
+            {"term": {"Switch Hostname": {"value": query, "boost": 10.0}}},
+            {"term": {"Switch Hostname.lower": {"value": str(query).lower(), "boost": 10.0}}},
+            *file_name_boost_clauses,
 
+            # Multi-match for ALL text fields (Call Manager, IP Address, etc.)
+            {"multi_match": {
+                "query": query,
+                "fields": ["*"],
+                "type": "phrase_prefix",
+                "boost": 5.0
+            }},
+        ]
 
+        # For short numeric queries (VLANs, port numbers): use targeted wildcard only on specific fields
+        if is_short_numeric:
+            should_clauses.extend([
                 {"wildcard": {"Switch Port": f"*{query}*"}},
-                {"wildcard": {"Subnet Mask": f"*{query}*"}},
-                {"wildcard": {"Voice VLAN": f"*{query}*"}},
-
                 {"wildcard": {"Phone Port Speed": f"*{query}*"}},
                 {"wildcard": {"PC Port Speed": f"*{query}*"}},
-                {"wildcard": {"Speed 1": f"*{query}*"}},
-                {"wildcard": {"Speed 2": f"*{query}*"}},
-                {"wildcard": {"Speed 3": f"*{query}*"}},
-                {"wildcard": {"Speed 4": f"*{query}*"}},
+            ])
+        else:
+            # For longer queries: use query_string for comprehensive matching
+            should_clauses.append({
+                "query_string": {
+                    "query": f"*{query}*",
+                    "fields": [
+                        "Voice VLAN", "Subnet Mask", "Switch Port", "Serial Number",
+                        "Switch Hostname.lower", "Phone Port Speed", "PC Port Speed",
+                        "Switch Port Mode", "PC Port Mode", "KEM", "KEM 2",
+                        "MAC Address.keyword", "MAC Address 2.keyword",
+                        "Line Number.keyword", "IP Address.keyword"
+                    ],
+                    "boost": 3.0,
+                    "analyze_wildcard": True
+                }
+            })
 
-                {"wildcard": {"Model Name": f"*{str(query).lower()}*"}},
-                {"wildcard": {"Model Name": f"*{str(query).upper()}*"}},
-                {"wildcard": {"File Name": f"*{query}*"}},
-                # If it looks like a bare hostname token (starts with 3 letters + 2 digits),
-                # add a case-insensitive wildcard against the normalized hostname field
-                *([{"wildcard": {"Switch Hostname.lower": f"*{str(query).lower()}*"}}] if is_hostname_pattern else [])
-            ], "minimum_should_match": 1}},
+        # Additional MAC address exact matches
+        should_clauses.extend([
+            {"term": {"MAC Address.keyword": {"value": str(query).upper(), "boost": 8.0}}},
+            {"term": {"MAC Address 2.keyword": {"value": str(query).upper(), "boost": 8.0}}},
+        ])
+
+        search_query = {
+            "query": {
+                "bool": {
+                    "should": should_clauses,
+                    "minimum_should_match": 1
+                }
+            },
             "size": size
         }
 
@@ -2470,27 +2562,35 @@ class OpenSearchConfig:
         return search_query
 
     def _build_headers_from_documents(self, documents: List[Dict[str, Any]]) -> List[str]:
-        """Build headers list from documents, with metadata fields first, then alphabetically."""
-        if not documents:
-            return []
+        """Build headers list - ALWAYS returns all available columns, not just those in current results.
 
-        all_keys = set()
+        This ensures consistent column display regardless of search results content.
+        Uses DEFAULT_DISPLAY_ORDER + Call Manager fields as the authoritative column list.
+        """
+        from utils.csv_utils import DEFAULT_DISPLAY_ORDER
+
+        # Collect all keys that actually exist in documents (for validation)
+        doc_keys = set()
         for doc in documents:
-            all_keys.update(doc.keys())
+            doc_keys.update(doc.keys())
 
-        # Order headers: metadata fields first, then alphabetically, Call Manager fields at the end
+        # Order headers: metadata fields first, then all other columns alphabetically
         metadata_fields = ["#", "File Name", "Creation Date"]
-        call_manager_fields = ["Call Manager 1", "Call Manager 2", "Call Manager 3"]
 
-        headers = [h for h in metadata_fields if h in all_keys]
+        # Start with metadata fields (always include these)
+        headers = metadata_fields.copy()
 
-        # Add other headers (excluding metadata and call manager fields)
-        other_headers = sorted([h for h in all_keys
-                               if h not in metadata_fields and h not in call_manager_fields])
-        headers.extend(other_headers)
+        # Add ALL data columns from DEFAULT_DISPLAY_ORDER (excluding metadata we already added)
+        data_columns = [col for col in DEFAULT_DISPLAY_ORDER if col not in metadata_fields]
 
-        # Add Call Manager fields at the end
-        headers.extend([h for h in call_manager_fields if h in all_keys])
+        # Sort data columns alphabetically for consistency
+        data_columns.sort()
+        headers.extend(data_columns)
+
+        # Add any additional columns from documents that aren't in DEFAULT_DISPLAY_ORDER
+        # (this handles new columns added to CSV format)
+        extra_columns = sorted([col for col in doc_keys if col not in headers])
+        headers.extend(extra_columns)
 
         return headers
 
@@ -2695,10 +2795,16 @@ class OpenSearchConfig:
 
                     # Exclude hostname-like patterns (3 letters + 2 digits + more chars pattern)
                     looks_like_hostname = False
-                    if basic_serial_pattern and len(qn_sn) >= 13:
-                        # Switch hostnames follow pattern: 3 letters + 2 digits + other chars and are typically 13+ chars
+                    if basic_serial_pattern and len(qn_sn) >= 8:
+                        # Switch hostnames follow pattern: 3 letters + 2 digits + other chars
+                        # For 8+ char queries, check if it matches hostname pattern (AAA00XXX)
+                        # AND has at least 2 consecutive letters after position 5
                         hostname_pattern = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn_sn)
-                        looks_like_hostname = hostname_pattern is not None
+                        if hostname_pattern:
+                            remaining = qn_sn[5:]
+                            # Hostname if 2+ consecutive letters (excludes pure serial patterns like ABC12345)
+                            if len(qn_sn) == 5 or re.search(r'[A-Za-z]{2,}', remaining):
+                                looks_like_hostname = True
 
                     looks_like_serial = basic_serial_pattern and not looks_like_hostname
             except Exception:

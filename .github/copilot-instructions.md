@@ -40,6 +40,16 @@ Startup behavior update
 - Backend: Volume mounts entire `/backend` directory with uvicorn reload
 - Both services auto-restart on file changes
 
+**CRITICAL Hot-Reload Limitation**:
+- ✅ **Uvicorn (FastAPI endpoints)**: Hot reload WORKS - code changes take effect immediately
+- ❌ **Celery Workers**: Hot reload DOES NOT WORK - workers run in separate process
+- **Solution**: Manual container restart required after Celery task code changes:
+  ```bash
+  docker restart csv-viewer-backend-dev
+  ```
+- **Why**: Celery ForkPoolWorkers spawn from initial process and don't watch for file changes
+- **Debugging Hint**: If code changes don't take effect but no errors appear, check if the code path involves Celery tasks
+
 ### Critical Port Information
 - Frontend Dev (host): 5000 (FRONTEND_DEV_PORT in .env.dev) - NOT 3000!
 - Backend Dev (host): 8002 (BACKEND_DEV_PORT in .env.dev) -> container 8000
@@ -100,6 +110,11 @@ The system uses **TWO COMPLETELY SEPARATE approaches** for modern vs legacy file
 - **No container restart needed**: Headers detected per-file at read time
 - **Implementation**: `_map_modern_format_row()` + `_read_headers_from_file()`
 - **Key principle**: Never cache headers, always read from file
+
+**CRITICAL: Feldnamen für Call Manager müssen exakt lauten:**
+  - `Call Manager Active Sub`
+  - `Call Manager Standby Sub`
+Diese Namen müssen in OpenSearch-Mapping und CSV identisch sein. Die alten Felder `CallManager 1/2/3` sind nur für Legacy-Indices und werden nicht mehr verwendet.
 
 #### LEGACY Files (no timestamp, < 16 columns)
 - **Pattern Detection**: Detects fields by analyzing data (IP, MAC, hostname patterns)
@@ -241,6 +256,67 @@ Located in component `__tests__/` directories:
 4. Bulk indexed to OpenSearch (1000-doc chunks)
 5. Frontend search reflects new data immediately
 
+## Search Query Architecture
+
+### Pattern-Based Query Detection
+The search system uses intelligent pattern detection to determine which OpenSearch query to execute. Pattern checks occur in `backend/utils/opensearch.py` in the `_build_query_body()` function with an **early return strategy** - once a pattern matches, the specific query is returned immediately.
+
+**Critical Pattern Order** (lines ~2220-2420):
+1. **Phone Pattern** (7-15 digits): Routes to phone number search
+2. **Hostname Pattern** (contains dots): Routes to hostname search
+3. **4-Digit Model Pattern**: Routes to model search
+4. **Full IP Pattern** (4 octets with dots): Routes to IP search
+5. **Partial IP Pattern** (has dot): Routes to partial IP search
+6. **Serial Number Pattern** (5+ alphanumeric): Routes to serial search
+7. **3-Digit Voice VLAN Pattern** (exactly 3 digits): Routes to Voice VLAN field-specific search
+8. **Broad Query** (fallback): Multi-field wildcard search
+
+### Voice VLAN Search Implementation
+**Problem Solved**: Query "802" was matching ALL 19,169 documents instead of only the 5,958 with Voice VLAN "802".
+
+**Root Cause**:
+- Without 3-digit pattern check, "802" triggered broad multi-field query
+- Matched IP addresses (10.802.x.x), phone numbers (+498028...), and other fields
+- IP pattern required dots but broad query didn't
+
+**Solution** (lines 2369-2383):
+```python
+# Check for 3-digit Voice VLAN pattern (e.g., "801", "802", "803")
+if re.fullmatch(r"\d{3}", qn or ""):
+    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+    return {
+        "query": {"term": {"Voice VLAN": qn}},
+        "_source": DESIRED_ORDER,
+        "size": size,
+        "sort": [
+            {"Creation Date": {"order": "desc"}},
+            self._preferred_file_sort_clause(),
+            {"_score": {"order": "desc"}}
+        ]
+    }
+```
+
+**Key Design Principles**:
+1. **Pattern Order Matters**: More specific patterns (3-digit) must come BEFORE broad patterns
+2. **Early Return Strategy**: Once a pattern matches, return immediately - don't continue checking
+3. **Field-Specific Queries**: Use `term` query for exact field matching when possible
+4. **Dot Requirement for IPs**: IP patterns require dots to avoid false matches
+5. **Minimum Length Requirements**: Serial numbers require 5+ characters to avoid matching short numbers
+
+**Validation Strategy**:
+```bash
+# Direct OpenSearch query to verify expected count
+curl -X GET "localhost:9200/netspeed_*/_count" -H 'Content-Type: application/json' \
+  -d '{"query": {"term": {"Voice VLAN": "802"}}}'
+
+# API search query
+curl "http://localhost:8002/api/search/?query=802"
+
+# Both should return identical counts
+```
+
+**Performance**: Pattern check with early return is extremely fast (~0.4s for 5,958 results).
+
 ## Common Gotchas
 
 - Never restart the app during development - use volume mounts for hot reload
@@ -367,7 +443,7 @@ docker exec -it csv-viewer-backend celery -A tasks.tasks inspect active
 curl -X GET "localhost:9200/stats_netspeed_loc/_search" -H 'Content-Type: application/json' -d '{"query": {"term": {"key": "ABX01"}}, "size": 1}'
 
 # Test single file indexing (development)
-docker exec -it csv-viewer-backend-dev python -c "from tasks.tasks import index_csv; print(index_csv('/app/data/netspeed/netspeed.csv'))"
+docker exec -it csv-viewer-backend-dev python -c "from tasks.tasks import index_csv; print(index_csv('/app/data/netspeed/*'))"
 
 # Check environment variables and volume mounts
 docker exec -it csv-viewer-backend-dev env | grep CSV_FILES_DIR
