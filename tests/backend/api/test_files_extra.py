@@ -96,12 +96,23 @@ class TestFilesExtraAPI:
             assert r.headers['content-disposition'].startswith('attachment;')
             assert r.headers.get('content-length') == '123'
 
-    @patch('api.files.DEFAULT_DISPLAY_ORDER', [
+    @patch('utils.csv_utils.get_csv_column_order', return_value=[
         '#', 'File Name', 'Creation Date', 'IP Address', 'Line Number',
         'MAC Address', 'Voice VLAN', 'Switch Hostname', 'Switch IP Address',
         'Switch Port', 'Serial Number', 'Model Name'
     ])
-    def test_columns_success(self):
+    @patch('api.files._collect_inventory')
+    @patch('api.files._extra_search_paths')
+    def test_columns_success(self, mock_extra_paths, mock_collect, mock_get_order):
+        # Mock file inventory to provide a valid CSV file
+        from pathlib import Path
+        from unittest.mock import MagicMock
+        mock_extra_paths.return_value = [Path("/app/data")]
+        mock_file = MagicMock()
+        mock_file.exists.return_value = True
+        mock_file.name = "netspeed.csv"
+        mock_collect.return_value = ({}, [], mock_file, [])
+
         r = client.get('/api/files/columns')
         assert r.status_code == 200
         body = r.json()

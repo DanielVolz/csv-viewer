@@ -31,6 +31,11 @@ canonical_headers = [_get_display_name(h) for h in file_headers]
 # 3. Map data rows using headers
 row_dict = _map_modern_format_row(row_cells, file_headers)
 # Maps: cells[0] -> 'IP Address', cells[1] -> 'Line Number', etc.
+
+**CRITICAL: Call Manager-Felder müssen exakt heißen:**
+    - `Call Manager Active Sub`
+    - `Call Manager Standby Sub`
+Diese Namen müssen in OpenSearch und CSV identisch sein. Die alten Felder `CallManager 1/2/3` sind nur für Legacy-Indices und werden nicht mehr verwendet.
 ```
 
 ### Key Functions

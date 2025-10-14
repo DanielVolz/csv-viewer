@@ -95,17 +95,21 @@ class TestFilesAPI:
         assert response.status_code == 500
         assert response.json()["detail"] == "Failed to list CSV files"
 
+    @patch('utils.csv_utils.get_csv_column_order')
     @patch('api.files.read_csv_file_preview')
     @patch('api.files.FileModel')
     @patch('api.files._collect_inventory')
     @patch('api.files._extra_search_paths')
-    def test_preview_file(self, mock_extra_paths, mock_collect_inventory, mock_file_model, mock_read_csv_file_preview):
+    def test_preview_file(self, mock_extra_paths, mock_collect_inventory, mock_file_model, mock_read_csv_file_preview, mock_get_order):
         # The endpoint uses read_csv_file_preview which returns (headers, rows, total_count)
         csv_headers = ["Col1", "Col2", "Col3"]
         rows = [
             {"Col1": "val1", "Col2": "val2", "Col3": "val3"},
             {"Col1": "val4", "Col2": "val5", "Col3": "val6"}
         ]
+
+        # Mock get_csv_column_order to return metadata + CSV columns (this determines header order)
+        mock_get_order.return_value = ["#", "File Name", "Creation Date", "Col1", "Col2", "Col3"]
 
         mock_extra_paths.return_value = [Path("/app/data")]
         preview_file = MagicMock()

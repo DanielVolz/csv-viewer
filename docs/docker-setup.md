@@ -102,6 +102,48 @@ These volumes ensure that data is preserved even when containers are stopped or 
 
 ## Development Workflow
 
+### Hot Reload Behavior
+
+The development environment uses volume mounts for code hot-reloading, but behavior differs between components:
+
+**Frontend (React)**:
+- ✅ Hot reload works automatically for all code changes
+- Changes to `.js`, `.jsx`, `.css` files take effect immediately
+- Browser automatically refreshes
+
+**Backend - FastAPI Endpoints**:
+- ✅ Hot reload works automatically via Uvicorn
+- Changes to `api/*.py` files take effect immediately
+- No container restart needed
+
+**Backend - Celery Tasks** ⚠️:
+- ❌ Hot reload DOES NOT WORK
+- Celery workers run in separate forked processes
+- Workers don't monitor file changes
+- **Manual restart required** after changes to `tasks/*.py`:
+  ```bash
+  docker restart csv-viewer-backend-dev
+  ```
+
+**Why Celery Doesn't Hot-Reload**:
+- Celery uses ForkPoolWorker processes spawned at startup
+- Workers inherit code from parent process at fork time
+- File watchers (like Watchdog) don't trigger worker reloads
+- This is a fundamental limitation of Celery's process model
+
+**Development Best Practice**:
+1. Make changes to Celery task code in `backend/tasks/`
+2. Restart backend container: `docker restart csv-viewer-backend-dev`
+3. Wait ~5-10 seconds for container to fully restart
+4. Test changes with curl or API calls
+
+**Debugging Tip**: If you add logging or change logic in Celery tasks and don't see changes:
+- Check if code is executed by Celery worker (logs show `ForkPoolWorker-X`)
+- Restart container to load new code
+- Verify changes by checking task execution logs
+
+### Rebuilding Services
+
 For development purposes, you can rebuild and restart individual services:
 
 ```bash

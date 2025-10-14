@@ -94,7 +94,45 @@ async def search_files(
                     logger.error(f"Synchronous exact phone search failed: {e}")
                     # Fallback to Celery path
 
-            # Shortcut 2: For exact Serial Number-like queries (long alphanumeric, not pure digits), run synchronously
+            # Shortcut 2: For hostname prefix-like queries (e.g., Mxx03, ABX01ZSL), run synchronously
+            try:
+                qn_host = (query or "").strip()
+                hostname_prefix_match = __import__('re').match(r'^[A-Za-z]{3}[0-9]{2}', qn_host or "")
+                looks_like_hostname = False
+                if hostname_prefix_match and '.' not in qn_host and 5 <= len(qn_host) < 13:
+                    if len(qn_host) == 5:
+                        looks_like_hostname = True
+                    elif len(qn_host) >= 8:
+                        remaining = qn_host[5:]
+                        if __import__('re').search(r'[A-Za-z]{2,}', remaining):
+                            looks_like_hostname = True
+            except Exception:
+                looks_like_hostname = False
+            if looks_like_hostname and (field is None or field == "Switch Hostname"):
+                from time import perf_counter
+                t0 = perf_counter()
+                try:
+                    headers, documents = opensearch_config.search(
+                        query=qn_host,
+                        field=None,  # Let opensearch.py's _build_query_body handle hostname prefix logic
+                        include_historical=include_historical,
+                        size=eff_limit,
+                    )
+                    from utils.csv_utils import filter_display_columns
+                    filtered_headers, filtered_documents = filter_display_columns(headers, documents)
+                    took_ms = int((perf_counter() - t0) * 1000)
+                    return {
+                        "success": True,
+                        "message": f"Found {len(filtered_documents)} results for '{query}'",
+                        "headers": filtered_headers,
+                        "data": filtered_documents,
+                        "took_ms": took_ms,
+                    }
+                except Exception as e:
+                    logger.error(f"Synchronous hostname prefix search failed: {e}")
+                    # Fallback to Celery path
+
+            # Shortcut 3: For exact Serial Number-like queries (long alphanumeric, not pure digits), run synchronously
             try:
                 qn_sn = (query or "").strip()
                 looks_like_serial = bool(isinstance(qn_sn, str) and __import__('re').fullmatch(r"[A-Za-z0-9]{8,}", qn_sn or "") and not __import__('re').fullmatch(r"\d{8,}", qn_sn or ""))
@@ -123,7 +161,7 @@ async def search_files(
                     logger.error(f"Synchronous exact Serial Number search failed: {e}")
                     # Fallback to Celery path
 
-            # Shortcut 3: For exact Switch Port-like queries, run synchronously to use latest in-process logic
+            # Shortcut 4: For exact Switch Port-like queries, run synchronously to use latest in-process logic
             try:
                 qn = (query or "").strip()
                 looks_like_port = (isinstance(qn, str) and "/" in qn and len(qn) >= 5)
