@@ -1793,32 +1793,27 @@ class OpenSearchConfig:
 
         # Special handling for KEM searches - return all phones that have at least 1 KEM module
         if not field and isinstance(query, str) and query.upper().strip() == "KEM":
-            # Use all columns including KEM fields for KEM searches
-            all_columns = [
-                "#", "File Name", "Creation Date", "IP Address", "Line Number", "Serial Number", "Model Name",
-                "KEM", "KEM 2", "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN",
-                "Phone Port Speed", "PC Port Speed", "Speed 1", "Speed 2",
-                "Switch Hostname", "Switch Port", "Switch Port Mode", "PC Port Mode"
-            ]
-            # Semantics: phone has ≥1 KEM if KEM or KEM 2 is non-empty OR Line Number contains 'KEM'
+            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+            # KEM fields contain "KEM" string when module is present, empty string otherwise
+            # Search for documents where KEM or KEM 2 field contains "KEM" (wildcard ?* matches any non-empty value)
+            # IMPORTANT: We must include KEM and KEM 2 in _source so they can be processed later in search()
+            # where they get embedded into Line Number field and then removed from display
+            all_fields_including_kem = DESIRED_ORDER + ["KEM", "KEM 2"]
             kem_query = {
                 "query": {
                     "bool": {
                         "should": [
-                            {"exists": {"field": "KEM"}},
-                            {"exists": {"field": "KEM.keyword"}},
-                            {"exists": {"field": "KEM 2"}},
-                            {"exists": {"field": "KEM 2.keyword"}},
-                            {"wildcard": {"KEM.keyword": "*KEM*"}},
-                            {"wildcard": {"KEM 2.keyword": "*KEM*"}},
-                            {"match": {"KEM": "KEM"}},
-                            {"match": {"KEM 2": "KEM"}},
-                            {"wildcard": {"Line Number.keyword": "*KEM*"}}
+                            # Match documents where KEM field has value "KEM" or similar
+                            {"wildcard": {"KEM": "?*"}},
+                            {"wildcard": {"KEM.keyword": "?*"}},
+                            # Match documents where KEM 2 field has value "KEM" or similar
+                            {"wildcard": {"KEM 2": "?*"}},
+                            {"wildcard": {"KEM 2.keyword": "?*"}}
                         ],
                         "minimum_should_match": 1
                     }
                 },
-                "_source": all_columns,
+                "_source": all_fields_including_kem,
                 "size": size,
                 "sort": [
                     {"Creation Date": {"order": "desc"}},
