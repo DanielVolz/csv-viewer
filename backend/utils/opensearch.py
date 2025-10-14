@@ -1487,6 +1487,14 @@ class OpenSearchConfig:
             return rows  # Return original rows on error
 
     def _lookup_historical_data_by_mac(self, mac_address: str, historical_indices: List[str]) -> Optional[Dict[str, Any]]:
+        def _mask_mac(mac: str):
+            # Mask all but last 4 characters, preserving format
+            if not mac or len(mac) < 4:
+                return "[REDACTED]"
+            masked = "[REDACTED]" + mac[-4:]
+            return masked
+
+        self._mask_mac = _mask_mac
         """
         Look up historical data by MAC address in historical indices.
         MAC address is the primary identifier since it remains constant across files.
@@ -1527,7 +1535,7 @@ class OpenSearchConfig:
                     if response["hits"]["total"]["value"] > 0:
                         # Return the first match immediately - don't search all indices
                         hit = response["hits"]["hits"][0]
-                        logger.debug(f"Found historical data for MAC {mac_address} in index {index}")
+                        logger.debug(f"Found historical data for MAC {self._mask_mac(mac_address)} in index {index}")
                         return hit["_source"]
                 except Exception as e:
                     logger.debug(f"Error searching historical index {index} for MAC {mac_address}: {e}")
