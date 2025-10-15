@@ -516,7 +516,10 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                         "using_fallback": False,
                         "fallback_file": None
                     }
-                if not str(resolved_direct).startswith(str(data_root)):
+                try:
+                    # Python <3.9 compatibility for is_relative_to
+                    resolved_direct.relative_to(data_root)
+                except ValueError:
                     return {
                         "success": False,
                         "message": "Invalid file path (outside data directory)",
