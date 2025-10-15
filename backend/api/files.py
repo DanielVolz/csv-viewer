@@ -501,9 +501,35 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
                 actual_filename = candidate.name
             else:
                 direct = get_data_root() / filename
-                if direct.exists():
-                    file_path = direct
-                    actual_filename = direct.name
+                # Fix: Ensure resolved path is within data root to block traversal
+                try:
+                    resolved_direct = direct.resolve()
+                    data_root = get_data_root().resolve()
+                except Exception:
+                    return {
+                        "success": False,
+                        "message": "Error resolving file path",
+                        "headers": [],
+                        "data": [],
+                        "creation_date": None,
+                        "file_name": filename,
+                        "using_fallback": False,
+                        "fallback_file": None
+                    }
+                if not str(resolved_direct).startswith(str(data_root)):
+                    return {
+                        "success": False,
+                        "message": "Invalid file path (outside data directory)",
+                        "headers": [],
+                        "data": [],
+                        "creation_date": None,
+                        "file_name": filename,
+                        "using_fallback": False,
+                        "fallback_file": None
+                    }
+                if resolved_direct.exists():
+                    file_path = resolved_direct
+                    actual_filename = resolved_direct.name
                 else:
                     fallback_preview = _opensearch_preview(limit)
                     if fallback_preview:
