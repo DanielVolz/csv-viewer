@@ -1250,7 +1250,18 @@ class OpenSearchConfig:
             Dict[str, Any]: Action for bulk indexing
         """
         # Use read_csv_file_normalized to preserve ALL columns for indexing
-        _, rows = read_csv_file_normalized(file_path)
+        _, rows_raw = read_csv_file_normalized(file_path)
+
+        # CRITICAL: Deduplicate phone rows before indexing to OpenSearch
+        # This prevents duplicate entries in search results (e.g., KEM search returning 3628 instead of 1813)
+        from utils.csv_utils import deduplicate_phone_rows
+        rows = deduplicate_phone_rows(rows_raw)
+
+        if len(rows) != len(rows_raw):
+            logger.info(
+                f"Deduplicated {file_path}: {len(rows_raw)} -> {len(rows)} rows "
+                f"({len(rows_raw) - len(rows)} duplicates removed)"
+            )
 
         # Note: Data repair is now handled separately after all files are indexed
         # This ensures historical data is available when repairing the current file
