@@ -2106,7 +2106,58 @@ class OpenSearchConfig:
         if isinstance(query, str):
             qn = query.strip()
 
-            # Switch hostname prefix (e.g., Mxx08, ABX01, ABX01ZSL) - exactly 5 characters OR 6-12 with multiple continuing letters
+            # CRITICAL PATTERN ORDER: Switch Hostname patterns MUST be checked BEFORE Serial Number
+            # because hostname codes like "ABX01ZSL4750P" (13 chars) would otherwise match serial pattern
+
+            # Switch hostname codes (e.g., ABX01ZSL4750P) - exact match with 13+ characters
+            # MUST come first to avoid false serial number matches
+            hostname_code_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
+            if hostname_code_match and '.' not in qn and len(qn) >= 13:
+                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                q_lower = qn.lower()
+                should_clauses = [
+                    {"term": {"Switch Hostname.lower": q_lower}},
+                    {"term": {"Switch Hostname": qn}},
+                    {"term": {"Switch Hostname": qn.upper()}},
+                    {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
+                    {"prefix": {"Switch Hostname": f"{qn}."}},
+                    {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
+                ]
+                return {
+                    "query": {
+                        "bool": {
+                            "should": should_clauses,
+                            "minimum_should_match": 1,
+                            "filter": [
+                                {
+                                    "script": {
+                                        "script": {
+                                            "lang": "painless",
+                                            "source": (
+                                                "def raw = null; "
+                                                "if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { raw = doc['Switch Hostname'].value; } "
+                                                "if (raw == null) { return false; } "
+                                                "String norm = raw.trim().toLowerCase(); "
+                                                "String q = params.qLower; "
+                                                "return norm.equals(q) || norm.startsWith(q + '.');"
+                                            ),
+                                            "params": {"qLower": q_lower},
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "_source": DESIRED_ORDER,
+                    "size": size,
+                    "sort": [
+                        {"Creation Date": {"order": "desc"}},
+                        self._preferred_file_sort_clause(),
+                        {"_score": {"order": "desc"}},
+                    ]
+                }
+
+            # Switch hostname prefix (e.g., Mxx08, ABX01, ABX01ZSL) - exactly 5 characters OR 8-12 with multiple continuing letters
             # Excludes serial-like patterns such as ABC1234, ABC1234X (single letter at end)
             hostname_prefix_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
             # Only treat as hostname prefix if:
@@ -2160,50 +2211,68 @@ class OpenSearchConfig:
                     ]
                 }
 
-            # Switch hostname codes (e.g., ABX01ZSL4750P) - exact match with 13+ characters
-            hostname_code_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
-            if hostname_code_match and '.' not in qn and len(qn) >= 13:
+            # Serial Number prefix branch: alphanumeric tokens 5-15 chars use prefix wildcards
+            # MUST come AFTER hostname patterns to avoid false matches for hostnames
+            # Minimum 5 chars to avoid matching short numbers like VLANs (802, 803)
+            # Maximum 15 chars covers typical serial number formats (e.g., FVH263803RN = 11 chars, FCH262128N8 = 11 chars)
+            # Must contain at least one letter (alphanumeric, not pure digits)
+            # Exclude patterns already matched by hostname checks above:
+            # - Must NOT be exactly 5 chars with hostname pattern (e.g., "ABX01")
+            # - Must NOT be 8+ chars with hostname pattern + 2+ consecutive letters after position 5 (e.g., "ABX01ZSL")
+            # - Must NOT be 13+ chars with hostname pattern (e.g., "ABX01ZSL4750P")
+            # BUT: "ABC1234" (7 chars), "ABC1234X" (8 chars, single letter) are OK as serials
+            # AND: Must NOT be a 12-character hex string (MAC address without separators)
+
+            # Check if this matches a hostname pattern that would have been caught above
+            is_hostname_like = False
+            if re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or ""):
+                qn_len = len(qn or "")
+                if qn_len == 5:
+                    # Exactly 5 chars - hostname pattern
+                    is_hostname_like = True
+                elif qn_len >= 13:
+                    # 13+ chars - hostname code pattern
+                    is_hostname_like = True
+                elif qn_len >= 8:
+                    # 8-12 chars: only hostname if 2+ consecutive letters after position 5
+                    remaining = qn[5:]
+                    if re.search(r'[A-Za-z]{2,}', remaining):
+                        is_hostname_like = True
+
+            is_likely_serial = (
+                re.fullmatch(r"[A-Za-z0-9]{5,15}", qn or "") and
+                re.search(r"[A-Za-z]", qn or "") and
+                not is_hostname_like and  # Exclude queries that match hostname patterns above
+                not (len(qn or "") == 12 and re.fullmatch(r"[A-Fa-f0-9]{12}", qn or ""))  # Exclude 12-hex MACs
+            )
+            if is_likely_serial:
                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
-                q_lower = qn.lower()
-                should_clauses = [
-                    {"term": {"Switch Hostname.lower": q_lower}},
-                    {"term": {"Switch Hostname": qn}},
-                    {"term": {"Switch Hostname": qn.upper()}},
-                    {"prefix": {"Switch Hostname.lower": f"{q_lower}."}},
-                    {"prefix": {"Switch Hostname": f"{qn}."}},
-                    {"prefix": {"Switch Hostname": f"{qn.upper()}."}},
+
+                variants = []
+                if qn:
+                    variants.append(qn)
+                    upper_variant = qn.upper()
+                    if upper_variant not in (None, qn) and upper_variant not in variants:
+                        variants.append(upper_variant)
+
+                wildcard_clauses = [
+                    {"wildcard": {"Serial Number": f"{variant}*"}}
+                    for variant in variants
                 ]
+
                 return {
-                    "query": {
-                        "bool": {
-                            "should": should_clauses,
-                            "minimum_should_match": 1,
-                            "filter": [
-                                {
-                                    "script": {
-                                        "script": {
-                                            "lang": "painless",
-                                            "source": (
-                                                "def raw = null; "
-                                                "if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { raw = doc['Switch Hostname'].value; } "
-                                                "if (raw == null) { return false; } "
-                                                "String norm = raw.trim().toLowerCase(); "
-                                                "String q = params.qLower; "
-                                                "return norm.equals(q) || norm.startsWith(q + '.');"
-                                            ),
-                                            "params": {"qLower": q_lower},
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
+                    "query": {"bool": {"should": wildcard_clauses, "minimum_should_match": 1}},
                     "_source": DESIRED_ORDER,
                     "size": size,
                     "sort": [
+                        {"_script": {"type": "number", "order": "asc", "script": {
+                            "lang": "painless",
+                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0) { def v = doc['Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } return 1;",
+                            "params": {"q": qn}
+                        }}},
                         {"Creation Date": {"order": "desc"}},
                         self._preferred_file_sort_clause(),
-                        {"_score": {"order": "desc"}},
+                        {"_score": {"order": "desc"}}
                     ]
                 }
 
@@ -2388,40 +2457,6 @@ class OpenSearchConfig:
                     "_source": DESIRED_ORDER,
                     "size": size,
                     "sort": [
-                        {"Creation Date": {"order": "desc"}},
-                        self._preferred_file_sort_clause(),
-                        {"_score": {"order": "desc"}}
-                    ]
-                }
-
-            # Serial Number prefix branch: alphanumeric tokens 5-10 chars use prefix wildcards
-            # IMPORTANT: Minimum 5 chars to avoid matching short numbers like VLANs (802, 803)
-            # and must contain at least one letter (alphanumeric, not pure digits)
-            if re.fullmatch(r"[A-Za-z0-9]{5,10}", qn or "") and re.search(r"[A-Za-z]", qn or ""):
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
-
-                variants = []
-                if qn:
-                    variants.append(qn)
-                    upper_variant = qn.upper()
-                    if upper_variant not in (None, qn) and upper_variant not in variants:
-                        variants.append(upper_variant)
-
-                wildcard_clauses = [
-                    {"wildcard": {"Serial Number": f"{variant}*"}}
-                    for variant in variants
-                ]
-
-                return {
-                    "query": {"bool": {"should": wildcard_clauses, "minimum_should_match": 1}},
-                    "_source": DESIRED_ORDER,
-                    "size": size,
-                    "sort": [
-                        {"_script": {"type": "number", "order": "asc", "script": {
-                            "lang": "painless",
-                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0) { def v = doc['Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } return 1;",
-                            "params": {"q": qn}
-                        }}},
                         {"Creation Date": {"order": "desc"}},
                         self._preferred_file_sort_clause(),
                         {"_score": {"order": "desc"}}
