@@ -106,7 +106,6 @@ class CSVFileHandler(FileSystemEventHandler):
             file_str = str(file_path)
             if file_str.startswith(archive_prefix + "/") or file_str.startswith(archive_prefix + os.sep):
                 return False
-                return False
         name = file_path.name
         if NETSPEED_TIMESTAMP_PATTERN.match(name):
             return True

@@ -106,6 +106,8 @@ class OpenSearchConfig:
                     "Switch Port": self.keyword_type,
                     "Phone Port Speed": self.keyword_type,
                     "PC Port Speed": self.keyword_type,
+                    "KEM 1 Serial Number": self.keyword_type,
+                    "KEM 2 Serial Number": self.keyword_type,
                     "Speed 1": self.keyword_type,  # Legacy field retained for historical indices
                     "Speed 2": self.keyword_type,  # Legacy field retained for historical indices
                     # Legacy field names retained for historical indices
@@ -128,6 +130,8 @@ class OpenSearchConfig:
                     # KEM fields (Key Expansion Module)
                     "KEM": self.keyword_type,
                     "KEM 2": self.keyword_type,
+                    "KEM 1 Serial Number": self.keyword_type,
+                    "KEM 2 Serial Number": self.keyword_type,
                 },
                 "dynamic_templates": [
                     {
@@ -1386,117 +1390,6 @@ class OpenSearchConfig:
         logger.info(f"DATA REPAIR: DISABLED - Skipping repair for {file_path} to prevent CSV corruption")
         return rows  # Return original rows unchanged
 
-        try:
-            # Get current file name to exclude it from historical search
-            current_file_name = Path(file_path).name
-
-            # Get all netspeed indices except the current one
-            historical_indices = []
-            try:
-                indices = self.client.indices.get(index="netspeed_*")
-                for index_name in indices.keys():
-                    # Skip the current file's index
-                    if current_file_name not in index_name:
-                        historical_indices.append(index_name)
-            except Exception as e:
-                logger.warning(f"Could not get historical indices for data repair: {e}")
-                return rows  # Return original rows if we can't get historical data
-
-            if not historical_indices:
-                print("[DATA REPAIR] No historical indices found for data repair")
-                logger.warning("DATA REPAIR: No historical indices found")
-                return rows
-
-            print(f"[DATA REPAIR] Using {len(historical_indices)} historical indices for data repair")
-            logger.warning(f"DATA REPAIR: Using {len(historical_indices)} historical indices: {historical_indices[:3]}...")
-
-            repaired_rows = []
-            repaired_count = 0
-            total_missing = 0
-            max_repairs = 50  # LIMIT: Maximum number of MAC repairs to prevent infinite loops
-
-            for row in rows:
-                # SAFETY LIMIT: Stop processing if we've already processed too many repairs
-                if total_missing >= max_repairs:
-                    print(f"[DATA REPAIR] LIMIT REACHED: Stopping after {max_repairs} repair attempts to prevent infinite loops")
-                    logger.warning(f"DATA REPAIR LIMIT: Stopped after {max_repairs} repair attempts")
-                    break
-
-                # MAC address is the primary identifier - check both MAC Address fields
-                mac_address = row.get("MAC Address", "").strip()
-                mac_address_2 = row.get("MAC Address 2", "").strip()
-
-                # Use whichever MAC address field has a value and is a valid MAC address
-                primary_mac = None
-                if mac_address and self._is_valid_mac_address(mac_address):
-                    primary_mac = mac_address
-                elif mac_address_2:
-                    # Remove SEP prefix if present
-                    clean_mac_2 = mac_address_2[3:] if mac_address_2.startswith("SEP") else mac_address_2
-                    if self._is_valid_mac_address(clean_mac_2):
-                        primary_mac = clean_mac_2
-
-                # Find all missing fields in current row
-                missing_fields = []
-                for field, value in row.items():
-                    # Check for empty, None, or null values
-                    if value is None or str(value).strip() == "" or str(value).lower() == "null":
-                        missing_fields.append(field)
-
-                # Only repair if we have a valid MAC address and something is missing
-                if missing_fields and primary_mac:
-                    total_missing += 1
-                    print(f"[DATA REPAIR] Processing MAC {primary_mac} (from {mac_address or mac_address_2}) with missing fields: {missing_fields}")
-
-                    # Look up historical data by MAC address (primary identifier)
-                    historical_data = self._lookup_historical_data_by_mac(primary_mac, historical_indices)
-
-                    # Repair missing data if found
-                    if historical_data:
-                        print(f"[DATA REPAIR] Found historical data for MAC {primary_mac}")
-                        repaired_this_row = False
-                        repaired_fields = []
-
-                        for field in missing_fields:
-                            # Skip MAC Address itself as it's the identifier
-                            if field == "MAC Address":
-                                continue
-
-                            historical_value = historical_data.get(field)
-                            print(f"[DATA REPAIR] Field '{field}': historical_value = '{historical_value}' (type: {type(historical_value)})")
-                            if historical_value and str(historical_value).strip() and str(historical_value).lower() != "null":
-                                row[field] = historical_value
-                                repaired_fields.append(field)
-                                repaired_this_row = True
-                                print(f"[DATA REPAIR] Successfully repaired field '{field}' with value '{historical_value}'")
-                            else:
-                                print(f"[DATA REPAIR] Field '{field}' could not be repaired: value is empty, null, or invalid")
-
-                        if repaired_this_row:
-                            repaired_count += 1
-                            print(f"[DATA REPAIR] Repaired MAC {primary_mac}: {', '.join(repaired_fields)}")
-                            logger.warning(f"DATA REPAIR: Repaired MAC {primary_mac} - fields: {repaired_fields}")
-                        else:
-                            print(f"[DATA REPAIR] No valid data found for MAC {primary_mac}")
-                    else:
-                        print(f"[DATA REPAIR] No historical data found for MAC {primary_mac}")
-
-                repaired_rows.append(row)
-
-            if repaired_count > 0:
-                print(f"[DATA REPAIR] COMPLETED: {repaired_count}/{total_missing} entries repaired")
-                logger.warning(f"DATA REPAIR COMPLETED: {repaired_count}/{total_missing} entries repaired from historical data using MAC address lookup")
-            else:
-                print(f"[DATA REPAIR] COMPLETED: No historical data found for {total_missing} missing entries")
-                logger.warning(f"DATA REPAIR COMPLETED: No historical data found for {total_missing} missing entries")
-
-            return repaired_rows
-
-        except Exception as e:
-            print(f"[DATA REPAIR] ERROR: {e}")
-            logger.error(f"Error during data repair: {e}")
-            return rows  # Return original rows on error
-
     def _lookup_historical_data_by_mac(self, mac_address: str, historical_indices: List[str]) -> Optional[Dict[str, Any]]:
         def _mask_mac(mac: str):
             # Mask all but last 4 characters, preserving format
@@ -2018,12 +1911,22 @@ class OpenSearchConfig:
             if field == "Serial Number" and isinstance(query, str):
                 qsn = query.strip()
                 if qsn:
+                    # Search in Serial Number AND KEM Serial Number fields
+                    logger.info(f"[DEBUG-SERIAL-FIELD] Executing fielded Serial Number query for: {qsn}")
                     return {
                         "query": {"bool": {"should": [
                             {"term": {"Serial Number": qsn}},
                             {"term": {"Serial Number": qsn.upper()}},
+                            {"term": {"KEM 1 Serial Number": qsn}},
+                            {"term": {"KEM 1 Serial Number": qsn.upper()}},
+                            {"term": {"KEM 2 Serial Number": qsn}},
+                            {"term": {"KEM 2 Serial Number": qsn.upper()}},
                             {"wildcard": {"Serial Number": f"{qsn}*"}},
-                            {"wildcard": {"Serial Number": f"{qsn.upper()}*"}}
+                            {"wildcard": {"Serial Number": f"{qsn.upper()}*"}},
+                            {"wildcard": {"KEM 1 Serial Number": f"{qsn}*"}},
+                            {"wildcard": {"KEM 1 Serial Number": f"{qsn.upper()}*"}},
+                            {"wildcard": {"KEM 2 Serial Number": f"{qsn}*"}},
+                            {"wildcard": {"KEM 2 Serial Number": f"{qsn.upper()}*"}}
                         ], "minimum_should_match": 1}},
                         "_source": DESIRED_ORDER,
                         "size": size,
@@ -2181,7 +2084,7 @@ class OpenSearchConfig:
                 q_lower = qn.lower()
                 q_upper = qn.upper()
                 # Prefix search: matches ABX01*, ABX01ZSL*, etc.
-                # IMPORTANT: Also search in ALL other fields via multi_match (e.g., Call Manager columns)
+                # IMPORTANT: Also search in ALL other fields via multi_match (e.g., Call Manager columns, KEM serials)
                 should_clauses = [
                     # High-priority: Switch Hostname field
                     {"prefix": {"Switch Hostname.lower": {"value": q_lower, "boost": 3.0}}},
@@ -2190,6 +2093,15 @@ class OpenSearchConfig:
                     {"wildcard": {"Switch Hostname.lower": {"value": f"{q_lower}*", "boost": 3.0}}},
                     {"wildcard": {"Switch Hostname": {"value": f"{qn}*", "boost": 3.0}}},
                     {"wildcard": {"Switch Hostname": {"value": f"{q_upper}*", "boost": 3.0}}},
+                    # High-priority: KEM Serial Number fields (case-sensitive)
+                    {"term": {"KEM 1 Serial Number": qn}},
+                    {"term": {"KEM 1 Serial Number": q_upper}},
+                    {"term": {"KEM 2 Serial Number": qn}},
+                    {"term": {"KEM 2 Serial Number": q_upper}},
+                    {"wildcard": {"KEM 1 Serial Number": f"{qn}*"}},
+                    {"wildcard": {"KEM 1 Serial Number": f"{q_upper}*"}},
+                    {"wildcard": {"KEM 2 Serial Number": f"{qn}*"}},
+                    {"wildcard": {"KEM 2 Serial Number": f"{q_upper}*"}},
                     # Also search in ALL fields (e.g., Call Manager Active/Standby Sub, etc.)
                     {"multi_match": {"query": qn, "fields": ["*"], "boost": 1.0, "type": "phrase_prefix"}},
                     {"match_phrase_prefix": {"Call Manager Active Sub": {"query": qn, "boost": 2.0}}},
@@ -2255,10 +2167,14 @@ class OpenSearchConfig:
                     if upper_variant not in (None, qn) and upper_variant not in variants:
                         variants.append(upper_variant)
 
-                wildcard_clauses = [
-                    {"wildcard": {"Serial Number": f"{variant}*"}}
-                    for variant in variants
-                ]
+                # Search in Serial Number AND KEM Serial Number fields
+                wildcard_clauses = []
+                for variant in variants:
+                    wildcard_clauses.extend([
+                        {"wildcard": {"Serial Number": f"{variant}*"}},
+                        {"wildcard": {"KEM 1 Serial Number": f"{variant}*"}},
+                        {"wildcard": {"KEM 2 Serial Number": f"{variant}*"}},
+                    ])
 
                 return {
                     "query": {"bool": {"should": wildcard_clauses, "minimum_should_match": 1}},
@@ -2267,7 +2183,7 @@ class OpenSearchConfig:
                     "sort": [
                         {"_script": {"type": "number", "order": "asc", "script": {
                             "lang": "painless",
-                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0) { def v = doc['Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } return 1;",
+                            "source": "def q = params.q; if (q == null) return 1; if (doc.containsKey('Serial Number') && doc['Serial Number'].size()>0) { def v = doc['Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } if (doc.containsKey('KEM 1 Serial Number') && doc['KEM 1 Serial Number'].size()>0) { def v = doc['KEM 1 Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } if (doc.containsKey('KEM 2 Serial Number') && doc['KEM 2 Serial Number'].size()>0) { def v = doc['KEM 2 Serial Number'].value; if (v != null && (v == q || v.equalsIgnoreCase(q))) { return 0; } } return 1;",
                             "params": {"q": qn}
                         }}},
                         {"Creation Date": {"order": "desc"}},
@@ -2484,6 +2400,8 @@ class OpenSearchConfig:
             {"term": {"Subnet Mask": {"value": query, "boost": 10.0}}},
             {"term": {"Switch Port": {"value": query, "boost": 10.0}}},
             {"term": {"Serial Number": {"value": query, "boost": 10.0}}},
+            {"term": {"KEM 1 Serial Number": {"value": query, "boost": 10.0}}},  # Already keyword type, no .keyword needed
+            {"term": {"KEM 2 Serial Number": {"value": query, "boost": 10.0}}},  # Already keyword type, no .keyword needed
             {"term": {"Model Name.keyword": {"value": query, "boost": 10.0}}},
             {"term": {"Switch Hostname": {"value": query, "boost": 10.0}}},
             {"term": {"Switch Hostname.lower": {"value": str(query).lower(), "boost": 10.0}}},
@@ -2506,17 +2424,12 @@ class OpenSearchConfig:
                 {"wildcard": {"PC Port Speed": f"*{query}*"}},
             ])
         else:
-            # For longer queries: use query_string for comprehensive matching
+            # For longer queries: use query_string for comprehensive matching across ALL fields
+            # Using "*" automatically includes new columns without code changes
             should_clauses.append({
                 "query_string": {
                     "query": f"*{query}*",
-                    "fields": [
-                        "Voice VLAN", "Subnet Mask", "Switch Port", "Serial Number",
-                        "Switch Hostname.lower", "Phone Port Speed", "PC Port Speed",
-                        "Switch Port Mode", "PC Port Mode", "KEM", "KEM 2",
-                        "MAC Address.keyword", "MAC Address 2.keyword",
-                        "Line Number.keyword", "IP Address.keyword"
-                    ],
+                    "fields": ["*"],  # Search ALL fields automatically (including new CSV columns)
                     "boost": 3.0,
                     "analyze_wildcard": True
                 }
@@ -2876,12 +2789,22 @@ class OpenSearchConfig:
                     # For 11+ characters: prefer exact match but also include wildcard as fallback
                     should_clauses = []
 
-                    # Add exact match queries
-                    should_clauses.extend([{ "term": {"Serial Number": v} } for v in variants])
+                    # Add exact match queries for Serial Number AND KEM Serial Number fields
+                    for v in variants:
+                        should_clauses.extend([
+                            {"term": {"Serial Number": v}},
+                            {"term": {"KEM 1 Serial Number": v}},
+                            {"term": {"KEM 2 Serial Number": v}}
+                        ])
 
                     # Add wildcard prefix queries for progressive search (especially for 8-10 char lengths)
                     if len(qn_sn) >= 3:
-                        should_clauses.extend([{ "wildcard": {"Serial Number": f"{v}*"} } for v in variants])
+                        for v in variants:
+                            should_clauses.extend([
+                                {"wildcard": {"Serial Number": f"{v}*"}},
+                                {"wildcard": {"KEM 1 Serial Number": f"{v}*"}},
+                                {"wildcard": {"KEM 2 Serial Number": f"{v}*"}}
+                            ])
 
                     body_sn = {
                         "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},

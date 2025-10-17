@@ -144,7 +144,7 @@ async def search_files(
                 try:
                     headers, documents = opensearch_config.search(
                         query=qn_sn,
-                        field="Serial Number" if field == "Serial Number" else None,
+                        field="Serial Number",  # Always use Serial Number field for serial-like queries
                         include_historical=include_historical,
                         size=limit or 200,
                     )

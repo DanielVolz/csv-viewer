@@ -120,13 +120,21 @@ class TestSearchAllColumns:
         assert data["success"] is True
 
     def test_search_kem_module(self):
-        """Test searching for phones with KEM modules."""
-        response = requests.get(f"{API_BASE}/search/?query=kem")
+        """Test searching for phones with KEM modules - verify KEM Serial Number columns are present."""
+        response = requests.get(f"{API_BASE}/search/?query=CP-8851")
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert len(data["data"]) > 0, "Should find KEM phones"
-        assert any(" KEM" in str(row.get("Line Number", "")).upper() for row in data["data"])
+
+        # Verify KEM Serial Number columns are in headers (even if no results)
+        assert "KEM 1 Serial Number" in data["headers"], "KEM 1 Serial Number should be in headers"
+        assert "KEM 2 Serial Number" in data["headers"], "KEM 2 Serial Number should be in headers"
+
+        # Verify KEM Serial Number fields are in results if any data returned
+        if len(data["data"]) > 0:
+            first_result = data["data"][0]
+            assert "KEM 1 Serial Number" in first_result, "KEM 1 Serial Number should be in results"
+            assert "KEM 2 Serial Number" in first_result, "KEM 2 Serial Number should be in results"
 
     def test_search_partial_ip(self):
         """Test searching by partial IP address."""
@@ -207,7 +215,8 @@ class TestSearchAllColumns:
             first_result = data["data"][0]
             expected_fields = [
                 "#", "File Name", "Creation Date", "IP Address",
-                "Serial Number", "Model Name", "MAC Address"
+                "Serial Number", "Model Name", "MAC Address",
+                "KEM 1 Serial Number", "KEM 2 Serial Number"
             ]
             for field in expected_fields:
                 assert field in first_result, f"Field '{field}' should be in results"

@@ -100,6 +100,12 @@ Caching behavior and invalidation
 - **Legacy files**: `netspeed.csv.0-29` (no headers, variable column counts 11-15)
 - Legacy files archived after: **2025-10-27**
 
+### File Locations in Container
+- **Current netspeed file**: `/app/data/netspeed/netspeed_YYYYMMDD-HHMMSS.csv` (tagesaktuelle Datei mit Timestamp, z.B. `netspeed_20251016-062247.csv`)
+- **Historical files**: `/app/data/history/netspeed/` (if separate directory configured)
+- **Archive**: `/app/data/archive/` (older archived files)
+- **File watcher monitors**: `/app/data` directory for changes
+
 ### CSV Format Handling - CRITICAL ARCHITECTURE
 
 The system uses **TWO COMPLETELY SEPARATE approaches** for modern vs legacy files:
