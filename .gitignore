@@ -11,6 +11,9 @@
 # production
 /build
 
+# pyscn
+.pyscn/
+
 # misc
 .DS_Store
 .env.local

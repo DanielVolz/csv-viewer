@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1,
+    "title": "Refactor opensearch.py:search()",
+    "description": "Core search dispatcher is 700+ lines. Extract pattern-specific handlers (MAC, phone, serial, hostname, IP, KEM) into dedicated helper methods and orchestrate from main flow.",
+    "status": "todo"
+  },
+  {
+    "id": 2,
+    "title": "Refactor opensearch.py:_build_query_body()",
+    "description": "Split pattern detection and query construction into modular helpers so each pattern (MAC/IP/Hostname/Serial/Phone/etc.) builds its own query body.",
+    "status": "todo"
+  },
+  {
+    "id": 3,
+    "title": "Refactor tasks.py:index_all_csv_files()",
+    "description": "Break file processing orchestration into smaller functions: availability checks, concurrent guard, file discovery, per-file indexing, snapshot updates.",
+    "status": "todo"
+  },
+  {
+    "id": 4,
+    "title": "Refactor stats.py:get_stats_timeline_top_locations()",
+    "description": "Extract timeline aggregation, top location selection, and response formatting into helpers; aim for loops with early exits.",
+    "status": "todo"
+  }
+]

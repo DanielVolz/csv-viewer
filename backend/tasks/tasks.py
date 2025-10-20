@@ -1072,18 +1072,13 @@ def rebuild_stats_snapshots_deduplicated(directory_path: str | None = None) -> d
         return {"status": "error", "message": str(exc)}
 
 
-@app.task(bind=True, name='tasks.index_all_csv_files')
-def index_all_csv_files(self, directory_path: str | None = None) -> dict:
-    """Index all CSV files and persist snapshots with correct KEM semantics.
-
-    - Index historical first, then current file
-    - phonesWithKEM = unique phones; totalKEMs = modules
-    - Also writes per-location snapshots with unique KEM phone counting
+def _ensure_opensearch_available(directory_label: str) -> dict | None:
     """
-    extras = [directory_path] if directory_path else None
-    directory_label = directory_path or str(get_data_root())
-    logger.info(f"Indexing all CSV files (base={directory_label})")
+    Check OpenSearch availability before indexing.
 
+    Returns:
+        dict | None: Error response dict if unavailable, None if available
+    """
     should_wait = bool(getattr(settings, "OPENSEARCH_WAIT_FOR_AVAILABILITY", True))
     if should_wait:
         try:
@@ -1111,6 +1106,75 @@ def index_all_csv_files(self, directory_path: str | None = None) -> dict:
                 "files_processed": 0,
                 "total_documents": 0,
             }
+    return None
+
+
+def _check_concurrent_indexing(task_request, directory_label: str, extras: List[str] | None) -> dict | None:
+    """
+    Check for concurrent indexing tasks and create pre-index snapshot.
+
+    Returns:
+        dict | None: Error response dict if concurrent task found, None if safe to proceed
+    """
+    try:
+        pre_state = load_state()
+        current_file_path = resolve_current_file(extras)
+        if current_file_path is not None:
+            try:
+                logger.info("Executing snapshot_current_with_details for detected current netspeed.csv before bulk indexing (location stats fix)")
+                from tasks.tasks import snapshot_current_with_details
+                from datetime import datetime as _dt
+                today_str = _dt.now().strftime('%Y-%m-%d')
+                result = snapshot_current_with_details(file_path=str(current_file_path), force_date=today_str)
+                logger.info(f"Pre-index snapshot_current_with_details result: {result}")
+                try:
+                    from api.stats import invalidate_caches as _invalidate
+                    _invalidate("pre-index location stats creation")
+                except Exception as cache_e:
+                    logger.debug(f"Cache invalidation failed (pre-index): {cache_e}")
+            except Exception as e:
+                logger.warning(f"Pre-index snapshot_current_with_details failed: {e}")
+        else:
+            logger.info("No current netspeed.csv detected in candidates before indexing")
+        active_task = pre_state.get("active_task", {})
+        if active_task.get("status") == "running":
+            existing_task_id = active_task.get("task_id")
+            current_task_id = getattr(task_request, 'id', 'unknown')
+            if existing_task_id and existing_task_id != current_task_id:
+                logger.warning(f"Another indexing task {existing_task_id} is already running. Aborting task {current_task_id}")
+                return {
+                    "status": "aborted",
+                    "message": f"Another indexing task {existing_task_id} is already running",
+                    "directory": directory_label,
+                    "files_processed": 0,
+                    "total_documents": 0,
+                }
+    except Exception as e:
+        logger.warning(f"Failed to check for concurrent tasks: {e}")
+    return None
+
+
+@app.task(bind=True, name='tasks.index_all_csv_files')
+def index_all_csv_files(self, directory_path: str | None = None) -> dict:
+    """Index all CSV files and persist snapshots with correct KEM semantics.
+
+    - Index historical first, then current file
+    - phonesWithKEM = unique phones; totalKEMs = modules
+    - Also writes per-location snapshots with unique KEM phone counting
+    """
+    extras = [directory_path] if directory_path else None
+    directory_label = directory_path or str(get_data_root())
+    logger.info(f"Indexing all CSV files (base={directory_label})")
+
+    # Check OpenSearch availability
+    availability_error = _ensure_opensearch_available(directory_label)
+    if availability_error:
+        return availability_error
+
+    # Protection against concurrent indexing tasks
+    concurrent_error = _check_concurrent_indexing(self.request, directory_label, extras)
+    if concurrent_error:
+        return concurrent_error
 
     # Protection against concurrent indexing tasks
     try:

@@ -643,6 +643,11 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
 
     display_headers = available_headers
 
+    # Ensure KEM serial number columns are always present in headers for UI consistency
+    for kem_col in ("KEM 1 Serial Number", "KEM 2 Serial Number"):
+        if kem_col not in display_headers:
+            display_headers.append(kem_col)
+
     # Filter data to only include displayed columns, copying legacy values when necessary
     filtered_data = []
     for row in data:

@@ -456,6 +456,46 @@ docker exec -it csv-viewer-backend-dev env | grep CSV_FILES_DIR
 docker exec -it csv-viewer-backend-dev ls -la /app/data/
 ```
 
+## Code Quality Analysis
+
+### Using pyscn
+The project uses `pyscn` (Python Code Quality Analyzer) for code analysis. Always use the `.venv` virtual environment:
+
+```bash
+# Activate venv first
+cd /home/volzd/docker/csv-viewer
+source .venv/bin/activate
+
+# Quick quality check (recommended for CI/CD)
+cd backend
+python -m pyscn check . --max-complexity 20
+
+# Full analysis with reports (may take time on large codebases)
+python -m pyscn analyze . --select complexity,deadcode --min-complexity 15 --no-open
+
+# Generate JSON report
+python -m pyscn analyze . --json --no-open
+```
+
+**IMPORTANT**:
+- Always activate `.venv` before running pyscn commands
+- Use `pyscn check` for fast feedback (recommended)
+- The `analyze` command can hang at 99% on large files - use `timeout` or Ctrl+C if needed
+- Results are saved even if interrupted
+
+**Current Complexity Hotspots** (as of 2025-10-17):
+- `utils/opensearch.py:search()` - complexity 103 (700+ lines, deeply nested logic)
+- `tasks/tasks.py:index_all_csv_files()` - complexity 73 (435 lines, complex file processing loop)
+- `utils/opensearch.py:_build_query_body()` - complexity 67 (800+ lines, pattern detection)
+- `api/stats.py:get_stats_timeline_top_locations()` - complexity 60 (400+ lines)
+
+**Refactoring Notes**:
+- These functions are too complex but require architectural redesign, not simple extraction
+- Partial progress: Extracted `_normalize_mac()` helper from `search()`, and availability checks from `index_all_csv_files()`
+- Recommendation: Gradual refactoring over multiple iterations with comprehensive testing
+- **Dead Code**: ✅ 100/100 - No dead code detected (verified 2025-10-17)
+
 ## Recent Verification
 - `curl -s http://localhost:9200/_cluster/health` returns `status: green` with 1 data node (verified 2025-09-29)
 - `/api/stats/fast/by_location?q=<code>` now returns populated `switches` and `kemPhones` arrays for `netspeed.csv` snapshots after the September 2025 fix
+- KEM Serial Number search functionality implemented and verified (2025-10-17)

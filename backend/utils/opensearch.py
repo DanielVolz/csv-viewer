@@ -1390,68 +1390,6 @@ class OpenSearchConfig:
         logger.info(f"DATA REPAIR: DISABLED - Skipping repair for {file_path} to prevent CSV corruption")
         return rows  # Return original rows unchanged
 
-    def _lookup_historical_data_by_mac(self, mac_address: str, historical_indices: List[str]) -> Optional[Dict[str, Any]]:
-        def _mask_mac(mac: str):
-            # Mask all but last 4 characters, preserving format
-            if not mac or len(mac) < 4:
-                return "[REDACTED]"
-            masked = "[REDACTED]" + mac[-4:]
-            return masked
-
-        self._mask_mac = _mask_mac
-        """
-        Look up historical data by MAC address in historical indices.
-        MAC address is the primary identifier since it remains constant across files.
-        Returns all available fields from historical data for repair purposes.
-
-        Args:
-            mac_address: MAC address to search for (primary identifier)
-            historical_indices: List of historical index names to search
-
-        Returns:
-            Optional[Dict[str, Any]]: Historical document data if found, None otherwise
-        """
-        try:
-            query = {
-                "query": {
-                    "bool": {
-                        "should": [
-                            {"term": {"MAC Address.keyword": mac_address}},
-                            {"term": {"MAC Address 2.keyword": mac_address}},
-                            {"term": {"MAC Address 2.keyword": f"SEP{mac_address}"}}
-                        ],
-                        "minimum_should_match": 1
-                    }
-                },
-                "sort": [{"Creation Date": {"order": "desc"}}],  # Get most recent first
-                "size": 1  # Only get the most recent one to avoid too many requests
-                # Return all fields - no _source filtering
-            }
-
-            # LIMIT: Search only the first 5 historical indices to prevent infinite loops
-            # Most recent data is usually in the first few indices anyway
-            limited_indices = sorted(historical_indices, reverse=True)[:5]
-
-            # Search across LIMITED historical indices
-            for index in limited_indices:
-                try:
-                    response = self.client.search(index=index, body=query)
-                    if response["hits"]["total"]["value"] > 0:
-                        # Return the first match immediately - don't search all indices
-                        hit = response["hits"]["hits"][0]
-                        logger.debug(f"Found historical data in index {index}")
-                        return hit["_source"]
-                except Exception as e:
-                    logger.debug(f"Error searching historical index {index} for MAC {mac_address}: {e}")
-                    continue
-
-            # No data found in any historical index
-            return None
-
-        except Exception as e:
-            logger.debug(f"Error in MAC-based historical lookup for {mac_address}: {e}")
-            return None
-
     def index_csv_file(self, file_path: str) -> Tuple[bool, int]:
         """
         Index a CSV file into OpenSearch.
@@ -2195,15 +2133,23 @@ class OpenSearchConfig:
             # MAC exact-only when 12-hex provided
             mac_core = re.sub(r"[^A-Fa-f0-9]", "", qn)
             if len(mac_core) == 12:
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
-                mac_up = mac_core.upper()
+                canonical_mac = mac_core.upper()
+                exact_terms, wildcard_terms = self._mac_query_variants(qn, canonical_mac)
+                should_clauses = self._build_mac_should_clauses(exact_terms, wildcard_terms)
+
+                multi_match_queries: List[str] = []
+                if canonical_mac:
+                    multi_match_queries.append(canonical_mac)
+                if isinstance(qn, str):
+                    q_stripped = qn.strip()
+                    if q_stripped and q_stripped not in multi_match_queries:
+                        multi_match_queries.append(q_stripped)
+
+                for mm_query in multi_match_queries:
+                    should_clauses.append({"multi_match": {"query": mm_query, "fields": ["*"], "boost": 0.01}})
+
                 return {
-                    "query": {"bool": {"should": [
-                        {"term": {"MAC Address.keyword": mac_up}},
-                        {"term": {"MAC Address 2.keyword": mac_up}},
-                        {"term": {"MAC Address 2.keyword": f"SEP{mac_up}"}},
-                        {"multi_match": {"query": mac_up, "fields": ["*"], "boost": 0.01}}
-                    ], "minimum_should_match": 1}},
+                    "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
                     "size": size,
                     "sort": [
                         self._preferred_file_sort_clause(),
@@ -2545,8 +2491,23 @@ class OpenSearchConfig:
         # Add ALL data columns from DEFAULT_DISPLAY_ORDER (excluding metadata we already added)
         data_columns = [col for col in DEFAULT_DISPLAY_ORDER if col not in metadata_fields]
 
-        # Sort data columns alphabetically for consistency
-        data_columns.sort()
+        # Ensure KEM serial number columns are always present in headers
+        kem_fields = ["KEM 1 Serial Number", "KEM 2 Serial Number"]
+        for kem in kem_fields:
+            if kem not in data_columns:
+                # Prefer inserting KEM fields after Model Name when present
+                try:
+                    idx = data_columns.index("Model Name") + 1
+                except ValueError:
+                    idx = len(data_columns)
+                data_columns.insert(idx, kem)
+
+        # Sort remaining data columns alphabetically for consistency while keeping KEM placement
+        # We'll keep KEM fields near Model Name by removing them, sorting, then reinserting
+        kem_present = [c for c in data_columns if c in kem_fields]
+        other_columns = [c for c in data_columns if c not in kem_fields]
+        other_columns.sort()
+        data_columns = other_columns + kem_present
         headers.extend(data_columns)
 
         # Add any additional columns from documents that aren't in DEFAULT_DISPLAY_ORDER
@@ -2555,6 +2516,456 @@ class OpenSearchConfig:
         headers.extend(extra_columns)
 
         return headers
+
+    def _normalize_mac(self, q: Optional[str]) -> Optional[str]:
+        """
+        Normalize user input into canonical 12-hex MAC (uppercase).
+
+        Args:
+            q: Query string that might be a MAC address
+
+        Returns:
+            Optional[str]: Normalized MAC address or None if invalid
+        """
+        if not isinstance(q, str) or not q:
+            return None
+        s = q.strip()
+        # Strip optional Cisco SEP prefix (case-insensitive) with optional separator
+        s = re.sub(r'(?i)^sep[-_:]?', '', s)
+        # Remove all non-hex characters (handle '-', ':', '.')
+        core = re.sub(r'[^0-9A-Fa-f]', '', s)
+        if len(core) == 12:
+            # Treat as MAC only if it likely is one: contains hex letters or had MAC separators or SEP prefix
+            if re.search(r'[A-Fa-f]', q) or re.search(r'[:\-\.]', q) or re.match(r'(?i)^\s*sep', q.strip()):
+                return core.upper()
+        return None
+
+    def _mac_query_variants(
+        self,
+        raw_query: Optional[str],
+        canonical_mac: Optional[str]
+    ) -> Tuple[List[str], List[str]]:
+        """Build exact and wildcard-friendly variants for MAC address searches."""
+        candidates: List[str] = []
+
+        def _add(value: Optional[str]) -> None:
+            if not value:
+                return
+            candidate = value.strip()
+            if candidate:
+                candidates.append(candidate)
+
+        if canonical_mac:
+            mac_up = canonical_mac.upper()
+            _add(mac_up)
+            _add(f"SEP{mac_up}")
+
+            # Common separator formats: colon, hyphen, Cisco dotted
+            pairs = [mac_up[i:i + 2] for i in range(0, 12, 2)]
+            colon_variant = ":".join(pairs)
+            hyphen_variant = "-".join(pairs)
+            dotted_variant = ".".join([mac_up[i:i + 4] for i in range(0, 12, 4)])
+
+            _add(colon_variant)
+            _add(colon_variant.upper())
+            _add(colon_variant.lower())
+            _add(hyphen_variant)
+            _add(hyphen_variant.upper())
+            _add(hyphen_variant.lower())
+            _add(dotted_variant)
+            _add(dotted_variant.upper())
+            _add(dotted_variant.lower())
+
+            _add(f"SEP{colon_variant}")
+            _add(f"SEP{hyphen_variant}")
+            _add(f"SEP{dotted_variant}")
+
+        if isinstance(raw_query, str):
+            stripped = raw_query.strip()
+            _add(stripped)
+            upper = stripped.upper()
+            lower = stripped.lower()
+            if upper != stripped:
+                _add(upper)
+            if lower != stripped:
+                _add(lower)
+
+        # Deduplicate while preserving order
+        seen_exact: set[str] = set()
+        exact_terms: List[str] = []
+        for candidate in candidates:
+            if candidate not in seen_exact:
+                seen_exact.add(candidate)
+                exact_terms.append(candidate)
+
+        seen_wildcard: set[str] = set()
+        wildcard_terms: List[str] = []
+        for term in exact_terms:
+            if term not in seen_wildcard:
+                seen_wildcard.add(term)
+                wildcard_terms.append(term)
+
+        return exact_terms, wildcard_terms
+
+    def _build_mac_should_clauses(
+        self,
+        exact_terms: List[str],
+        wildcard_terms: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Construct shared MAC address should clauses for query bodies."""
+        clauses: List[Dict[str, Any]] = []
+        non_sep_exact = [t for t in exact_terms if not t.upper().startswith("SEP")]
+        for term in non_sep_exact:
+            clauses.append({"term": {"MAC Address.keyword": term}})
+        for term in exact_terms:
+            clauses.append({"term": {"MAC Address 2.keyword": term}})
+
+        non_sep_wildcards = [t for t in wildcard_terms if not t.upper().startswith("SEP")]
+        for term in non_sep_wildcards:
+            clauses.append({"wildcard": {"MAC Address.keyword": f"*{term}*"}})
+        for term in wildcard_terms:
+            clauses.append({"wildcard": {"MAC Address 2.keyword": f"*{term}*"}})
+        return clauses
+
+    def _seed_mac_shortcut(self, query: str, preferred_files: List[str]) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
+        """Seed results for MAC-address-like queries against the current index."""
+        canonical_mac: Optional[str]
+        looks_like_mac = False
+        try:
+            canonical_mac = self._normalize_mac(query)
+            looks_like_mac = canonical_mac is not None
+        except Exception:
+            canonical_mac = None
+            looks_like_mac = False
+
+        seeded_documents: List[Dict[str, Any]] = []
+        if not looks_like_mac or not canonical_mac:
+            return looks_like_mac, canonical_mac, seeded_documents
+
+        try:
+            curr_indices = self.get_search_indices(False)
+            must_clauses: List[Dict[str, Any]] = []
+            if preferred_files:
+                must_clauses.append({"terms": {"File Name": preferred_files[:5]}})
+
+            exact_terms, wildcard_terms = self._mac_query_variants(query, canonical_mac)
+            should_clauses = self._build_mac_should_clauses(exact_terms, wildcard_terms)
+
+            targeted = {
+                "query": {
+                    "bool": {
+                        "must": must_clauses,
+                        "should": should_clauses,
+                        "minimum_should_match": 1,
+                    }
+                },
+                "size": 200,
+            }
+            logger.info(f"[MAC-first] indices={curr_indices} body={targeted}")
+            resp = self.client.search(index=curr_indices, body=targeted)
+            seeded_documents = [h.get('_source', {}) for h in resp.get('hits', {}).get('hits', [])]
+
+            if not seeded_documents:
+                try:
+                    fallback_body = targeted.copy()
+                    fb_query = fallback_body.get('query', {}).get('bool', {})
+                    if isinstance(fb_query, dict) and 'must' in fb_query:
+                        fb_query.pop('must', None)
+                        logger.info("[MAC-first] primary query empty, retrying without File Name must-clause")
+                        resp_fb = self.client.search(index=curr_indices, body=fallback_body)
+                        seeded_documents = [h.get('_source', {}) for h in resp_fb.get('hits', {}).get('hits', [])]
+                except Exception as fb_exc:
+                    logger.debug(f"[MAC-first] fallback without must failed: {fb_exc}")
+
+            if seeded_documents:
+                logger.info(f"[MAC-first] seeded {len(seeded_documents)} docs from current index")
+        except Exception as exc:
+            logger.warning(f"[MAC-first] current-index search failed: {exc}")
+
+        return looks_like_mac, canonical_mac, seeded_documents
+
+    def _attempt_phone_shortcut(
+        self,
+        query: str,
+        include_historical: bool,
+        size: int,
+    ) -> Optional[Tuple[List[str], List[Dict[str, Any]]]]:
+        """Handle phone-number-like queries with targeted shortcuts."""
+        try:
+            qn_phone = query.strip() if isinstance(query, str) else None
+            looks_like_phone = bool(qn_phone and re.fullmatch(r"\+?\d{7,}", qn_phone))
+        except Exception:
+            looks_like_phone = False
+            qn_phone = None
+
+        if not looks_like_phone or not qn_phone:
+            return None
+
+        try:
+            if qn_phone.startswith('+'):
+                digits = qn_phone.lstrip('+')
+                candidates = [qn_phone]
+                if digits:
+                    candidates.append(digits)
+            else:
+                digits = qn_phone
+                candidates = [digits, f"+{digits}"] if digits else []
+
+            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as desired_order
+
+            if include_historical:
+                netspeed_files = self._netspeed_filenames()
+                results: List[Dict[str, Any]] = []
+                for fname in netspeed_files:
+                    try:
+                        seed_body = {
+                            "query": {
+                                "bool": {
+                                    "must": [{"term": {"File Name": fname}}],
+                                    "should": [{"term": {"Line Number.keyword": cand}} for cand in candidates],
+                                    "minimum_should_match": 1,
+                                }
+                            },
+                            "_source": desired_order,
+                            "size": 1,
+                        }
+                        resp = self.client.search(index=self.get_search_indices(True), body=seed_body)
+                        hit = next((h.get('_source', {}) for h in resp.get('hits', {}).get('hits', [])), None)
+                        if hit:
+                            results.append(hit)
+                    except Exception as seed_exc:
+                        logger.debug(f"[PHONE] per-file seed failed for {fname}: {seed_exc}")
+                return self._build_headers_from_documents(results), results
+
+            indices = self.get_search_indices(False)
+            phone_body_exact = {
+                "query": {
+                    "bool": {
+                        "should": [{"term": {"Line Number.keyword": cand}} for cand in candidates],
+                        "minimum_should_match": 1,
+                    }
+                },
+                "size": 1,
+            }
+            logger.info(f"[PHONE-exact] indices={indices} body={phone_body_exact}")
+            resp_phone = self.client.search(index=indices, body=phone_body_exact)
+            phone_hit = next((h.get('_source', {}) for h in resp_phone.get('hits', {}).get('hits', [])), None)
+            if phone_hit:
+                return self._build_headers_from_documents([phone_hit]), [phone_hit]
+
+            digits = qn_phone.lstrip('+')
+            if digits:
+                phone_body_partial = {
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {"wildcard": {"Line Number.keyword": f"*{digits}*"}},
+                                {"wildcard": {"Line Number.keyword": f"*+{digits}*"}},
+                            ],
+                            "minimum_should_match": 1,
+                        }
+                    },
+                    "size": max(size, 20000),
+                    "sort": [{"Creation Date": {"order": "desc"}}],
+                }
+                logger.info(f"[PHONE-partial] indices={indices} body={phone_body_partial}")
+                resp_part = self.client.search(index=indices, body=phone_body_partial)
+                docs_part = [h.get('_source', {}) for h in resp_part.get('hits', {}).get('hits', [])]
+                docs_part = self._deduplicate_documents_preserve_order(docs_part)
+                return self._build_headers_from_documents(docs_part), docs_part
+
+            return ([], [])
+        except Exception as exc:
+            logger.warning(f"Phone exact search failed, falling back to general: {exc}")
+            return None
+
+    def _attempt_serial_shortcut(
+        self,
+        query: str,
+        include_historical: bool,
+        size: int,
+        skip_due_to_mac: bool,
+    ) -> Optional[Tuple[List[str], List[Dict[str, Any]]]]:
+        """Handle serial-number-like queries with targeted shortcuts."""
+        try:
+            qn_sn = query.strip() if isinstance(query, str) else None
+            basic_serial_pattern = bool(qn_sn and re.fullmatch(r"[A-Za-z0-9]{8,}", qn_sn))
+            not_all_digits = bool(qn_sn and not re.fullmatch(r"\d{8,}", qn_sn))
+            looks_like_serial = False
+            if basic_serial_pattern and not_all_digits:
+                hostname_pattern = bool(re.match(r'^[A-Za-z]{3}[0-9]{2}', qn_sn))
+                if hostname_pattern and len(qn_sn) >= 8:
+                    remaining = qn_sn[5:]
+                    looks_like_serial = not bool(re.search(r'[A-Za-z]{2,}', remaining))
+                else:
+                    looks_like_serial = True
+            else:
+                looks_like_serial = False
+        except Exception:
+            qn_sn = None
+            looks_like_serial = False
+
+        if skip_due_to_mac or not looks_like_serial or not qn_sn:
+            return None
+
+        try:
+            variants = [qn_sn]
+            upper_variant = qn_sn.upper()
+            if upper_variant != qn_sn:
+                variants.append(upper_variant)
+
+            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as desired_order
+            indices = self.get_search_indices(include_historical)
+            indices_list = indices if isinstance(indices, list) else [indices]
+            allow_archive = any(idx == self.archive_index for idx in indices_list)
+            allow_historical = bool(include_historical)
+
+            should_clauses: List[Dict[str, Any]] = []
+            for variant in variants:
+                should_clauses.extend([
+                    {"term": {"Serial Number": variant}},
+                    {"term": {"KEM 1 Serial Number": variant}},
+                    {"term": {"KEM 2 Serial Number": variant}},
+                ])
+
+            if len(qn_sn) >= 3:
+                for variant in variants:
+                    should_clauses.extend([
+                        {"wildcard": {"Serial Number": f"{variant}*"}},
+                        {"wildcard": {"KEM 1 Serial Number": f"{variant}*"}},
+                        {"wildcard": {"KEM 2 Serial Number": f"{variant}*"}},
+                    ])
+
+            body = {
+                "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
+                "_source": desired_order,
+                "size": size if include_historical else 20000,
+                "sort": [
+                    {"Creation Date": {"order": "desc"}},
+                    self._preferred_file_sort_clause(),
+                    {"_score": {"order": "desc"}},
+                ],
+            }
+            logger.info(f"[SERIAL] indices={indices} body={body}")
+            resp = self.client.search(index=indices, body=body)
+            docs = [h.get('_source', {}) for h in resp.get('hits', {}).get('hits', [])]
+
+            def _is_allowed_file(fn: str) -> bool:
+                if not fn:
+                    return False
+                if fn == 'netspeed.csv':
+                    return True
+                if re.match(r'^netspeed_\d{8}-\d{6}\.csv$', fn):
+                    return True
+                if allow_historical:
+                    if fn.startswith('netspeed.csv.'):
+                        suf = fn.split('netspeed.csv.', 1)[1]
+                        return suf.isdigit()
+                    if re.match(r'^netspeed_\d{8}-\d{6}\.csv\.\d+$', fn):
+                        return True
+                if allow_archive and fn.startswith('netspeed_'):
+                    return True
+                return False
+
+            docs = [d for d in docs if _is_allowed_file((d.get('File Name') or '').strip())]
+
+            if include_historical:
+                seen_files: set[str] = set()
+                dedup_by_file: List[Dict[str, Any]] = []
+                for doc in docs:
+                    fname = (doc.get('File Name') or '').strip()
+                    if not fname or fname in seen_files:
+                        continue
+                    seen_files.add(fname)
+                    dedup_by_file.append(doc)
+                docs = dedup_by_file
+
+            return self._build_headers_from_documents(docs), docs
+        except Exception as exc:
+            logger.warning(f"Serial exact search failed, falling back to general: {exc}")
+            return None
+
+    def _attempt_hostname_shortcut(
+        self,
+        query: str,
+        include_historical: bool,
+        skip_due_to_mac: bool,
+        size: int,
+    ) -> Optional[Tuple[List[str], List[Dict[str, Any]]]]:
+        """Handle hostname/FQDN queries before general search."""
+        try:
+            qn_hn = query.strip() if isinstance(query, str) else None
+            looks_like_hostname = bool(
+                qn_hn
+                and '.' in qn_hn
+                and any(c.isalpha() for c in qn_hn)
+                and '/' not in qn_hn
+                and ' ' not in qn_hn
+                and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn_hn)
+            )
+        except Exception:
+            qn_hn = None
+            looks_like_hostname = False
+
+        if skip_due_to_mac or not looks_like_hostname or not qn_hn:
+            return None
+
+        try:
+            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as desired_order
+            indices = self.get_search_indices(include_historical)
+            indices_list = indices if isinstance(indices, list) else [indices]
+            allow_archive = any(idx == self.archive_index for idx in indices_list)
+            allow_historical = bool(include_historical)
+
+            body = {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {
+                                "script": {
+                                    "script": {
+                                        "lang": "painless",
+                                        "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
+                                        "params": {"q": qn_hn},
+                                    }
+                                }
+                            }
+                        ],
+                        "should": [
+                            {"term": {"Switch Hostname": qn_hn}},
+                            {"term": {"Switch Hostname.lower": qn_hn.lower()}},
+                        ],
+                        "minimum_should_match": 0,
+                    }
+                },
+                "_source": desired_order,
+                "size": size,
+                "sort": [
+                    {"Creation Date": {"order": "desc"}},
+                    self._preferred_file_sort_clause(),
+                ],
+            }
+
+            resp = self.client.search(index=indices, body=body)
+            docs = [h.get('_source', {}) for h in resp.get('hits', {}).get('hits', [])]
+
+            def _is_allowed_file(fn: str) -> bool:
+                if not fn:
+                    return False
+                if fn == 'netspeed.csv':
+                    return True
+                if allow_historical and fn.startswith('netspeed.csv.'):
+                    suf = fn.split('netspeed.csv.', 1)[1]
+                    return suf.isdigit()
+                if allow_archive and fn.startswith('netspeed_'):
+                    return True
+                return False
+
+            docs = [d for d in docs if _is_allowed_file((d.get('File Name') or '').strip())]
+            return self._build_headers_from_documents(docs), docs
+        except Exception as exc:
+            logger.warning(f"Hostname exact search failed, falling back to general: {exc}")
+            return None
 
     def search(self, query: str, field: Optional[str] = None, include_historical: bool = False,
               size: int = 20000) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -2575,361 +2986,40 @@ class OpenSearchConfig:
             # Prepare containers for documents
             documents: List[Dict[str, Any]] = []
 
-            # Helper to normalize user input into canonical 12-hex MAC (uppercase)
-            def _normalize_mac(q: Optional[str]) -> Optional[str]:
-                if not isinstance(q, str) or not q:
-                    return None
-                s = q.strip()
-                import re as _re
-                # Strip optional Cisco SEP prefix (case-insensitive) with optional separator
-                s = _re.sub(r'(?i)^sep[-_:]?', '', s)
-                # Remove all non-hex characters (handle '-', ':', '.')
-                core = _re.sub(r'[^0-9A-Fa-f]', '', s)
-                if len(core) == 12:
-                    # Treat as MAC only if it likely is one: contains hex letters or had MAC separators or SEP prefix
-                    if _re.search(r'[A-Fa-f]', q) or _re.search(r'[:\-\.]', q) or _re.match(r'(?i)^\s*sep', q.strip()):
-                        return core.upper()
-                return None
+            looks_like_mac_first, canonical_mac, mac_seed_docs = self._seed_mac_shortcut(query, preferred_files)
+            effective_include_historical = bool(include_historical or looks_like_mac_first)
+            if mac_seed_docs:
+                documents.extend(mac_seed_docs)
 
-            # If the query looks like a MAC, first search the current index only to prefer today's file
-            try:
-                canonical_mac = _normalize_mac(query)
-                looks_like_mac_first = canonical_mac is not None
-            except Exception:
-                canonical_mac = None
-                looks_like_mac_first = False
+            phone_result = self._attempt_phone_shortcut(query, effective_include_historical if looks_like_mac_first else include_historical, size)
+            if phone_result is not None:
+                return phone_result
 
-            if looks_like_mac_first:
-                try:
-                    curr_indices_first = self.get_search_indices(False)
-                    mac_upper_first = str(canonical_mac)
-                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO
-                    must_clauses_first: List[Dict[str, Any]] = []
-                    if preferred_files:
-                        must_clauses_first.append({"terms": {"File Name": preferred_files[:5]}})
-                    targeted_first = {
-                        "query": {
-                            "bool": {
-                                "must": must_clauses_first,
-                                "should": [
-                                    {"term": {"MAC Address.keyword": mac_upper_first}},
-                                    {"term": {"MAC Address 2.keyword": mac_upper_first}},
-                                    {"term": {"MAC Address 2.keyword": f"SEP{mac_upper_first}"}},
-                                    {"wildcard": {"MAC Address.keyword": f"*{mac_upper_first}*"}},
-                                    {"wildcard": {"MAC Address 2.keyword": f"*{mac_upper_first}*"}}
-                                ],
-                                "minimum_should_match": 1
-                            }
-                        },
-                        "size": 200
-                    }
-                    logger.info(f"[MAC-first] indices={curr_indices_first} body={targeted_first}")
-                    resp_first = self.client.search(index=curr_indices_first, body=targeted_first)
-                    docs_first = [h.get('_source', {}) for h in resp_first.get('hits', {}).get('hits', [])]
-                    # Fallback: older indices might lack 'File Name' field – retry without MUST clause
-                    if not docs_first:
-                        try:
-                            fallback_body = targeted_first.copy()
-                            fb_query = fallback_body.get('query', {}).get('bool', {})
-                            if isinstance(fb_query, dict) and 'must' in fb_query:
-                                fb_query.pop('must', None)
-                                logger.info("[MAC-first] primary query empty, retrying without File Name must-clause")
-                                resp_fb = self.client.search(index=curr_indices_first, body=fallback_body)
-                                docs_first = [h.get('_source', {}) for h in resp_fb.get('hits', {}).get('hits', [])]
-                        except Exception as _fb_e:
-                            logger.debug(f"[MAC-first] fallback without must failed: {_fb_e}")
-                    if docs_first:
-                        documents.extend(docs_first)
-                        logger.info(f"[MAC-first] seeded {len(docs_first)} docs from current index")
-                except Exception as e:
-                    logger.warning(f"[MAC-first] current-index search failed: {e}")
+            serial_result = self._attempt_serial_shortcut(query, effective_include_historical, size, looks_like_mac_first)
+            if serial_result is not None:
+                return serial_result
 
-            # Early exact branch: phone-like (+digits) returns exactly 1 result
-            try:
-                looks_like_phone = False
-                if isinstance(query, str):
-                    qn_phone = query.strip()
-                    looks_like_phone = bool(re.fullmatch(r"\+?\d{7,}", qn_phone or ""))
-            except Exception:
-                looks_like_phone = False
-            if looks_like_phone:
-                try:
-                    qn_phone = query.strip()
-                    # Always include both variants: with and without leading '+'
-                    if qn_phone.startswith('+'):
-                        digits = qn_phone.lstrip('+')
-                        cands = [qn_phone]
-                        if digits:
-                            cands.append(digits)
-                    else:
-                        digits = qn_phone
-                        cands = [digits, f"+{digits}"] if digits else []
-                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
-                    if include_historical:
-                        # Return one exact match per netspeed file, newest first
-                        netspeed_files = self._netspeed_filenames()
-                        results: List[Dict[str, Any]] = []
-                        for fname in netspeed_files:
-                            try:
-                                seed_body = {
-                                    "query": {
-                                        "bool": {
-                                            "must": [
-                                                {"term": {"File Name": fname}}
-                                            ],
-                                            "should": [{"term": {"Line Number.keyword": c}} for c in cands],
-                                            "minimum_should_match": 1
-                                        }
-                                    },
-                                    "_source": DESIRED_ORDER,
-                                    "size": 1
-                                }
-                                # Search across current + historical indices to include netspeed.csv as well
-                                resp = self.client.search(index=self.get_search_indices(True), body=seed_body)
-                                hit = next((h.get('_source', {}) for h in resp.get('hits', {}).get('hits', [])), None)
-                                if hit:
-                                    results.append(hit)
-                            except Exception as _e:
-                                logger.debug(f"[PHONE] per-file seed failed for {fname}: {_e}")
-                        return self._build_headers_from_documents(results), results
-                    else:
-                        # Only current file (netspeed.csv): try exact (size=1), then fallback to partial wildcard if not found
-                        indices_phone = self.get_search_indices(False)
-                        phone_body_exact = {
-                            "query": {"bool": {"should": [{"term": {"Line Number.keyword": c}} for c in cands], "minimum_should_match": 1}},
-                            "size": 1
-                        }
-                        logger.info(f"[PHONE-exact] indices={indices_phone} body={phone_body_exact}")
-                        resp_phone = self.client.search(index=indices_phone, body=phone_body_exact)
-                        phone_hit = next((h.get('_source', {}) for h in resp_phone.get('hits', {}).get('hits', [])), None)
-                        if phone_hit:
-                            return self._build_headers_from_documents([phone_hit]), [phone_hit]
-                        # Fallback: partial match within current netspeed.csv
-                        digits = qn_phone.lstrip('+')
-                        if digits:
-                            phone_body_partial = {
-                                "query": {"bool": {"should": [
-                                    {"wildcard": {"Line Number.keyword": f"*{digits}*"}},
-                                    {"wildcard": {"Line Number.keyword": f"*+{digits}*"}}
-                                ], "minimum_should_match": 1}},
-                                "size": 20000,
-                                "sort": [{"Creation Date": {"order": "desc"}}]
-                            }
-                            logger.info(f"[PHONE-partial] indices={indices_phone} body={phone_body_partial}")
-                            resp_part = self.client.search(index=indices_phone, body=phone_body_partial)
-                            docs_part = [h.get('_source', {}) for h in resp_part.get('hits', {}).get('hits', [])]
-                            # Deduplicate by MAC+File to avoid repeated identical rows
-                            docs_part = self._deduplicate_documents_preserve_order(docs_part)
-                            return self._build_headers_from_documents(docs_part), docs_part
-                        return [], []
-                except Exception as e:
-                    logger.warning(f"Phone exact search failed, falling back to general: {e}")
-
-            looks_like_hostname_prefix = False
-            try:
-                if isinstance(query, str):
-                    q_hostname_prefix = query.strip()
-                    if (
-                        q_hostname_prefix
-                        and re.match(r'^[A-Za-z]{3}[0-9]{2}', q_hostname_prefix)
-                        and '.' not in q_hostname_prefix
-                        and 5 <= len(q_hostname_prefix) < 13
-                    ):
-                        # Exactly 5 characters: always a hostname prefix (e.g., ABX01, Mxx08)
-                        if len(q_hostname_prefix) == 5:
-                            looks_like_hostname_prefix = True
-                        # 8+ characters: must have at least 2 consecutive letters after position 5
-                        # This excludes patterns like ABC1234 (only digits) and ABC1234X (single letter at end)
-                        elif len(q_hostname_prefix) >= 8:
-                            remaining = q_hostname_prefix[5:]
-                            if re.search(r'[A-Za-z]{2,}', remaining):
-                                looks_like_hostname_prefix = True
-            except Exception:
-                looks_like_hostname_prefix = False
-
-            # Early exact branch: Serial Number-like (long alphanumeric, not pure digits)
-            try:
-                looks_like_serial = False
-                if isinstance(query, str):
-                    qn_sn = query.strip()
-                    # Check if it's alphanumeric 8+ chars and not pure digits
-                    basic_serial_pattern = bool(re.fullmatch(r"[A-Za-z0-9]{8,}", qn_sn or "")) and not bool(re.fullmatch(r"\d{8,}", qn_sn or ""))
-
-                    # Exclude hostname-like patterns (3 letters + 2 digits + more chars pattern)
-                    looks_like_hostname = False
-                    if basic_serial_pattern and len(qn_sn) >= 8:
-                        # Switch hostnames follow pattern: 3 letters + 2 digits + other chars
-                        # For 8+ char queries, check if it matches hostname pattern (AAA00XXX)
-                        # AND has at least 2 consecutive letters after position 5
-                        hostname_pattern = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn_sn)
-                        if hostname_pattern:
-                            remaining = qn_sn[5:]
-                            # Hostname if 2+ consecutive letters (excludes pure serial patterns like ABC12345)
-                            if len(qn_sn) == 5 or re.search(r'[A-Za-z]{2,}', remaining):
-                                looks_like_hostname = True
-
-                    looks_like_serial = basic_serial_pattern and not looks_like_hostname
-            except Exception:
-                looks_like_serial = False
-            if looks_like_serial and not looks_like_mac_first:
-                try:
-                    qn_sn = query.strip()
-                    variants = [qn_sn]
-                    up = qn_sn.upper()
-                    if up != qn_sn:
-                        variants.append(up)
-                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
-                    indices_sn = self.get_search_indices(include_historical)
-                    indices_sn_list = indices_sn if isinstance(indices_sn, list) else [indices_sn]
-                    allow_archive_files_sn = any(idx == self.archive_index for idx in indices_sn_list)
-                    allow_historical_files_sn = bool(include_historical)
-
-                    # Support both exact and prefix search for serial numbers
-                    # For 8-10 characters: add both exact and wildcard queries
-                    # For 11+ characters: prefer exact match but also include wildcard as fallback
-                    should_clauses = []
-
-                    # Add exact match queries for Serial Number AND KEM Serial Number fields
-                    for v in variants:
-                        should_clauses.extend([
-                            {"term": {"Serial Number": v}},
-                            {"term": {"KEM 1 Serial Number": v}},
-                            {"term": {"KEM 2 Serial Number": v}}
-                        ])
-
-                    # Add wildcard prefix queries for progressive search (especially for 8-10 char lengths)
-                    if len(qn_sn) >= 3:
-                        for v in variants:
-                            should_clauses.extend([
-                                {"wildcard": {"Serial Number": f"{v}*"}},
-                                {"wildcard": {"KEM 1 Serial Number": f"{v}*"}},
-                                {"wildcard": {"KEM 2 Serial Number": f"{v}*"}}
-                            ])
-
-                    body_sn = {
-                        "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
-                        "_source": DESIRED_ORDER,
-                        "size": (size if include_historical else 20000),  # Increase size for prefix searches
-                        "sort": [
-                            {"Creation Date": {"order": "desc"}},
-                            self._preferred_file_sort_clause(),
-                            {"_score": {"order": "desc"}}
-                        ]
-                    }
-                    logger.info(f"[SERIAL] indices={indices_sn} body={body_sn}")
-                    resp_sn = self.client.search(index=indices_sn, body=body_sn)
-                    docs_sn = [h.get('_source', {}) for h in resp_sn.get('hits', {}).get('hits', [])]
-                    # Filter out archived filenames; keep only netspeed.csv, netspeed_YYYYMMDD-HHMMSS.csv, and rotation files
-                    def _is_allowed_file(fn: str) -> bool:
-                        if not fn:
-                            return False
-                        if fn == 'netspeed.csv':
-                            return True
-                        # Always allow timestamp format (current file without rotation suffix)
-                        if re.match(r'^netspeed_\d{8}-\d{6}\.csv$', fn):
-                            return True
-                        # Historical rotation files
-                        if allow_historical_files_sn:
-                            # Legacy rotation: netspeed.csv.N
-                            if fn.startswith('netspeed.csv.'):
-                                suf = fn.split('netspeed.csv.', 1)[1]
-                                return suf.isdigit()
-                            # Timestamped rotation: netspeed_YYYYMMDD-HHMMSS.csv.N
-                            if re.match(r'^netspeed_\d{8}-\d{6}\.csv\.\d+$', fn):
-                                return True
-                        # Archive files
-                        if allow_archive_files_sn and fn.startswith('netspeed_'):
-                            return True
-                        return False
-                    docs_sn = [d for d in docs_sn if _is_allowed_file((d.get('File Name') or '').strip())]
-                    if include_historical:
-                        # Keep only one document per file name
-                        seen_files = set()
-                        dedup_by_file: List[Dict[str, Any]] = []
-                        for d in docs_sn:
-                            fn = (d.get('File Name') or '').strip()
-                            if not fn or fn in seen_files:
-                                continue
-                            seen_files.add(fn)
-                            dedup_by_file.append(d)
-                        docs_sn = dedup_by_file
-                    return self._build_headers_from_documents(docs_sn), docs_sn
-                except Exception as e:
-                    logger.warning(f"Serial exact search failed, falling back to general: {e}")
-
-            # Early exact branch: Hostname/FQDN (contains dot and letters, not IP)
-            try:
-                looks_like_hostname_early = False
-                if isinstance(query, str):
-                    qn_hn = query.strip()
-                    looks_like_hostname_early = ('.' in qn_hn and any(c.isalpha() for c in qn_hn) and '/' not in qn_hn and ' ' not in qn_hn and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn_hn or ""))
-            except Exception:
-                looks_like_hostname_early = False
-            if looks_like_hostname_early and not looks_like_mac_first:
-                try:
-                    qn_hn = query.strip()
-                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
-                    indices_hn = self.get_search_indices(include_historical)
-                    indices_hn_list = indices_hn if isinstance(indices_hn, list) else [indices_hn]
-                    allow_archive_files_hn = any(idx == self.archive_index for idx in indices_hn_list)
-                    allow_historical_files_hn = bool(include_historical)
-                    body_hn = {
-                        "query": {
-                            "bool": {
-                                "filter": [
-                                    {
-                                        "script": {
-                                            "script": {
-                                                "lang": "painless",
-                                                "source": "def v = null; if (doc.containsKey('Switch Hostname') && doc['Switch Hostname'].size()>0) { v = doc['Switch Hostname'].value; } else { return false; } if (v == null) return false; return v.trim().equalsIgnoreCase(params.q.trim());",
-                                                "params": {"q": qn_hn}
-                                            }
-                                        }
-                                    }
-                                ],
-                                "should": [
-                                    {"term": {"Switch Hostname": qn_hn}},
-                                    {"term": {"Switch Hostname.lower": qn_hn.lower()}}
-                                ],
-                                "minimum_should_match": 0
-                            }
-                        },
-                        "_source": DESIRED_ORDER,
-                        "size": size,
-                        "sort": [
-                            {"Creation Date": {"order": "desc"}},
-                            self._preferred_file_sort_clause()
-                        ]
-                    }
-                    resp_hn = self.client.search(index=indices_hn, body=body_hn)
-                    docs_hn = [h.get('_source', {}) for h in resp_hn.get('hits', {}).get('hits', [])]
-                    # Filter allowed files
-                    def _is_allowed_file(fn: str) -> bool:
-                        if not fn:
-                            return False
-                        if fn == 'netspeed.csv':
-                            return True
-                        if allow_historical_files_hn and fn.startswith('netspeed.csv.'):
-                            suf = fn.split('netspeed.csv.', 1)[1]
-                            return suf.isdigit()
-                        if allow_archive_files_hn and fn.startswith('netspeed_'):
-                            return True
-                        return False
-                    docs_hn = [d for d in docs_hn if _is_allowed_file((d.get('File Name') or '').strip())]
-                    return self._build_headers_from_documents(docs_hn), docs_hn
-                except Exception as e:
-                    logger.warning(f"Hostname exact search failed, falling back to general: {e}")
+            hostname_result = self._attempt_hostname_shortcut(query, effective_include_historical, looks_like_mac_first, size)
+            if hostname_result is not None:
+                return hostname_result
 
             # Now run the general search across the selected indices
             # For MAC-like queries, always include historical indices to list results from all netspeed.csv files
-            indices = self.get_search_indices(include_historical)
+            indices = self.get_search_indices(effective_include_historical)
+            # For MAC-like queries we must always search all netspeed indices (current + historical).
+            # Use a wildcard index pattern to avoid depending on any cached or environment-specific
+            # index enumeration which may occasionally omit historical rotation indices after restarts.
             if looks_like_mac_first:
-                # Force historical for the general phase regardless of caller flag
-                indices = self.get_search_indices(True)
+                try:
+                    indices = ["netspeed_*"]
+                    logger.info("MAC-like query detected: forcing indices to ['netspeed_*'] to include all historical netspeed indices")
+                except Exception as _e:
+                    logger.debug(f"Could not force netspeed_* wildcard indices for MAC query: {_e}")
+
             # Removed: hostname prefix override - respect user's include_historical flag
             indices_list = indices if isinstance(indices, list) else [indices]
             allow_archive_files_general = any(idx == self.archive_index for idx in indices_list)
-            allow_historical_files_general = bool(include_historical or looks_like_mac_first)
+            allow_historical_files_general = bool(effective_include_historical)
             if allow_archive_files_general and size > 10000:
                 logger.info(
                     "Clamping search size from %s to 10000 for archive_netspeed compatibility",
@@ -2942,6 +3032,9 @@ class OpenSearchConfig:
 
             # Use canonical MAC inside the general body for MAC queries
             qb_query = str(canonical_mac) if looks_like_mac_first and canonical_mac else query
+            if looks_like_mac_first:
+                size = max(200, len(preferred_files) * 3)
+
             query_body = self._build_query_body(qb_query, field, size)
 
             logger.info(f"Search query: indices={indices}, query={query_body}")
@@ -3036,47 +3129,47 @@ class OpenSearchConfig:
                 looks_like_mac_seed = mac_core_seed is not None
             except Exception:
                 looks_like_mac_seed = False
-            if looks_like_mac_seed and include_historical:
+            if looks_like_mac_seed and effective_include_historical:
                 try:
-                    mac_upper_seed = str(mac_core_seed)
+                    exact_terms_seed, wildcard_terms_seed = self._mac_query_variants(query, mac_core_seed)
+                    should_seed = self._build_mac_should_clauses(exact_terms_seed, wildcard_terms_seed)
                     netspeed_files = self._netspeed_filenames()
 
                     # Determine which file names are already present in results
                     present_files = set((d.get('File Name') or '') for d in unique_documents)
                     seed_docs: List[Dict[str, Any]] = []
                     if netspeed_files:
-                        # Build a small targeted body per file
-                        for fname in netspeed_files:
-                            if fname in present_files:
-                                continue  # already represented
+                        missing_files = [fn for fn in netspeed_files if fn not in present_files]
+                        if missing_files:
                             try:
                                 from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO2
                                 seed_body = {
                                     'query': {
                                         'bool': {
-                                            'must': [
-                                                {'term': {'File Name': fname}}
+                                            'filter': [
+                                                {'terms': {'File Name': missing_files}}
                                             ],
-                                            'should': [
-                                                {'term': {'MAC Address.keyword': mac_upper_seed}},
-                                                {'term': {'MAC Address 2.keyword': mac_upper_seed}},
-                                                {'term': {'MAC Address 2.keyword': f'SEP{mac_upper_seed}'}},
-                                                {'wildcard': {'MAC Address.keyword': f'*{mac_upper_seed}*'}},
-                                                {'wildcard': {'MAC Address 2.keyword': f'*{mac_upper_seed}*'}}
-                                            ],
+                                            'should': should_seed,
                                             'minimum_should_match': 1
                                         }
                                     },
                                     '_source': _DO2,
-                                    'size': 1
+                                    'size': max(len(missing_files) * 2, 20)
                                 }
-                                # Search across current + historical indices to include netspeed.csv as well
                                 resp_seed = self.client.search(index=self.get_search_indices(True), body=seed_body)
-                                hit = next((h.get('_source', {}) for h in resp_seed.get('hits', {}).get('hits', [])), None)
-                                if hit:
-                                    seed_docs.append(hit)
+                                hits_seed = resp_seed.get('hits', {}).get('hits', [])
+                                missing_set = set(missing_files)
+                                for hit in hits_seed:
+                                    src = hit.get('_source', {})
+                                    fname = (src.get('File Name') or '')
+                                    if not fname or fname not in missing_set or fname in present_files:
+                                        continue
+                                    seed_docs.append(src)
+                                    present_files.add(fname)
+                                    if len(seed_docs) == len(missing_set):
+                                        break
                             except Exception as _e:
-                                logger.debug(f"Seed query for {fname} failed: {_e}")
+                                logger.debug(f"Seed query for netspeed files failed: {_e}")
                     if seed_docs:
                         # Prepend seeds to ensure they survive later capping; then re-dedupe preserving order
                         combined = seed_docs + unique_documents
@@ -3087,18 +3180,18 @@ class OpenSearchConfig:
             # For MAC-like queries, promote one representative hit per netspeed file to the top
             # so the user immediately sees one row for each netspeed.csv(.N)
             promoted: List[Dict[str, Any]] = []
-            if looks_like_mac_seed and include_historical:
+            if looks_like_mac_seed and effective_include_historical:
                 try:
                     # Build list of netspeed files in desired order using configured directories
                     netspeed_files2 = self._netspeed_filenames()
 
-                    # First doc per file from current unique_documents
+                    # First doc per netspeed file from current unique_documents
                     first_by_file: Dict[str, Dict[str, Any]] = {}
                     for d in unique_documents:
-                        fn = (d.get('File Name') or '')
+                        fn = (d.get('File Name') or '').strip()
                         if not fn:
                             continue
-                        if fn.startswith('netspeed.csv') and fn not in first_by_file:
+                        if fn.startswith('netspeed') and fn not in first_by_file:
                             first_by_file[fn] = d
 
                     # Assemble promoted list following netspeed order
@@ -3123,7 +3216,8 @@ class OpenSearchConfig:
                 looks_like_mac_fb = False
             if looks_like_mac_fb and not any((d.get('File Name') or '') == 'netspeed.csv' for d in unique_documents):
                 try:
-                    mac_upper_fb = str(mac_core_fb)
+                    exact_terms_fb, wildcard_terms_fb = self._mac_query_variants(query, mac_core_fb)
+                    should_fb = self._build_mac_should_clauses(exact_terms_fb, wildcard_terms_fb)
                     from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO3
                     fb_body = {
                         "query": {
@@ -3131,13 +3225,7 @@ class OpenSearchConfig:
                                 "must": [
                                     {"term": {"File Name": "netspeed.csv"}}
                                 ],
-                                "should": [
-                                    {"term": {"MAC Address.keyword": mac_upper_fb}},
-                                    {"term": {"MAC Address 2.keyword": mac_upper_fb}},
-                                    {"term": {"MAC Address 2.keyword": f"SEP{mac_upper_fb}"}},
-                                    {"wildcard": {"MAC Address.keyword": f"*{mac_upper_fb}*"}},
-                                    {"wildcard": {"MAC Address 2.keyword": f"*{mac_upper_fb}*"}}
-                                ],
+                                "should": should_fb,
                                 "minimum_should_match": 1
                             }
                         },
@@ -3145,10 +3233,12 @@ class OpenSearchConfig:
                         "size": 200
                     }
                     logger.info("[MAC-fallback] searching netspeed_* for File Name=netspeed.csv")
-                    resp_fb = self.client.search(index=["netspeed_*"], body=fb_body)
+                    resp_fb = self.client.search(index=["netspeed_*"] , body=fb_body)
                     docs_fb = [h.get('_source', {}) for h in resp_fb.get('hits', {}).get('hits', [])]
                     if docs_fb:
-                        unique_documents.extend(docs_fb)
+                        # Keep only the first netspeed.csv document to avoid large duplicates
+                        primary_fb = next((doc for doc in docs_fb if (doc.get('File Name') or '') == 'netspeed.csv'), docs_fb[0])
+                        unique_documents.append(primary_fb)
                         unique_documents = self._deduplicate_documents_preserve_order(unique_documents)
                 except Exception as e:
                     logger.warning(f"[MAC-fallback] wildcard indices search failed: {e}")
@@ -3179,32 +3269,65 @@ class OpenSearchConfig:
                     logger.debug(f"Switch Port dedupe failed: {_e}")
 
             # Sort the deduplicated documents by file name priority, then by Creation Date
-            def get_file_priority(doc):
-                file_name = doc.get('File Name', '')
+            preferred_lookup = {name: idx for idx, name in enumerate(preferred_files)}
+            original_positions = {id(doc): idx for idx, doc in enumerate(unique_documents)}
 
+            def get_file_priority(doc):
+                file_name = (doc.get('File Name', '') or '').strip()
+                if not file_name:
+                    return (len(preferred_lookup), 0, 0, original_positions.get(id(doc), 0))
+
+                primary = preferred_lookup.get(file_name, len(preferred_lookup))
+                rotation = 0
+                timestamp_key = 0
+
+                # Handle current file explicitly
                 if file_name == 'netspeed.csv':
-                    return (0, 0) # Always first
+                    return (primary, 0, -1, original_positions.get(id(doc), 0))
+
+                ts_match = re.match(r"^netspeed[._](\d{8})-(\d{6})\\.csv(?:\\.(\d+))?$", file_name)
+                if ts_match:
+                    stamp = int(ts_match.group(1) + ts_match.group(2))
+                    timestamp_key = -stamp
+                    rotation = int(ts_match.group(3)) if ts_match.group(3) is not None else -1
                 elif file_name.startswith('netspeed.csv.'):
-                    try:
-                        suffix = file_name.split('netspeed.csv.')[1]
-                        file_number = int(suffix)
-                        # Group netspeed files together, then sort by file number
-                        # Use padding to ensure proper numeric order: 0, 1, 2, 3, ..., 10, 11, etc.
-                        return (1, file_number)
-                    except (IndexError, ValueError):
-                        return (999, 999)
+                    suffix = file_name.split('netspeed.csv.', 1)[1]
+                    if suffix.isdigit():
+                        rotation = int(suffix)
+                    # Legacy rotations lack timestamps; keep timestamp_key neutral
                 else:
-                    return (1000, 0)
+                    # Fallback to Creation Date/Time if available
+                    date_part = ''.join(ch for ch in str(doc.get('Creation Date', '') or '') if ch.isdigit())
+                    time_part = ''.join(ch for ch in str(doc.get('Creation Time', '') or '') if ch.isdigit())
+                    if date_part:
+                        if time_part:
+                            if len(time_part) < 6:
+                                time_part = time_part.ljust(6, '0')
+                            else:
+                                time_part = time_part[:6]
+                        else:
+                            time_part = '000000'
+                        try:
+                            timestamp_key = -int(f"{date_part}{time_part}")
+                        except ValueError:
+                            timestamp_key = 0
+
+                return (
+                    primary,
+                    timestamp_key,
+                    rotation,
+                    original_positions.get(id(doc), 0)
+                )
 
             try:
                 # Only enforce file priority order for MAC searches with historical enabled.
                 # For general queries, keep OpenSearch's sort so exact field matches stay on top.
-                if looks_like_mac_seed and include_historical:
+                if looks_like_mac_seed and effective_include_historical:
                     unique_documents.sort(key=get_file_priority)
                     logger.info(f"Sorted {len(unique_documents)} unique documents by file name priority (MAC+historical)")
                     for i, doc in enumerate(unique_documents[:15]):
                         priority = get_file_priority(doc)
-                        logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - Priority: {priority}")
+                        logger.info(f"  {i+1}. {doc.get('File Name', 'unknown')} - Priority tuple: {priority}")
             except Exception as e:
                 logger.warning(f"Error sorting documents by file name priority: {e}")
 
@@ -3249,6 +3372,21 @@ class OpenSearchConfig:
                 # Remove hidden fields from display
                 for hidden in hidden_fields:
                     enhanced_doc.pop(hidden, None)
+
+                # Normalize KEM serial number field names: some indices use 'KEM1 Serial Number' (no space)
+                # while tests and UI expect 'KEM 1 Serial Number' (with space). Provide both for safety.
+                try:
+                    if 'KEM1 Serial Number' in enhanced_doc and 'KEM 1 Serial Number' not in enhanced_doc:
+                        enhanced_doc['KEM 1 Serial Number'] = enhanced_doc.get('KEM1 Serial Number', '')
+                    if 'KEM2 Serial Number' in enhanced_doc and 'KEM 2 Serial Number' not in enhanced_doc:
+                        enhanced_doc['KEM 2 Serial Number'] = enhanced_doc.get('KEM2 Serial Number', '')
+                    # Also ensure legacy 'KEM 1 Serial Number' keys exist even if empty
+                    if 'KEM 1 Serial Number' not in enhanced_doc:
+                        enhanced_doc['KEM 1 Serial Number'] = enhanced_doc.get('KEM 1 Serial Number', '')
+                    if 'KEM 2 Serial Number' not in enhanced_doc:
+                        enhanced_doc['KEM 2 Serial Number'] = enhanced_doc.get('KEM 2 Serial Number', '')
+                except Exception:
+                    pass
 
                 enhanced_documents.append(enhanced_doc)
 

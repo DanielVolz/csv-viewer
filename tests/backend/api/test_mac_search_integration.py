@@ -102,3 +102,103 @@ class TestMacSearch:
         # And that results span multiple files
         names = [d.get('File Name') for d in docs]
         assert 'netspeed.csv' in names and 'netspeed.csv.0' in names and 'netspeed.csv.1' in names
+
+    def test_mac_query_includes_colon_formatted_historical_without_mac2(self, monkeypatch):
+        def get_indices(include_historical=False):
+            return ["netspeed_netspeed_csv", "netspeed_*"] if include_historical else ["netspeed_netspeed_csv"]
+
+        monkeypatch.setattr(opensearch_config, 'get_search_indices', get_indices)
+
+        colon_value = 'AA:BB:CC:DD:EE:FF'
+
+        def search_side_effect(*, index=None, body=None, **kwargs):
+            should_clauses = (body or {}).get('query', {}).get('bool', {}).get('should', [])
+
+            if index == ["netspeed_netspeed_csv"] and should_clauses:
+                colon_clause_present = any(
+                    (
+                        ('term' in clause and clause['term'].get('MAC Address.keyword') == colon_value)
+                        or ('wildcard' in clause and clause['wildcard'].get('MAC Address.keyword') == f"*{colon_value}*")
+                        or ('term' in clause and clause['term'].get('MAC Address 2.keyword') == colon_value)
+                        or ('wildcard' in clause and clause['wildcard'].get('MAC Address 2.keyword') == f"*{colon_value}*")
+                    )
+                    for clause in should_clauses
+                )
+                if not colon_clause_present:
+                    return {'hits': {'hits': []}}
+                return {'hits': {'hits': [{'_source': {'File Name': 'netspeed.csv', 'MAC Address': colon_value}}]}}
+
+            if (isinstance(index, list) and 'netspeed_*' in index) and should_clauses:
+                colon_clause_present = any(
+                    (
+                        ('term' in clause and clause['term'].get('MAC Address.keyword') == colon_value)
+                        or ('wildcard' in clause and clause['wildcard'].get('MAC Address.keyword') == f"*{colon_value}*")
+                        or ('term' in clause and clause['term'].get('MAC Address 2.keyword') == colon_value)
+                        or ('wildcard' in clause and clause['wildcard'].get('MAC Address 2.keyword') == f"*{colon_value}*")
+                    )
+                    for clause in should_clauses
+                )
+                if not colon_clause_present:
+                    return {'hits': {'hits': []}}
+                return {
+                    'hits': {
+                        'hits': [
+                            {'_source': {'File Name': 'netspeed.csv.4', 'MAC Address': colon_value}},
+                            {'_source': {'File Name': 'netspeed.csv.5', 'MAC Address': colon_value}},
+                        ]
+                    }
+                }
+
+            return {'hits': {'hits': []}}
+
+        self.mock_client.search.side_effect = search_side_effect
+
+        headers, docs = opensearch_config.search('aa:bb:cc:dd:ee:ff', include_historical=False, size=50)
+        names = [d.get('File Name') for d in docs]
+        assert 'netspeed.csv' in names
+        assert any(n and n.startswith('netspeed.csv.') for n in names)
+
+    def test_mac_timestamped_files_sorted_descending(self, monkeypatch):
+        def get_indices(include_historical=False):
+            return ["netspeed_netspeed_csv", "netspeed_*"] if include_historical else ["netspeed_netspeed_csv"]
+
+        monkeypatch.setattr(opensearch_config, 'get_search_indices', get_indices)
+
+        def search_side_effect(*, index=None, body=None, **kwargs):
+            body_str = str(body or {})
+            if index == ["netspeed_netspeed_csv"]:
+                return {'hits': {'hits': []}}
+            if (isinstance(index, list) and 'netspeed_*' in index) and 'multi_match' in body_str:
+                return {
+                    'hits': {
+                        'hits': [
+                            {'_source': {
+                                'File Name': 'netspeed_20250927-150339.csv.24',
+                                'Creation Date': '2025-09-27',
+                                'MAC Address': '482E72E48944'
+                            }},
+                            {'_source': {
+                                'File Name': 'netspeed_20251020-061607.csv',
+                                'Creation Date': '2025-10-20',
+                                'MAC Address': '482E72E48944'
+                            }},
+                            {'_source': {
+                                'File Name': 'netspeed_20250928-012001.csv.23',
+                                'Creation Date': '2025-09-28',
+                                'MAC Address': '482E72E48944'
+                            }},
+                        ]
+                    }
+                }
+            if index == ["netspeed_*"] and '"File Name": "netspeed.csv"' in body_str:
+                return {'hits': {'hits': []}}
+            return {'hits': {'hits': []}}
+
+        self.mock_client.search.side_effect = search_side_effect
+
+        _, docs = opensearch_config.search('482E72E48944', include_historical=False, size=50)
+        names = [d.get('File Name') for d in docs]
+
+        assert names[0] == 'netspeed_20251020-061607.csv'
+        assert names[1] == 'netspeed_20250928-012001.csv.23'
+        assert names[2] == 'netspeed_20250927-150339.csv.24'
