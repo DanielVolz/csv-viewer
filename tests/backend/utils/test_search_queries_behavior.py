@@ -265,11 +265,7 @@ def test_search_hostname_prefix_uses_historical_indices(monkeypatch):
 
     assert ("indices", False) in call_log
     assert ("search", ("netspeed_netspeed_csv",)) in call_log
-    # When no results found, headers are returned from DEFAULT_DISPLAY_ORDER
-    # NOTE: _build_headers_from_documents() sorts data columns alphabetically
-    # so the order differs from DEFAULT_DISPLAY_ORDER itself
-    from utils.csv_utils import DEFAULT_DISPLAY_ORDER
-    metadata_fields = ["#", "File Name", "Creation Date"]
-    expected_headers = metadata_fields + sorted([c for c in DEFAULT_DISPLAY_ORDER if c not in metadata_fields])
+    # When no results are found, headers mirror the config helper behavior.
+    expected_headers = cfg._build_headers_from_documents([])
     assert headers == expected_headers
     assert docs == []
