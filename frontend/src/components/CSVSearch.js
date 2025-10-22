@@ -69,7 +69,7 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
             'Creation Date': 'Date',
             'IP Address': 'IP Addr.',
             'Voice VLAN': 'V-VLAN',
-            'Serial Number': 'Serial',
+            'Serial Number': 'Phone Serial',
             'Model Name': 'Model'
           }}
         />
@@ -931,7 +931,7 @@ function CSVSearch() {
                 'Creation Date': 'Date',
                 'IP Address': 'IP Addr.',
                 'Voice VLAN': 'V-VLAN',
-                'Serial Number': 'Serial',
+                'Serial Number': 'Phone Serial',
                 'Model Name': 'Model'
               }}
             />

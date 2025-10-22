@@ -121,7 +121,7 @@ jest.mock('./hooks/useColumns', () => {
     { id: 'Line Number', label: 'Line Number', enabled: true },
     { id: 'Switch Hostname', label: 'Switch Hostname', enabled: true },
     { id: 'Switch Port', label: 'Switch Port', enabled: true },
-    { id: 'Serial Number', label: 'Serial Number', enabled: true },
+    { id: 'Serial Number', label: 'Phone Serial', enabled: true },
     { id: 'Model Name', label: 'Model Name', enabled: true },
   ];
   return {

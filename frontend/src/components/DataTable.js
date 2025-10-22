@@ -776,7 +776,7 @@ function DataTable({
                   onClick={() => handleSort(header)}
                 >
                   {(() => {
-                    const display = labelMap && labelMap[header] ? labelMap[header] : header;
+                    const display = (labelMap && labelMap[header]) || header;
                     if (header === 'Voice VLAN' && display === 'Voice VLAN') {
                       return (
                         <Box component="span" sx={{ display: 'block', lineHeight: 1.05, whiteSpace: 'normal' }}>
