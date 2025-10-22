@@ -22,6 +22,15 @@ LEGACY_COLUMN_RENAMES = {
     "Speed 2": "PC Port Speed",
 }
 
+# Map historical/alternative Call Manager column names to canonical targets
+CALL_MANAGER_ALIASES = {
+    "CallManagerActiveSub": "Call Manager Active Sub",
+    "CallManagerStandbySub": "Call Manager Standby Sub",
+    "Call Manager 1": "Call Manager Active Sub",
+    "Call Manager 2": "Call Manager Standby Sub",
+    "Call Manager 3": "Call Manager Standby Sub",
+}
+
 
 def _canonicalize_header_name(name: str) -> str:
     if not name:
@@ -87,6 +96,9 @@ CUSTOM_DISPLAY_NAMES = {
     "SubNetMask": "Subnet Mask",
     "VLANId": "Voice VLAN",
     "SwitchFQDN": "Switch Hostname",
+    "CallManagerActiveSub": "Call Manager Active Sub",
+    "CallManagerStandbySub": "Call Manager Standby Sub",
+    "PhoneSerialNumber": "Serial Number",
     # CallManager1-3 will auto-generate as "Call Manager 1", "Call Manager 2", "Call Manager 3"
     # Add custom entries only if you want different names
 }
@@ -215,7 +227,8 @@ DEFAULT_DISPLAY_ORDER = [
     "IP Address", "Line Number", "Serial Number", "Model Name",
     "MAC Address", "MAC Address 2", "Subnet Mask", "Voice VLAN",
     "Switch Port Mode", "PC Port Mode", "Switch Hostname", "Switch Port",
-    "Phone Port Speed", "PC Port Speed"
+    "Phone Port Speed", "PC Port Speed",
+    "Call Manager Active Sub", "Call Manager Standby Sub"
 ]
 
 # MODERN format: Column detection happens automatically by reading headers from CSV
@@ -656,6 +669,9 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
         for legacy, renamed in LEGACY_COLUMN_RENAMES.items():
             if legacy in row_with_aliases and renamed not in row_with_aliases:
                 row_with_aliases[renamed] = row_with_aliases[legacy]
+        for alias, canonical in CALL_MANAGER_ALIASES.items():
+            if alias in row_with_aliases and canonical not in row_with_aliases:
+                row_with_aliases[canonical] = row_with_aliases[alias]
         for header in display_headers:
             # Include column even if value is missing - will show as empty
             filtered_row[header] = row_with_aliases.get(header, "")

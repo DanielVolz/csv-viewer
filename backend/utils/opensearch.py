@@ -703,10 +703,19 @@ class OpenSearchConfig:
         if suffix == "netspeed_csv":
             return "netspeed.csv"
         if suffix.startswith("netspeed_csv_"):
-            return f"netspeed.csv.{suffix[len('netspeed_csv_') :]}"
+            rotation = suffix[len("netspeed_csv_") :]
+            return f"netspeed.csv.{rotation}"
+        if suffix.startswith("netspeed_") and "_csv_" in suffix:
+            # Pattern: netspeed_netspeed_YYYYMMDD-HHMMSS_csv_N
+            core = suffix[len("netspeed_") :]
+            stamp, rotation = core.split("_csv_", 1)
+            return f"netspeed_{stamp}.csv.{rotation}"
         if suffix.endswith("_csv"):
             return suffix[:-4] + ".csv"
-        return suffix.replace("_", ".")
+        head, *tail = suffix.split("_", 1)
+        if not tail:
+            return suffix.replace("_", ".")
+        return f"{head}_{tail[0].replace('_', '.')}"
 
     def list_netspeed_indices(self) -> list[dict[str, Any]]:
         """Return metadata for all netspeed_* indices with counts and creation time."""
@@ -1497,8 +1506,19 @@ class OpenSearchConfig:
             if name:
                 ordered.append(name)
 
+        def _append_index_discoveries(existing: List[str]) -> List[str]:
+            try:
+                index_entries = self.list_netspeed_indices()
+                for entry in index_entries:
+                    fname = entry.get("file_name")
+                    if fname and fname not in existing:
+                        existing.append(fname)
+            except Exception as exc:
+                logger.debug(f"Failed to enrich netspeed filenames via indices: {exc}")
+            return existing
+
         if ordered:
-            return ordered
+            return _append_index_discoveries(ordered)
 
         explicit_roots = _configured_roots()
 
@@ -1551,7 +1571,7 @@ class OpenSearchConfig:
                         if name not in ordered:
                             ordered.append(name)
 
-        return ordered
+        return _append_index_discoveries(ordered)
 
     def _preferred_file_names(self) -> List[str]:
         """Return netspeed file names ordered with the active export first."""
@@ -2478,9 +2498,15 @@ class OpenSearchConfig:
         from utils.csv_utils import DEFAULT_DISPLAY_ORDER
 
         # Collect all keys that actually exist in documents (for validation)
+        from utils.csv_utils import CALL_MANAGER_ALIASES
         doc_keys = set()
         for doc in documents:
             doc_keys.update(doc.keys())
+
+        # Ensure canonical Call Manager fields are considered even if documents still use legacy aliases
+        for alias, canonical in CALL_MANAGER_ALIASES.items():
+            if alias in doc_keys:
+                doc_keys.add(canonical)
 
         # Order headers: metadata fields first, then all other columns alphabetically
         metadata_fields = ["#", "File Name", "Creation Date"]
