@@ -1,53 +1,44 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
   Box,
-  Paper,
-  Typography,
-  TextField,
   Button,
   Chip,
-  Stack,
   Divider,
-  Alert
+  Paper,
+  Stack,
+  TextField,
+  Typography
 } from '@mui/material';
 import {
-  Settings as SettingsIcon,
-  Add as AddIcon,
-  Remove as RemoveIcon,
-  Refresh as RefreshIcon,
+  CheckCircleRounded as CheckCircleIcon,
   DragIndicator as DragIcon,
-  Person as PersonIcon
+  ExpandMore as ExpandMoreIcon,
+  Person as PersonIcon,
+  Refresh as RefreshIcon,
+  Settings as SettingsIcon
 } from '@mui/icons-material';
-// Import DnD kit components
-let DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors;
-let SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy;
-let useSortable, CSS;
-
-try {
-  const dndCore = require('@dnd-kit/core');
-  const dndSortable = require('@dnd-kit/sortable');
-  const dndUtilities = require('@dnd-kit/utilities');
-
-  DndContext = dndCore.DndContext;
-  closestCenter = dndCore.closestCenter;
-  KeyboardSensor = dndCore.KeyboardSensor;
-  PointerSensor = dndCore.PointerSensor;
-  useSensor = dndCore.useSensor;
-  useSensors = dndCore.useSensors;
-
-  SortableContext = dndSortable.SortableContext;
-  sortableKeyboardCoordinates = dndSortable.sortableKeyboardCoordinates;
-  verticalListSortingStrategy = dndSortable.verticalListSortingStrategy;
-  useSortable = dndSortable.useSortable;
-
-  CSS = dndUtilities.CSS;
-} catch (error) {
-  console.warn('DnD Kit not available, falling back to manual reordering');
-}
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from '@dnd-kit/core';
+import {
+  horizontalListSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useSettings } from '../contexts/SettingsContext';
 
-// Sortable column pill component
-function SortableColumnPill({ column, onToggle, onRemove }) {
+function SortableEnabledChip({ column }) {
   const {
     attributes,
     listeners,
@@ -64,54 +55,23 @@ function SortableColumnPill({ column, onToggle, onRemove }) {
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={{ ...style, display: 'inline-flex' }}>
       <Chip
         icon={<DragIcon sx={{ cursor: 'grab' }} {...listeners} {...attributes} />}
         label={column.label}
-        variant={column.enabled ? "filled" : "outlined"}
-        color={column.enabled ? "primary" : "default"}
+        variant="filled"
         sx={{
-          height: '40px',
-          fontSize: '0.875rem',
           fontWeight: 500,
-          cursor: 'pointer',
-          userSelect: 'none',
-          opacity: isDragging ? 0.5 : 1,
-          transition: 'all 0.2s ease',
-          '&:hover': {
-            transform: isDragging ? 'none' : 'scale(1.02)',
-            boxShadow: 2
-          },
+          height: 36,
+          cursor: 'grab',
+          opacity: isDragging ? 0.6 : 1,
+          bgcolor: theme => theme.palette.success.main,
+          color: theme => theme.palette.success.contrastText,
           '& .MuiChip-icon': {
             marginLeft: '8px',
-            marginRight: '-4px'
-          },
-          '& .MuiChip-deleteIcon': {
-            marginLeft: '4px',
-            marginRight: '8px'
+            marginRight: '-4px',
+            color: theme => theme.palette.success.contrastText
           }
-        }}
-        onClick={() => onToggle(column.id)}
-        deleteIcon={
-          column.enabled ? (
-            <RemoveIcon
-              sx={{
-                fontSize: '18px',
-                '&:hover': { color: 'error.main' }
-              }}
-            />
-          ) : (
-            <AddIcon
-              sx={{
-                fontSize: '18px',
-                '&:hover': { color: 'success.main' }
-              }}
-            />
-          )
-        }
-        onDelete={(e) => {
-          e.stopPropagation();
-          onToggle(column.id);
         }}
       />
     </div>
@@ -122,6 +82,8 @@ function SettingsPage() {
   const {
     sshUsername,
     columns,
+    enabledColumns,
+    categorizedColumns,
     toggleColumn,
     reorderColumns,
     resetToDefault,
@@ -130,21 +92,42 @@ function SettingsPage() {
 
   const [tempSshUsername, setTempSshUsername] = useState(sshUsername);
   const [showSaved, setShowSaved] = useState(false);
-
+  const [expandedCategories, setExpandedCategories] = useState({});
   const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  const handleDragEnd = (event) => {
-    const { active, over } = event;
+  useEffect(() => {
+    setExpandedCategories(() => {
+      const next = {};
+      categorizedColumns.forEach((category) => {
+        next[category.id] = true;
+      });
+      return next;
+    });
+  }, [categorizedColumns]);
 
-    if (active.id !== over?.id) {
-      const oldIndex = columns.findIndex(col => col.id === active.id);
-      const newIndex = columns.findIndex(col => col.id === over.id);
-      reorderColumns(oldIndex, newIndex);
+  const handleEnabledDragEnd = (event) => {
+    if (!event || !event.active) return;
+    const { active, over } = event;
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const fromIndex = columns.findIndex(col => col.id === active.id);
+    let toIndex = columns.findIndex(col => col.id === over.id);
+
+    if (fromIndex === -1) {
+      return;
+    }
+
+    if (toIndex === -1) {
+      toIndex = columns.length - 1;
+    }
+
+    if (fromIndex !== toIndex) {
+      reorderColumns(fromIndex, toIndex);
     }
   };
 
@@ -160,11 +143,17 @@ function SettingsPage() {
     setTimeout(() => setShowSaved(false), 3000);
   };
 
-  const enabledCount = columns.filter(col => col.enabled).length;
+  const handleCategoryToggle = (categoryId) => (_event, isExpanded) => {
+    setExpandedCategories(prev => ({
+      ...prev,
+      [categoryId]: isExpanded
+    }));
+  };
+
+  const enabledCount = enabledColumns.length;
 
   return (
     <Box sx={{ maxWidth: 'lg', mx: 'auto' }}>
-      {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
           <SettingsIcon sx={{ fontSize: 28, color: 'primary.main' }} />
@@ -177,7 +166,6 @@ function SettingsPage() {
         </Typography>
       </Box>
 
-      {/* Success Alert */}
       {showSaved && (
         <Alert severity="success" sx={{ mb: 3 }}>
           Settings saved successfully!
@@ -185,7 +173,6 @@ function SettingsPage() {
       )}
 
       <Stack spacing={4}>
-        {/* SSH Username Section */}
         <Paper
           elevation={1}
           sx={{
@@ -202,7 +189,14 @@ function SettingsPage() {
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-end' }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2,
+              alignItems: { xs: 'stretch', sm: 'start' },
+              gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' }
+            }}
+          >
             <TextField
               fullWidth
               label="SSH Username"
@@ -217,14 +211,18 @@ function SettingsPage() {
               variant="contained"
               onClick={handleSaveUsername}
               disabled={tempSshUsername === sshUsername}
-              sx={{ height: '56px', minWidth: '100px' }}
+              sx={{
+                height: { xs: 48, sm: 56 },
+                minWidth: 120,
+                justifySelf: { xs: 'stretch', sm: 'flex-start' },
+                alignSelf: { xs: 'stretch', sm: 'start' }
+              }}
             >
               Save
             </Button>
           </Box>
         </Paper>
 
-        {/* Column Configuration Section */}
         <Paper
           elevation={1}
           sx={{
@@ -240,7 +238,7 @@ function SettingsPage() {
                 Column Configuration
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {enabledCount} of {columns.length} columns enabled • Drag to reorder • Click to toggle
+                {enabledCount} of {columns.length} columns enabled • Drag to reorder enabled columns above • Toggle columns within categories below
               </Typography>
             </Box>
             <Button
@@ -253,66 +251,138 @@ function SettingsPage() {
             </Button>
           </Box>
 
-          <Divider sx={{ mb: 3 }} />
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
+              Enabled Columns
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Drag to adjust the order used across the application. Enable or disable columns inside the categories below.
+            </Typography>
 
-          {/* Column Pills with Drag and Drop */}
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={columns.map(col => col.id)}
-              strategy={verticalListSortingStrategy}
-            >
+            {enabledColumns.length === 0 ? (
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderStyle: 'dashed',
+                  borderRadius: 2,
+                  textAlign: 'center'
+                }}
+              >
+                <Typography variant="body2" color="text.secondary">
+                  No columns enabled. Activate columns within the categories to manage their order here.
+                </Typography>
+              </Paper>
+            ) : (
               <Box
                 sx={{
                   display: 'flex',
                   flexWrap: 'wrap',
-                  gap: 2,
-                  minHeight: '120px',
+                  gap: 1.5,
                   p: 2,
                   borderRadius: 2,
-                  border: '2px dashed',
+                  border: '1px dashed',
                   borderColor: 'divider',
                   backgroundColor: theme => theme.palette.mode === 'dark'
-                    ? 'rgba(255, 255, 255, 0.02)'
-                    : 'rgba(0, 0, 0, 0.01)'
+                    ? 'rgba(255,255,255,0.03)'
+                    : 'rgba(0,0,0,0.02)'
                 }}
               >
-                {columns.map((column) => (
-                  <SortableColumnPill
-                    key={column.id}
-                    column={column}
-                    onToggle={toggleColumn}
-                  />
-                ))}
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleEnabledDragEnd}
+                >
+                  <SortableContext
+                    items={enabledColumns.map(col => col.id)}
+                    strategy={horizontalListSortingStrategy}
+                  >
+                    {enabledColumns.map((column) => (
+                      <SortableEnabledChip key={column.id} column={column} />
+                    ))}
+                  </SortableContext>
+                </DndContext>
               </Box>
-            </SortableContext>
-          </DndContext>
-
-          <Box sx={{ mt: 3, p: 2, backgroundColor: 'action.hover', borderRadius: 1 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              <strong>Instructions:</strong>
-            </Typography>
-            <Stack spacing={0.5}>
-              <Typography variant="body2" color="text.secondary">
-                • <strong>Drag</strong> the drag handle (⋮⋮) to reorder columns
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                • <strong>Click</strong> a pill to enable/disable the column
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                • <strong>Click + or -</strong> to quickly add/remove columns
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                • <strong>Enabled columns</strong> (blue) will appear in data tables
-              </Typography>
-            </Stack>
+            )}
           </Box>
+
+          <Divider sx={{ mb: 3 }} />
+
+          <Stack spacing={2}>
+            {categorizedColumns.map((category) => {
+              const enabledInCategory = category.columns.filter(column => column.enabled).length;
+              return (
+                <Accordion
+                  key={category.id}
+                  expanded={expandedCategories[category.id] ?? true}
+                  onChange={handleCategoryToggle(category.id)}
+                  disableGutters
+                  sx={{
+                    border: '1px solid',
+                    borderColor: 'divider',
+                    borderRadius: 2,
+                    '&:before': { display: 'none' }
+                  }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMoreIcon />}
+                    sx={{ px: 2, py: 1.5 }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        {category.label}
+                      </Typography>
+                      <Chip
+                        size="small"
+                        label={`${enabledInCategory}/${category.columns.length} enabled`}
+                        color={enabledInCategory > 0 ? 'primary' : 'default'}
+                        variant={enabledInCategory > 0 ? 'filled' : 'outlined'}
+                        sx={{ fontWeight: 500 }}
+                      />
+                    </Box>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ px: 2, pb: 2 }}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 1.5
+                      }}
+                    >
+                      {category.columns.map((column) => (
+                        <Chip
+                          key={column.id}
+                          label={column.label}
+                          onClick={() => toggleColumn(column.id)}
+                          icon={column.enabled ? <CheckCircleIcon sx={{ fontSize: 18 }} /> : undefined}
+                          color={column.enabled ? 'success' : 'default'}
+                          variant={column.enabled ? 'filled' : 'outlined'}
+                          sx={{
+                            cursor: 'pointer',
+                            fontWeight: 500,
+                            ...(column.enabled ? {
+                              bgcolor: theme => theme.palette.success.main,
+                              color: theme => theme.palette.success.contrastText,
+                              '& .MuiChip-icon': { color: theme => theme.palette.success.contrastText }
+                            } : {}),
+                            ...(!column.enabled ? {
+                              bgcolor: 'transparent'
+                            } : {}),
+                            '&:hover': {
+                              transform: 'translateY(-1px)',
+                              boxShadow: 1
+                            }
+                          }}
+                        />
+                      ))}
+                    </Box>
+                  </AccordionDetails>
+                </Accordion>
+              );
+            })}
+          </Stack>
         </Paper>
 
-        {/* Current Configuration Preview */}
         <Paper
           elevation={1}
           sx={{
@@ -330,6 +400,23 @@ function SettingsPage() {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               SSH Username: <strong>{sshUsername || 'Not configured'}</strong>
             </Typography>
+            {sshUsername ? (
+              <Typography
+                variant="caption"
+                color="success.main"
+                sx={{ display: 'block', mt: 0.5 }}
+              >
+                ✓ SSH links enabled — click Switch Hostname in data tables to connect automatically.
+              </Typography>
+            ) : (
+              <Typography
+                variant="caption"
+                color="warning.main"
+                sx={{ display: 'block', mt: 0.5 }}
+              >
+                ⚠ Configure your SSH username to enable direct Switch Hostname connections.
+              </Typography>
+            )}
           </Box>
 
           <Box>
@@ -337,18 +424,16 @@ function SettingsPage() {
               Enabled Columns ({enabledCount}):
             </Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {columns
-                .filter(col => col.enabled)
-                .map((column, index) => (
-                  <Chip
-                    key={column.id}
-                    label={`${index + 1}. ${column.label}`}
-                    size="small"
-                    variant="filled"
-                    color="primary"
-                    sx={{ fontSize: '0.75rem' }}
-                  />
-                ))}
+              {enabledColumns.map((column, index) => (
+                <Chip
+                  key={column.id}
+                  label={`${index + 1}. ${column.label}`}
+                  size="small"
+                  variant="outlined"
+                  color="default"
+                  sx={{ fontSize: '0.75rem' }}
+                />
+              ))}
             </Box>
           </Box>
         </Paper>

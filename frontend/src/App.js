@@ -13,7 +13,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import Navigation from './components/Navigation';
 import HomePage from './pages/HomePage';
 import FilesPage from './pages/FilesPage';
-import SettingsPage from './pages/SettingsPageDnd';
+import SettingsPage from './pages/SettingsPage';
 import StatisticsPage from './pages/StatisticsPage';
 import DarkModeToggle from './components/DarkModeToggle';
 import { IconButton, Tooltip } from '@mui/material';

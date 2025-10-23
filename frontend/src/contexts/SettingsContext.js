@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import useColumns from '../hooks/useColumns';
+import { CATEGORY_ORDER, getCategoryLabel, getColumnCategory } from '../constants/columnCategories';
 
 const SettingsContext = createContext();
 
@@ -210,10 +211,39 @@ export const SettingsProvider = ({ children }) => {
     }
   }, [navigationCallback]);
 
+  const enabledColumns = useMemo(() => columns.filter(col => col.enabled), [columns]);
+
+  const categorizedColumns = useMemo(() => {
+    const groups = new Map();
+    columns.forEach((column) => {
+      const categoryId = getColumnCategory(column.id);
+      if (!groups.has(categoryId)) {
+        groups.set(categoryId, []);
+      }
+      groups.get(categoryId).push(column);
+    });
+
+    const orderedCategoryIds = [...CATEGORY_ORDER];
+    for (const key of groups.keys()) {
+      if (!orderedCategoryIds.includes(key)) {
+        orderedCategoryIds.push(key);
+      }
+    }
+
+    return orderedCategoryIds
+      .map((id) => ({
+        id,
+        label: getCategoryLabel(id),
+        columns: groups.get(id) || []
+      }))
+      .filter((entry) => entry.columns.length > 0);
+  }, [columns]);
   const value = useMemo(() => ({
     sshUsername,
     columns,
     columnsLoading,
+    enabledColumns,
+    categorizedColumns,
     columnsError,
     getEnabledColumns,
     getEnabledColumnHeaders,
@@ -231,6 +261,8 @@ export const SettingsProvider = ({ children }) => {
     sshUsername,
     columns,
     columnsLoading,
+    enabledColumns,
+    categorizedColumns,
     columnsError,
     getEnabledColumns,
     getEnabledColumnHeaders,

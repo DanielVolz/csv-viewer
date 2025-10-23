@@ -997,7 +997,7 @@ async def get_available_columns():
             "Creation Date": "Date",
             "IP Address": "IP Addr.",
             "Voice VLAN": "V-VLAN",
-            "Serial Number": "Serial",
+            "Serial Number": "Phone Serial",
             "Model Name": "Model",
             "KEM 1 Serial Number": "KEM 1 Serial",
             "KEM 2 Serial Number": "KEM 2 Serial",
