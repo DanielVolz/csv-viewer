@@ -1655,12 +1655,13 @@ class OpenSearchConfig:
 
         # Special handling for KEM searches - return all phones that have at least 1 KEM module
         if not field and isinstance(query, str) and query.upper().strip() == "KEM":
-            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+            from utils.csv_utils import get_csv_column_order
             # KEM fields contain "KEM" string when module is present, empty string otherwise
             # Search for documents where KEM or KEM 2 field contains "KEM" (wildcard ?* matches any non-empty value)
             # IMPORTANT: We must include KEM and KEM 2 in _source so they can be processed later in search()
             # where they get embedded into Line Number field and then removed from display
-            all_fields_including_kem = DESIRED_ORDER + ["KEM", "KEM 2"]
+            # Use get_csv_column_order() to get ALL fields from current CSV, including KEM serial numbers
+            all_fields = get_csv_column_order()
             kem_query = {
                 "query": {
                     "bool": {
@@ -1675,7 +1676,7 @@ class OpenSearchConfig:
                         "minimum_should_match": 1
                     }
                 },
-                "_source": all_fields_including_kem,
+                "_source": all_fields,
                 "size": size,
                 "sort": [
                     {"Creation Date": {"order": "desc"}},
@@ -1686,7 +1687,8 @@ class OpenSearchConfig:
             return kem_query
 
         if field:
-            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+            from utils.csv_utils import get_csv_column_order
+            DESIRED_ORDER = get_csv_column_order()
             qn = query.strip() if isinstance(query, str) else query
             # Phone-like Line Number exact-only
             if field == "Line Number" and isinstance(query, str):
@@ -1771,7 +1773,8 @@ class OpenSearchConfig:
 
             # Switch Hostname-like (FQDN) exact-only: contains dot and letters (not IP)
             if isinstance(qn, str) and any(c.isalpha() for c in qn) and "." in qn and "/" not in qn and " " not in qn:
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 return {
                     "query": {
                         "bool": {
@@ -1806,7 +1809,8 @@ class OpenSearchConfig:
             # Minimum length 8: AAA00BBB (location code + 3 chars suffix)
             hostname_pattern_match = re.match(r'^[A-Za-z]{3}[0-9]{2}', qn or "") if isinstance(qn, str) else None
             if hostname_pattern_match and '.' not in qn and len(qn) >= 8:
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 q_lower = qn.lower()
                 return {
                     "query": {
@@ -1974,7 +1978,8 @@ class OpenSearchConfig:
             # MUST come first to avoid false serial number matches
             hostname_code_match = re.match(r"^[A-Za-z]{3}[0-9]{2}", qn or "")
             if hostname_code_match and '.' not in qn and len(qn) >= 13:
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 q_lower = qn.lower()
                 should_clauses = [
                     {"term": {"Switch Hostname.lower": q_lower}},
@@ -2038,7 +2043,8 @@ class OpenSearchConfig:
                     if re.search(r'[A-Za-z]{2,}', remaining):
                         is_hostname_prefix = True
             if is_hostname_prefix:
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 q_lower = qn.lower()
                 q_upper = qn.upper()
                 # Prefix search: matches ABX01*, ABX01ZSL*, etc.
@@ -2116,7 +2122,8 @@ class OpenSearchConfig:
                 not (len(qn or "") == 12 and re.fullmatch(r"[A-Fa-f0-9]{12}", qn or ""))  # Exclude 12-hex MACs
             )
             if is_likely_serial:
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
 
                 variants = []
                 if qn:
@@ -2179,7 +2186,8 @@ class OpenSearchConfig:
 
             # 4-digit Model pattern (e.g., "8832", "8851") - search ONLY for exact model matches
             if re.fullmatch(r"\d{4}", qn or ""):
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 return {
                     "query": {"bool": {"should": [
                         # ONLY exact model name matches - no text matches to avoid partial matches
@@ -2202,7 +2210,8 @@ class OpenSearchConfig:
 
             # Phone number (Line Number) exact-only branch: enforce strict matching
             if re.fullmatch(r"\+?\d{7,15}", qn or ""):
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 cleaned = qn.lstrip('+')
                 variants = []
                 if qn.startswith('+'):
@@ -2245,7 +2254,8 @@ class OpenSearchConfig:
                 and " " not in qn
                 and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or "")
             ):
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 q_lower = qn.lower()
                 return {
                     "query": {
@@ -2288,7 +2298,8 @@ class OpenSearchConfig:
             # IMPORTANT: Must contain at least one dot to be treated as IP address (avoids matching VLANs like "802")
             if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", qn or ""):
                 # Full IPv4 address - exact match first, then prefix
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 return {
                     "query": {"bool": {"should": [
                         {"term": {"IP Address.keyword": {"value": qn, "boost": 100.0}}},
@@ -2310,7 +2321,8 @@ class OpenSearchConfig:
             elif "." in qn and re.fullmatch(r"\d{1,3}(\.\d{1,3}){0,2}\.?", qn or ""):
                 # Partial IPv4 address - prefix match only
                 # MUST contain at least one dot to avoid matching pure numbers like "802" (Voice VLAN)
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 clean_query = qn.rstrip('.')
                 return {
                     "query": {"bool": {"should": [
@@ -2333,7 +2345,8 @@ class OpenSearchConfig:
 
             # Voice VLAN search: 3-digit numbers are likely VLAN IDs (e.g., 802, 803, 801)
             if re.fullmatch(r"\d{3}", qn or ""):
-                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+                from utils.csv_utils import get_csv_column_order
+                DESIRED_ORDER = get_csv_column_order()
                 return {
                     "query": {"term": {"Voice VLAN": qn}},
                     "_source": DESIRED_ORDER,
@@ -2490,54 +2503,24 @@ class OpenSearchConfig:
         return search_query
 
     def _build_headers_from_documents(self, documents: List[Dict[str, Any]]) -> List[str]:
-        """Build headers list - ALWAYS returns all available columns, not just those in current results.
+        """Build headers list - ALWAYS returns all available columns from the current CSV format.
 
         This ensures consistent column display regardless of search results content.
-        Uses DEFAULT_DISPLAY_ORDER + Call Manager fields as the authoritative column list.
+        Uses the ACTUAL CSV file headers as the authoritative source, not just what's in documents.
         """
-        from utils.csv_utils import DEFAULT_DISPLAY_ORDER
+        from utils.csv_utils import get_csv_column_order
 
-        # Collect all keys that actually exist in documents (for validation)
-        from utils.csv_utils import CALL_MANAGER_ALIASES
+        # Get the ACTUAL column order from the current CSV file
+        # This is the single source of truth for what columns should be displayed
+        headers = get_csv_column_order()
+
+        # Collect document keys to find any extra fields not in the CSV
         doc_keys = set()
         for doc in documents:
             doc_keys.update(doc.keys())
 
-        # Ensure canonical Call Manager fields are considered even if documents still use legacy aliases
-        for alias, canonical in CALL_MANAGER_ALIASES.items():
-            if alias in doc_keys:
-                doc_keys.add(canonical)
-
-        # Order headers: metadata fields first, then all other columns alphabetically
-        metadata_fields = ["#", "File Name", "Creation Date"]
-
-        # Start with metadata fields (always include these)
-        headers = metadata_fields.copy()
-
-        # Add ALL data columns from DEFAULT_DISPLAY_ORDER (excluding metadata we already added)
-        data_columns = [col for col in DEFAULT_DISPLAY_ORDER if col not in metadata_fields]
-
-        # Ensure KEM serial number columns are always present in headers
-        kem_fields = ["KEM 1 Serial Number", "KEM 2 Serial Number"]
-        for kem in kem_fields:
-            if kem not in data_columns:
-                # Prefer inserting KEM fields after Model Name when present
-                try:
-                    idx = data_columns.index("Model Name") + 1
-                except ValueError:
-                    idx = len(data_columns)
-                data_columns.insert(idx, kem)
-
-        # Sort remaining data columns alphabetically for consistency while keeping KEM placement
-        # We'll keep KEM fields near Model Name by removing them, sorting, then reinserting
-        kem_present = [c for c in data_columns if c in kem_fields]
-        other_columns = [c for c in data_columns if c not in kem_fields]
-        other_columns.sort()
-        data_columns = other_columns + kem_present
-        headers.extend(data_columns)
-
-        # Add any additional columns from documents that aren't in DEFAULT_DISPLAY_ORDER
-        # (this handles new columns added to CSV format)
+        # Add any additional columns from documents that aren't in the CSV headers
+        # (this handles legacy data or special computed fields)
         extra_columns = sorted([col for col in doc_keys if col not in headers])
         headers.extend(extra_columns)
 
@@ -2737,7 +2720,8 @@ class OpenSearchConfig:
                 digits = qn_phone
                 candidates = [digits, f"+{digits}"] if digits else []
 
-            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as desired_order
+            from utils.csv_utils import get_csv_column_order
+            desired_order = get_csv_column_order()
 
             if include_historical:
                 netspeed_files = self._netspeed_filenames()
@@ -2840,7 +2824,8 @@ class OpenSearchConfig:
             if upper_variant != qn_sn:
                 variants.append(upper_variant)
 
-            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as desired_order
+            from utils.csv_utils import get_csv_column_order
+            desired_order = get_csv_column_order()
             indices = self.get_search_indices(include_historical)
             indices_list = indices if isinstance(indices, list) else [indices]
             allow_archive = any(idx == self.archive_index for idx in indices_list)
@@ -2937,7 +2922,8 @@ class OpenSearchConfig:
             return None
 
         try:
-            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as desired_order
+            from utils.csv_utils import get_csv_column_order
+            desired_order = get_csv_column_order()
             indices = self.get_search_indices(include_historical)
             indices_list = indices if isinstance(indices, list) else [indices]
             allow_archive = any(idx == self.archive_index for idx in indices_list)
@@ -3168,7 +3154,8 @@ class OpenSearchConfig:
                         missing_files = [fn for fn in netspeed_files if fn not in present_files]
                         if missing_files:
                             try:
-                                from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO2
+                                from utils.csv_utils import get_csv_column_order
+                                _DO2 = get_csv_column_order()
                                 seed_body = {
                                     'query': {
                                         'bool': {
@@ -3244,7 +3231,8 @@ class OpenSearchConfig:
                 try:
                     exact_terms_fb, wildcard_terms_fb = self._mac_query_variants(query, mac_core_fb)
                     should_fb = self._build_mac_should_clauses(exact_terms_fb, wildcard_terms_fb)
-                    from utils.csv_utils import DEFAULT_DISPLAY_ORDER as _DO3
+                    from utils.csv_utils import get_csv_column_order
+                    _DO3 = get_csv_column_order()
                     fb_body = {
                         "query": {
                             "bool": {
@@ -3370,7 +3358,8 @@ class OpenSearchConfig:
                 logger.info(f"Capped results from {before} to {cap}")
 
             # Apply display column filtering for consistency
-            from utils.csv_utils import DEFAULT_DISPLAY_ORDER as DESIRED_ORDER
+            from utils.csv_utils import get_csv_column_order
+            DESIRED_ORDER = get_csv_column_order()
 
             # Enhance documents with KEM information in Line Number field for icon display
             # and remove KEM columns from display

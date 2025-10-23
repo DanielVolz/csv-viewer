@@ -65,6 +65,7 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
           showRowNumbers={true}
           onMacAddressClick={handleMacAddressClick}
           onSwitchPortClick={handleSwitchPortClick}
+          ignoreSettings={false}
           labelMap={{
             'Creation Date': 'Date',
             'IP Address': 'IP Addr.',

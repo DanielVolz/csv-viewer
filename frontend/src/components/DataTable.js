@@ -84,7 +84,7 @@ function DataTable({
       return Array.isArray(headers) ? headers.filter(h => h !== '#') : [];
     }
 
-    // Use settings configuration
+    // ALWAYS use settings configuration when available
     if (Array.isArray(columns) && columns.length > 0) {
       // Get enabled columns in Settings order (respects user drag & drop)
       const headersSet = new Set(Array.isArray(headers) ? headers : []);
@@ -92,19 +92,28 @@ function DataTable({
         .filter(c => c.enabled && headersSet.has(c.id) && c.id !== '#')
         .map(c => c.id);
 
-      // Debug log to help diagnose settings issues
-      console.debug('[DataTable] Filtering headers:', {
-        totalColumns: columns.length,
-        enabledColumns: columns.filter(c => c.enabled).length,
-        headersFromBackend: headers?.length || 0,
-        filteredHeaders: filtered.length,
+      // Log for debugging (helps diagnose settings issues)
+      console.log('[DataTable] Column filtering applied:', {
+        settingsColumns: columns.length,
+        enabledInSettings: columns.filter(c => c.enabled).length,
+        availableFromBackend: headers?.length || 0,
+        finalDisplayed: filtered.length,
+        filtered: filtered,
         missingInBackend: columns.filter(c => c.enabled && !headersSet.has(c.id)).map(c => c.id)
       });
+
+      // If settings are loaded but no columns match, return empty to force user to check settings
+      if (filtered.length === 0 && columns.some(c => c.enabled)) {
+        console.warn('[DataTable] No columns matched! Check if backend header names match settings column IDs');
+        console.warn('Backend headers:', headers);
+        console.warn('Enabled settings:', columns.filter(c => c.enabled).map(c => c.id));
+      }
 
       return filtered;
     }
 
-    // Fallback: if columns not loaded yet, allow all provided headers
+    // Fallback ONLY if columns not loaded yet
+    console.log('[DataTable] Using fallback (settings not loaded yet), showing all headers');
     return Array.isArray(headers) ? headers.filter(h => h !== '#') : [];
   }, [columns, headers, ignoreSettings]);
 

@@ -91,11 +91,18 @@ CUSTOM_DISPLAY_NAMES = {
     "PhoneModel": "Model Name",
     "KeyExpansionModule1": "KEM",
     "KeyExpansionModule2": "KEM 2",
+    "KEM1SerialNumber": "KEM 1 Serial Number",
+    "KEM2SerialNumber": "KEM 2 Serial Number",
+    "MACAddress": "MAC Address",
     "MACAddress1": "MAC Address",
     "MACAddress2": "MAC Address 2",
     "SubNetMask": "Subnet Mask",
     "VLANId": "Voice VLAN",
     "SwitchFQDN": "Switch Hostname",
+    "SwitchPortDuplex": "Switch Port Mode",
+    "PCPortDuplex": "PC Port Mode",
+    "SwitchPortSpeed": "Phone Port Speed",
+    "PCPortSpeed": "PC Port Speed",
     "CallManagerActiveSub": "Call Manager Active Sub",
     "CallManagerStandbySub": "Call Manager Standby Sub",
     "PhoneSerialNumber": "Serial Number",
@@ -637,7 +644,8 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
     """
     Filter headers and data to show only desired columns in frontend.
 
-    Uses get_column_order() as SINGLE SOURCE OF TRUTH for column ordering.
+    Uses get_csv_column_order() as SINGLE SOURCE OF TRUTH for column ordering.
+    ALWAYS returns ALL columns from the CSV file, even if they're empty in the current result set.
 
     Args:
         headers: List of all available headers from the data source (may be alphabetically sorted by OpenSearch)
@@ -646,20 +654,10 @@ def filter_display_columns(headers: List[str], data: List[Dict[str, Any]]) -> Tu
     Returns:
         Tuple of (filtered_headers, filtered_data) - all columns in CSV file order
     """
+    # Get ALL columns from the current CSV file - this is the single source of truth
+    # IMPORTANT: Always return ALL columns, even if they're empty in this particular result set
+    # This ensures consistent column display across all searches and matches Settings configuration
     display_headers = get_csv_column_order()
-
-    # Filter to only include columns that exist in headers or data
-    available_headers = []
-    for col in display_headers:
-        if col in headers or any(col in row for row in data):
-            available_headers.append(col)
-
-    display_headers = available_headers
-
-    # Ensure KEM serial number columns are always present in headers for UI consistency
-    for kem_col in ("KEM 1 Serial Number", "KEM 2 Serial Number"):
-        if kem_col not in display_headers:
-            display_headers.append(kem_col)
 
     # Filter data to only include displayed columns, copying legacy values when necessary
     filtered_data = []
