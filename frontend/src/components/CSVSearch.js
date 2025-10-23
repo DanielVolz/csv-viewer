@@ -39,6 +39,7 @@ import ErrorDisplay from './ErrorDisplay';
 import { toast } from 'react-toastify';
 import useMacHistory from '../hooks/useMacHistory';
 import { Popover, List, ListItemButton, ListItemText, Tooltip } from '@mui/material';
+import { useSearchContext } from '../contexts/SearchContext';
 
 // Preview block extracted to reduce re-renders while typing
 const PreviewSection = React.memo(function PreviewSection({ previewData, handleMacAddressClick, handleSwitchPortClick, loading }) {
@@ -71,7 +72,9 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
             'IP Address': 'IP Addr.',
             'Voice VLAN': 'V-VLAN',
             'Serial Number': 'Phone Serial',
-            'Model Name': 'Model'
+            'Model Name': 'Model',
+            'KEM 1 Serial Number': 'KEM 1 Serial',
+            'KEM 2 Serial Number': 'KEM 2 Serial'
           }}
         />
       </Box>
@@ -103,9 +106,14 @@ const PreviewSection = React.memo(function PreviewSection({ previewData, handleM
 });
 
 function CSVSearch() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [includeHistorical, setIncludeHistorical] = useState(false); // default disabled
-  const [hasSearched, setHasSearched] = useState(false);
+  const {
+    searchTerm,
+    setSearchTerm,
+    includeHistorical,
+    setIncludeHistorical,
+    hasSearched,
+    setHasSearched
+  } = useSearchContext();
   const searchFieldRef = useRef(null);
   const initialQueryRef = useRef(null);
   const mountedRef = useRef(true);
@@ -208,7 +216,7 @@ function CSVSearch() {
         clearTimeout(sanitizeTimeoutRef.current);
       }
     };
-  }, [normalizeMacInput]);
+  }, [normalizeMacInput, setSearchTerm]);
 
   // If there is an initial query (?q=...), trigger search once not blocked
   useEffect(() => {
@@ -233,7 +241,7 @@ function CSVSearch() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchBlocked, includeHistorical, missingPreview, recordMac, searchAll, normalizeMacInput, stripAllWhitespace]);
+  }, [searchBlocked, includeHistorical, missingPreview, recordMac, searchAll, normalizeMacInput, stripAllWhitespace, setHasSearched]);
 
   const typingTimeoutRef = useRef(null);
   const lastSearchTermRef = useRef('');
@@ -305,7 +313,7 @@ function CSVSearch() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includeHistorical, searchAll, searchBlocked, missingPreview, recordMac, normalizeMacInput, getLocationForMac, stripAllWhitespace]);
+  }, [includeHistorical, searchAll, searchBlocked, missingPreview, recordMac, normalizeMacInput, getLocationForMac, stripAllWhitespace, setHasSearched]);
 
   const handleMacAddressClick = useCallback((macAddress) => {
     const macCanonical = normalizeMacInput(macAddress) || macAddress;
@@ -324,7 +332,7 @@ function CSVSearch() {
         setHasSearched(true);
       }
     });
-  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac, includeHistorical, missingPreview]);
+  }, [searchAll, recordMac, normalizeMacInput, getLocationForMac, includeHistorical, missingPreview, setSearchTerm, setHasSearched]);
 
   const handleSwitchPortClick = useCallback((switchPort) => {
     // Currently just copies to clipboard, but could trigger search
@@ -362,7 +370,7 @@ function CSVSearch() {
         executeSearch(term);
       }, 1000);
     }
-  }, [executeSearch, normalizeMacInput, stripAllWhitespace, searchTerm]);
+  }, [executeSearch, normalizeMacInput, stripAllWhitespace, searchTerm, setSearchTerm, setHasSearched]);
 
   const handleSearch = useCallback(() => {
     if (searchBlocked || !searchTerm) return;
@@ -388,7 +396,7 @@ function CSVSearch() {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac, normalizeMacInput, getLocationForMac, missingPreview, stripAllWhitespace]);
+  }, [searchTerm, includeHistorical, searchAll, searchBlocked, recordMac, normalizeMacInput, getLocationForMac, missingPreview, stripAllWhitespace, setHasSearched]);
 
   const handleClearSearch = useCallback(() => {
     setSearchTerm('');
@@ -400,7 +408,7 @@ function CSVSearch() {
     if (searchFieldRef.current) {
       searchFieldRef.current.focus();
     }
-  }, []);
+  }, [setSearchTerm, setHasSearched]);
 
   const handleKeyPress = useCallback((e) => {
     if (e.key === 'Enter') {
@@ -933,7 +941,9 @@ function CSVSearch() {
                 'IP Address': 'IP Addr.',
                 'Voice VLAN': 'V-VLAN',
                 'Serial Number': 'Phone Serial',
-                'Model Name': 'Model'
+                'Model Name': 'Model',
+                'KEM 1 Serial Number': 'KEM 1 Serial',
+                'KEM 2 Serial Number': 'KEM 2 Serial'
               }}
             />
           )}

@@ -1,5 +1,10 @@
 # CSV Viewer AI Coding Instructions
 
+**Zero Tolerance for Workarounds**
+- Deliver clean, maintainable code only—no hacks, shortcuts, or stopgap fixes.
+- Update the real source of truth instead of layering temporary logic.
+- If a requirement conflicts with existing behavior, refactor properly rather than patching around it.
+
 ## Architecture Overview
 
 This is a dockerized full-stack CSV search application designed for viewing, searching, and managing network data stored in CSV files. It provides real-time search capabilities, file monitoring, and automatic indexing using modern web technologies.

@@ -46,7 +46,11 @@ function Navigation({ currentTab, onTabChange, onHomeClick }) {
         label="Search"
         value="home"
         iconPosition="start"
-        onClick={onHomeClick}
+        onClick={(event) => {
+          if (currentTab === 'home' && typeof onHomeClick === 'function') {
+            onHomeClick(event);
+          }
+        }}
         onMouseDown={handleMiddleClick('/search')}
       />
       <Tab

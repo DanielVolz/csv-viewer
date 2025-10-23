@@ -999,6 +999,8 @@ async def get_available_columns():
             "Voice VLAN": "V-VLAN",
             "Serial Number": "Serial",
             "Model Name": "Model",
+            "KEM 1 Serial Number": "KEM 1 Serial",
+            "KEM 2 Serial Number": "KEM 2 Serial",
             "MAC Address 2": "MAC Addr. 2",
         }
 

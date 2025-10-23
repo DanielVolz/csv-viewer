@@ -3,7 +3,7 @@ import { Box } from '@mui/material';
 import CSVSearch from '../components/CSVSearch';
 import FileInfoBox from '../components/FileInfoBox';
 
-function HomePage({ resetKey }) {
+function HomePage() {
   return (
     <Box>
       {/* File Info Section */}
@@ -13,7 +13,7 @@ function HomePage({ resetKey }) {
 
       {/* Search Section */}
       <Box sx={{ mb: 4 }}>
-        <CSVSearch key={resetKey} />
+        <CSVSearch />
       </Box>
     </Box>
   );

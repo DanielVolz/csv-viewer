@@ -57,25 +57,6 @@ export const SettingsProvider = ({ children }) => {
         }
       }
 
-      // MIGRATION: Update old column IDs to match backend naming
-      const columnIdMigrations = {
-        'KEM1 Serial Number': 'KEM 1 Serial Number',
-        'KEM2 Serial Number': 'KEM 2 Serial Number',
-        // Add more migrations here if needed
-      };
-
-      // Apply migrations to saved columns if present
-      if (Array.isArray(savedColumns)) {
-        savedColumns = savedColumns.map(col => {
-          const newId = columnIdMigrations[col.id];
-          if (newId) {
-            console.log(`[Settings Migration] Updating column ID: ${col.id} → ${newId}`);
-            return { ...col, id: newId };
-          }
-          return col;
-        });
-      }
-
       // Merge backend columns with saved preferences
       // ALWAYS use backend as source of truth for available columns
       // Only preserve enabled/disabled state from saved settings
@@ -87,7 +68,6 @@ export const SettingsProvider = ({ children }) => {
         // Use backend order and columns, but preserve enabled states from saved settings
         mergedColumns = availableColumns.map(backendCol => ({
           ...backendCol,
-          // Preserve enabled state if this column was in saved settings
           enabled: savedById.has(backendCol.id)
             ? savedById.get(backendCol.id).enabled
             : backendCol.enabled

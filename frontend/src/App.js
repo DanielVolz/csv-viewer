@@ -19,6 +19,7 @@ import DarkModeToggle from './components/DarkModeToggle';
 import { IconButton, Tooltip } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import { SettingsProvider, useSettings } from './contexts/SettingsContext';
+import { SearchProvider, useSearchContext } from './contexts/SearchContext';
 import useUpdateNotifier from './hooks/useUpdateNotifier';
 
 function AppContent() {
@@ -27,18 +28,17 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const [currentTab, setCurrentTab] = useState('home');
-  const [searchResetKey, setSearchResetKey] = useState(0);
   const { setNavigationFunction } = useSettings();
+  const { resetSearchState } = useSearchContext();
 
   const handleTabChange = React.useCallback((event, newValue) => {
     if (newValue === 'home') {
-      // Clear any query params (e.g., ?q=...) and soft-reset the search without full reload
+      // Clear any query params (e.g., ?q=...) without a full reload
       try {
         const cleanPath = '/search';
         navigate(cleanPath, { replace: true });
       } catch { }
       setCurrentTab('home');
-      setSearchResetKey((k) => k + 1);
       return;
     }
     setCurrentTab(newValue);
@@ -51,13 +51,14 @@ function AppContent() {
   }, [navigate]);
 
   const goHomeAndRefresh = React.useCallback(() => {
-    // Clear any query params (e.g., ?q=...) and soft-reset the search without full reload
     try {
       navigate('/search', { replace: true });
     } catch { }
     setCurrentTab('home');
-    setSearchResetKey((k) => k + 1);
-  }, [navigate]);
+    if (currentTab === 'home') {
+      resetSearchState();
+    }
+  }, [navigate, resetSearchState, currentTab]);
 
   // Set browser tab title once
   React.useEffect(() => {
@@ -142,7 +143,7 @@ function AppContent() {
         <Container maxWidth="xl" sx={{ pb: 4 }}>
           <Routes>
             <Route path="/" element={<Navigate to="/search" replace />} />
-            <Route path="/search" element={<HomePage resetKey={searchResetKey} />} />
+            <Route path="/search" element={<HomePage />} />
             <Route path="/files" element={<FilesPage />} />
             <Route path="/statistics/*" element={<StatisticsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -186,7 +187,9 @@ function App() {
     : (<BrowserRouter>{content}</BrowserRouter>);
   return (
     <SettingsProvider>
-      {wrapped}
+      <SearchProvider>
+        {wrapped}
+      </SearchProvider>
     </SettingsProvider>
   );
 }

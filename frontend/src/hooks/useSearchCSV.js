@@ -1,21 +1,24 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useCallback, useMemo, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
+import { useSearchContext } from '../contexts/SearchContext';
 
 /**
  * Custom hook for searching CSV files in the backend API
  * @returns {Object} { searchAll, results, loading, error, pagination }
  */
 function useSearchCSV() {
-  const [results, setResults] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pageSize: 100,
-    totalItems: 0,
-    totalPages: 0
-  });
+  const {
+    rawResults,
+    setRawResults,
+    pagination,
+    setPaginationState,
+    loading,
+    setLoading,
+    error,
+    setError,
+    setLastQuery
+  } = useSearchContext();
 
   // Use ref to stabilize the search function reference
   const searchAllRef = useRef();
@@ -38,95 +41,95 @@ function useSearchCSV() {
     }
 
     try {
-      if (mountedRef.current) setLoading(true);
-      if (mountedRef.current) setError(null);
+      if (mountedRef.current) {
+        setLoading(true);
+        setError(null);
+      }
 
-      // The actual API call happens regardless of showToasts
       const response = await axios.get('/api/search/', {
         params: {
           query: searchTerm,
-          field: null, // Always search in all fields
+          field: null,
           include_historical: includeHistorical
         },
-        timeout: 30000 // 30 second timeout
+        timeout: 30000
       });
 
-      // Get the original data
       const originalData = response.data;
 
-      // Use data as provided by backend (backend controls what's displayed)
-      if (originalData.success && Array.isArray(originalData.data) && originalData.data.length > 0) {
-        if (mountedRef.current) setResults(originalData);
-      } else {
-        // If no data or error, just set the original response
-        if (mountedRef.current) setResults(originalData);
+      if (!mountedRef.current) {
+        return true;
+      }
 
-        // Show a toast notification for no results
-        if (showToasts && originalData.success && (!Array.isArray(originalData.data) || originalData.data.length === 0)) {
+      setRawResults(originalData);
+      setLastQuery(searchTerm);
+
+      const totalItems = Array.isArray(originalData?.data) ? originalData.data.length : 0;
+
+      if (showToasts) {
+        if (originalData.success && totalItems === 0) {
           toast.info('No results found for your search term.', {
-            position: "top-right",
+            position: 'top-right',
             autoClose: 3000
           });
-        }
-      }
-
-      // Handle pagination - use functional update to avoid dependency on pagination state
-      if (response.data.success && Array.isArray(response.data.data)) {
-        const totalItems = response.data.data.length;
-
-        // Show success toast with result count
-        if (showToasts && totalItems > 0) {
+        } else if (totalItems > 0) {
           toast.success(`Found ${totalItems} results for "${searchTerm}"`, {
-            position: "top-right",
+            position: 'top-right',
             autoClose: 3000
           });
         }
-
-        if (mountedRef.current) setPagination(prevPagination => {
-          const pageSize = prevPagination.pageSize;
-          const totalPages = Math.ceil(totalItems / pageSize);
-          return {
-            ...prevPagination,
-            totalItems,
-            totalPages
-          };
-        });
       }
+
+      setPaginationState((prev) => {
+        const pageSize = prev.pageSize || 100;
+        const totalPages = pageSize > 0 ? Math.ceil(totalItems / pageSize) : 0;
+        const currentPage = prev.page || 1;
+        const nextPage = totalPages > 0 ? Math.min(currentPage, totalPages) : 1;
+        return {
+          ...prev,
+          totalItems,
+          totalPages,
+          page: nextPage
+        };
+      });
 
       return true;
     } catch (err) {
       console.error('Error searching term:', err);
 
-      // Handle timeout errors specifically
+      if (!mountedRef.current) {
+        return false;
+      }
+
       let errorMessage = '';
       if (err.code === 'ECONNABORTED') {
         errorMessage = 'Search timed out. Please try a more specific search term.';
-        if (mountedRef.current) setError(errorMessage);
-        if (showToasts) {
-          toast.error(errorMessage);
-        }
       } else if (err.response && err.response.status === 504) {
         errorMessage = 'Search timed out on the server. Please try a more specific search term.';
-        if (mountedRef.current) setError(errorMessage);
-        if (showToasts) {
-          toast.error(errorMessage);
-        }
       } else {
         errorMessage = 'Failed to search. Please try again later.';
-        if (mountedRef.current) setError(errorMessage);
-        if (showToasts) {
-          toast.error(errorMessage);
-        }
       }
 
-      // Clear results
-      if (mountedRef.current) setResults(null);
+      setError(errorMessage);
+      if (showToasts) {
+        toast.error(errorMessage);
+      }
+
+      setRawResults(null);
+      setPaginationState((prev) => ({
+        ...prev,
+        totalItems: 0,
+        totalPages: 0,
+        page: 1
+      }));
 
       return false;
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, []); // Empty dependency array since searchAll doesn't depend on any state
+  }, [setError, setLoading, setRawResults, setPaginationState, setLastQuery]);
 
   // Assign the implementation to the ref
   searchAllRef.current = searchAllImpl;
@@ -137,54 +140,79 @@ function useSearchCSV() {
   }, []);
 
   const setPage = useCallback((page) => {
-    setPagination(prevPagination => ({
-      ...prevPagination,
-      page: Math.max(1, Math.min(page, prevPagination.totalPages))
-    }));
-  }, []);
-
-  const setPageSize = useCallback((size) => {
-    const newSize = Math.max(10, Math.min(size, 500)); // Limit page size
-
-    setPagination(prevPagination => {
-      const newTotalPages = Math.ceil(prevPagination.totalItems / newSize);
+    setPaginationState((prev) => {
+      const pageSize = prev.pageSize || 100;
+      const knownTotalPages = prev.totalPages || 0;
+      const fallbackTotalPages = pageSize > 0 && Array.isArray(rawResults?.data)
+        ? Math.ceil(rawResults.data.length / pageSize)
+        : 0;
+      const totalPages = knownTotalPages > 0 ? knownTotalPages : fallbackTotalPages;
+      const safeTotalPages = totalPages > 0 ? totalPages : 1;
+      const nextPage = Math.max(1, Math.min(page, safeTotalPages));
       return {
-        ...prevPagination,
-        pageSize: newSize,
-        totalPages: newTotalPages,
-        page: Math.min(prevPagination.page, newTotalPages)
+        ...prev,
+        page: nextPage
       };
     });
-  }, []);
+  }, [setPaginationState, rawResults]);
+
+  const setPageSize = useCallback((size) => {
+    const newSize = Math.max(10, Math.min(size, 500));
+
+    setPaginationState((prev) => {
+      const totalItems = typeof prev.totalItems === 'number'
+        ? prev.totalItems
+        : (Array.isArray(rawResults?.data) ? rawResults.data.length : 0);
+      const totalPages = newSize > 0 ? Math.ceil(totalItems / newSize) : 0;
+      const currentPage = prev.page || 1;
+      const nextPage = totalPages > 0 ? Math.min(currentPage, totalPages) : 1;
+      return {
+        ...prev,
+        pageSize: newSize,
+        totalItems,
+        totalPages,
+        page: nextPage
+      };
+    });
+  }, [setPaginationState, rawResults]);
 
   // Get the current page of results - memoized to prevent re-renders
   const paginatedResults = useMemo(() => {
-    if (!results || !results.data || !Array.isArray(results.data)) {
-      return results;
+    if (!rawResults || !Array.isArray(rawResults.data)) {
+      return rawResults;
     }
 
-    const start = (pagination.page - 1) * pagination.pageSize;
-    const end = start + pagination.pageSize;
+    const pageSize = pagination?.pageSize || 100;
+    const totalItems = typeof pagination?.totalItems === 'number'
+      ? pagination.totalItems
+      : rawResults.data.length;
+    const inferredTotalPages = pageSize > 0 ? Math.ceil(totalItems / pageSize) : 0;
+    const totalPages = typeof pagination?.totalPages === 'number'
+      ? pagination.totalPages
+      : inferredTotalPages;
+    const safeTotalPages = totalPages > 0 ? totalPages : 1;
+    const currentPage = Math.max(1, Math.min(pagination?.page || 1, safeTotalPages));
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
 
-    // Create a copy of results with paginated data
     return {
-      ...results,
-      data: results.data.slice(start, end),
+      ...rawResults,
+      data: rawResults.data.slice(start, end),
       pagination: {
-        page: pagination.page,
-        pageSize: pagination.pageSize,
-        totalItems: pagination.totalItems,
-        totalPages: pagination.totalPages,
+        page: currentPage,
+        pageSize,
+        totalItems,
+        totalPages,
         currentStart: start + 1,
-        currentEnd: Math.min(end, pagination.totalItems)
+        currentEnd: Math.min(end, totalItems)
       }
     };
-  }, [results, pagination]);
+  }, [rawResults, pagination]);
 
   return {
     searchAll,
     results: paginatedResults,
-    allResults: results,
+    allResults: rawResults,
     loading,
     error,
     pagination,
