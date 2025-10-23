@@ -2032,16 +2032,14 @@ class OpenSearchConfig:
             # This excludes: ABC1234 (7 chars, only digits after pos 5), ABC1234X (8 chars, only single letter at end)
             is_hostname_prefix = False
             if hostname_prefix_match and '.' not in qn and 5 <= len(qn) < 13:
+                remaining = qn[5:]
                 if len(qn) == 5:
                     # Exactly 5 characters: always treat as hostname prefix
                     is_hostname_prefix = True
-                elif len(qn) >= 8:
-                    # 8+ characters: check if there are at least 2 consecutive letters after position 5
-                    # This pattern matches hostname suffixes like ZSL, Z, etc. but not single letter serials like X
-                    remaining = qn[5:]
-                    # Look for at least 2 consecutive letters
-                    if re.search(r'[A-Za-z]{2,}', remaining):
-                        is_hostname_prefix = True
+                elif remaining and remaining[0].isalpha():
+                    # Hostname prefixes continue with letters immediately after the location code (e.g., ZSL, ZSH)
+                    # Serial numbers (e.g., FCH262128RE) continue with digits, so do not treat them as hostnames
+                    is_hostname_prefix = True
             if is_hostname_prefix:
                 from utils.csv_utils import get_csv_column_order
                 DESIRED_ORDER = get_csv_column_order()
@@ -2110,9 +2108,10 @@ class OpenSearchConfig:
                     # 13+ chars - hostname code pattern
                     is_hostname_like = True
                 elif qn_len >= 8:
-                    # 8-12 chars: only hostname if 2+ consecutive letters after position 5
+                    # 8-12 chars: treat as hostname only when typical suffix patterns show up
                     remaining = qn[5:]
-                    if re.search(r'[A-Za-z]{2,}', remaining):
+                    has_host_suffix = re.search(r'(ZSL|ZSH|ZDL|ZGL|ZKL)', remaining.upper())
+                    if has_host_suffix and re.search(r'[A-Za-z]{2,}', remaining):
                         is_hostname_like = True
 
             is_likely_serial = (
