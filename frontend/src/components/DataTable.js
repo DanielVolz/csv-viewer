@@ -838,115 +838,115 @@ function DataTable({
                 const displayRowNumber = originalIndex + 1;
                 return (
                   <TableRow
-                  key={originalIndex}
-                  sx={{
-                    backgroundColor: theme => theme.palette.mode === 'dark'
-                      ? 'rgba(31, 41, 55, 0.5)'
-                      : 'transparent',
-                    borderBottom: theme => `1px solid ${theme.palette.divider}`,
-                    '&:hover': {
+                    key={originalIndex}
+                    sx={{
                       backgroundColor: theme => theme.palette.mode === 'dark'
-                        ? 'rgba(59, 130, 246, 0.1)'
-                        : 'rgba(0, 0, 0, 0.04)',
-                    },
-                    '&:nth-of-type(even)': {
-                      backgroundColor: theme => theme.palette.mode === 'dark'
-                        ? 'rgba(55, 65, 81, 0.3)'
+                        ? 'rgba(31, 41, 55, 0.5)'
                         : 'transparent',
-                    }
-                  }}
-                >
-                  {showRowNumbers && (
-                    <TableCell sx={{
-                      fontWeight: 500,
-                      color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
-                      fontSize: '0.9rem'
-                    }}>
-                      {displayRowNumber}
-                    </TableCell>
-                  )}
-                  {filteredHeaders.map((header) => {
-                    const cellContent = row[header];
-                    return (
-                      <TableCell
-                        key={`${originalIndex}-${header}`}
-                        onClick={() => handleCellClick(header, cellContent, row)}
-                        align={header === 'Voice VLAN' ? 'center' : ((header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left')}
-                        sx={{
-                          cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
-                          whiteSpace: 'nowrap',
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          px: header === 'Voice VLAN' ? 1 : 1.5,
-                          minWidth: headerWidthMap[header] || 140,
-                          '&:hover': (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? {
-                            backgroundColor: theme => alpha(theme.palette.secondary.main, 0.1)
-                          } : {}
-                        }}
-                      >
-                        {header === "Switch Port" ? (
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
-                            {renderCellContent(header, cellContent, true, row)}
-                            <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
-                              <Chip
-                                label="Cisco"
-                                size="small"
-                                sx={{
-                                  height: '20px',
-                                  fontSize: '0.7rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  bgcolor: '#00bceb',
-                                  color: '#fff',
-                                  '&:hover': { bgcolor: '#00acd0' },
-                                  letterSpacing: '0.5px'
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const ciscoFormat = convertToCiscoFormat(cellContent);
-                                  showCopyToast('Copied Cisco port', ciscoFormat);
-                                  copyToClipboard(ciscoFormat).catch(() => {
-                                    toast.error('❌ Copy failed', { autoClose: 2000 });
-                                  });
-                                }}
-                              />
-                            </Tooltip>
-                          </Box>
-                        ) : header === "MAC Address" ? (
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
-                            {renderCellContent(header, cellContent, true, row)}
-                            <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
-                              <Chip
-                                label="Cisco"
-                                size="small"
-                                sx={{
-                                  height: '20px',
-                                  fontSize: '0.7rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  bgcolor: '#00bceb',
-                                  color: '#fff',
-                                  '&:hover': { bgcolor: '#00acd0' },
-                                  letterSpacing: '0.5px'
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const formatted = formatMacDotted(cellContent);
-                                  showCopyToast('Copied MAC (dotted)', formatted);
-                                  copyToClipboard(formatted).catch(() => {
-                                    toast.error('❌ Copy failed', { autoClose: 2000 });
-                                  });
-                                }}
-                              />
-                            </Tooltip>
-                          </Box>
-                        ) : (
-                          renderCellContent(header, cellContent, true, row)
-                        )}
+                      borderBottom: theme => `1px solid ${theme.palette.divider}`,
+                      '&:hover': {
+                        backgroundColor: theme => theme.palette.mode === 'dark'
+                          ? 'rgba(59, 130, 246, 0.1)'
+                          : 'rgba(0, 0, 0, 0.04)',
+                      },
+                      '&:nth-of-type(even)': {
+                        backgroundColor: theme => theme.palette.mode === 'dark'
+                          ? 'rgba(55, 65, 81, 0.3)'
+                          : 'transparent',
+                      }
+                    }}
+                  >
+                    {showRowNumbers && (
+                      <TableCell sx={{
+                        fontWeight: 500,
+                        color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
+                        fontSize: '0.9rem'
+                      }}>
+                        {displayRowNumber}
                       </TableCell>
-                    );
-                  })}
-                </TableRow>
+                    )}
+                    {filteredHeaders.map((header) => {
+                      const cellContent = row[header];
+                      return (
+                        <TableCell
+                          key={`${originalIndex}-${header}`}
+                          onClick={() => handleCellClick(header, cellContent, row)}
+                          align={header === 'Voice VLAN' ? 'center' : ((header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left')}
+                          sx={{
+                            cursor: (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? "pointer" : "default",
+                            whiteSpace: 'nowrap',
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            px: header === 'Voice VLAN' ? 1 : 1.5,
+                            minWidth: headerWidthMap[header] || 140,
+                            '&:hover': (header === "MAC Address" || header === "Switch Port" || header === "Switch Hostname") ? {
+                              backgroundColor: theme => alpha(theme.palette.secondary.main, 0.1)
+                            } : {}
+                          }}
+                        >
+                          {header === "Switch Port" ? (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
+                              {renderCellContent(header, cellContent, true, row)}
+                              <Tooltip title={convertToCiscoFormat(cellContent) || ''} placement="top" arrow>
+                                <Chip
+                                  label="Cisco"
+                                  size="small"
+                                  sx={{
+                                    height: '20px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    bgcolor: '#00bceb',
+                                    color: '#fff',
+                                    '&:hover': { bgcolor: '#00acd0' },
+                                    letterSpacing: '0.5px'
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const ciscoFormat = convertToCiscoFormat(cellContent);
+                                    showCopyToast('Copied Cisco port', ciscoFormat);
+                                    copyToClipboard(ciscoFormat).catch(() => {
+                                      toast.error('❌ Copy failed', { autoClose: 2000 });
+                                    });
+                                  }}
+                                />
+                              </Tooltip>
+                            </Box>
+                          ) : header === "MAC Address" ? (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
+                              {renderCellContent(header, cellContent, true, row)}
+                              <Tooltip title={formatMacDotted(cellContent) || ''} placement="top" arrow>
+                                <Chip
+                                  label="Cisco"
+                                  size="small"
+                                  sx={{
+                                    height: '20px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    bgcolor: '#00bceb',
+                                    color: '#fff',
+                                    '&:hover': { bgcolor: '#00acd0' },
+                                    letterSpacing: '0.5px'
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const formatted = formatMacDotted(cellContent);
+                                    showCopyToast('Copied MAC (dotted)', formatted);
+                                    copyToClipboard(formatted).catch(() => {
+                                      toast.error('❌ Copy failed', { autoClose: 2000 });
+                                    });
+                                  }}
+                                />
+                              </Tooltip>
+                            </Box>
+                          ) : (
+                            renderCellContent(header, cellContent, true, row)
+                          )}
+                        </TableCell>
+                      );
+                    })}
+                  </TableRow>
                 );
               })
             )

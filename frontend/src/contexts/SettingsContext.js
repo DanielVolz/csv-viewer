@@ -4,6 +4,13 @@ import { CATEGORY_ORDER, getCategoryLabel, getColumnCategory } from '../constant
 
 const SettingsContext = createContext();
 
+const sanitizeColumns = (cols) => {
+  if (!Array.isArray(cols)) return [];
+  return cols
+    .filter(col => col && col.id && col.id !== '#')
+    .map(col => ({ ...col }));
+};
+
 export const useSettings = () => {
   const context = useContext(SettingsContext);
   if (!context) {
@@ -33,7 +40,7 @@ export const SettingsProvider = ({ children }) => {
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         if (Array.isArray(parsed?.columns) && parsed.columns.length > 0) {
-          const sanitized = parsed.columns.filter(c => c && c.id);
+          const sanitized = sanitizeColumns(parsed.columns);
           if (sanitized.length > 0) setColumns(sanitized);
         }
       }
@@ -44,7 +51,8 @@ export const SettingsProvider = ({ children }) => {
 
   // Initialize columns from backend when available
   useEffect(() => {
-    if (availableColumns && availableColumns.length > 0) {
+    const availableSanitized = sanitizeColumns(availableColumns);
+    if (availableSanitized.length > 0) {
       // Load saved settings from localStorage
       const savedSettings = localStorage.getItem('csv-viewer-settings');
       let savedColumns = null;
@@ -52,7 +60,7 @@ export const SettingsProvider = ({ children }) => {
       if (savedSettings) {
         try {
           const parsed = JSON.parse(savedSettings);
-          savedColumns = parsed.columns;
+          savedColumns = sanitizeColumns(parsed.columns);
         } catch (error) {
           console.error('Error parsing saved settings:', error);
         }
@@ -67,7 +75,7 @@ export const SettingsProvider = ({ children }) => {
         const savedById = new Map(savedColumns.map(c => [c.id, c]));
 
         // Use backend order and columns, but preserve enabled states from saved settings
-        mergedColumns = availableColumns.map(backendCol => ({
+        mergedColumns = availableSanitized.map(backendCol => ({
           ...backendCol,
           enabled: savedById.has(backendCol.id)
             ? savedById.get(backendCol.id).enabled
@@ -75,10 +83,12 @@ export const SettingsProvider = ({ children }) => {
         }));
       } else {
         // No saved settings; use backend order and defaults as-is
-        mergedColumns = availableColumns.map(c => ({ ...c }));
+        mergedColumns = availableSanitized.map(c => ({ ...c }));
       }
 
       setColumns(mergedColumns);
+    } else {
+      setColumns([]);
     }
   }, [availableColumns]);
 
@@ -104,10 +114,11 @@ export const SettingsProvider = ({ children }) => {
     try {
       prev = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
     } catch { prev = {}; }
+    const sanitized = sanitizeColumns(Array.isArray(columns) ? columns : []);
     const next = {
       ...prev,
       sshUsername,
-      columns,
+      columns: sanitized,
     };
     localStorage.setItem('csv-viewer-settings', JSON.stringify(next));
   }, [sshUsername, columns]);
@@ -119,10 +130,11 @@ export const SettingsProvider = ({ children }) => {
       try {
         prev = JSON.parse(localStorage.getItem('csv-viewer-settings') || '{}') || {};
       } catch { prev = {}; }
+      const sanitizedColumns = sanitizeColumns(Array.isArray(nextColumns) ? nextColumns : columns);
       const settings = {
         ...prev,
         sshUsername: nextSsh ?? sshUsername,
-        columns: Array.isArray(nextColumns) ? nextColumns : columns
+        columns: sanitizedColumns
       };
       localStorage.setItem('csv-viewer-settings', JSON.stringify(settings));
     } catch { }
@@ -161,15 +173,20 @@ export const SettingsProvider = ({ children }) => {
   const toggleColumn = useCallback((columnId) => {
     setColumns(prev => {
       const next = prev.map(col => col.id === columnId ? { ...col, enabled: !col.enabled } : col);
-      persistSettings(undefined, next);
-      return next;
+      const sanitizedNext = sanitizeColumns(next);
+      persistSettings(undefined, sanitizedNext);
+      return sanitizedNext;
     });
   }, [persistSettings]);
 
   // Allow explicit saving of columns (optional use by settings UI)
   const saveColumns = useCallback((nextColumns) => {
-    if (Array.isArray(nextColumns)) setColumns(nextColumns);
-  }, []);
+    if (Array.isArray(nextColumns)) {
+      const sanitized = sanitizeColumns(nextColumns);
+      setColumns(sanitized);
+      persistSettings(undefined, sanitized);
+    }
+  }, [persistSettings]);
 
   // Reorder columns
   const reorderColumns = useCallback((startIndex, endIndex) => {
@@ -177,15 +194,16 @@ export const SettingsProvider = ({ children }) => {
       const result = Array.from(prev);
       const [removed] = result.splice(startIndex, 1);
       result.splice(endIndex, 0, removed);
-      persistSettings(undefined, result);
-      return result;
+      const sanitizedResult = sanitizeColumns(result);
+      persistSettings(undefined, sanitizedResult);
+      return sanitizedResult;
     });
   }, [persistSettings]);
 
   // Reset to default configuration (reload from backend)
   const resetToDefault = useCallback(() => {
     if (availableColumns && availableColumns.length > 0) {
-      const next = availableColumns.map(c => ({ ...c }));
+      const next = sanitizeColumns(availableColumns);
       setColumns(next);
       persistSettings(undefined, next);
     } else {
