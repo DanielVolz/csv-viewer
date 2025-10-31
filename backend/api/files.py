@@ -452,7 +452,6 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         "/" in raw_filename
         or "\\" in raw_filename
         or ".." in raw_filename
-        or raw_filename != filename
         or filename == ""
     ):
         return {
