@@ -185,18 +185,28 @@ function DataTable({
     return String(a).localeCompare(String(b));
   };
 
-  const sortedData = React.useMemo(() => {
-    if (!Array.isArray(data) || !orderBy) return data;
-    const arr = data.map((row, idx) => ({ row, idx }));
-    arr.sort((A, B) => {
+  const sortedEntries = React.useMemo(() => {
+    if (!Array.isArray(data)) return [];
+    const entries = data.map((row, idx) => ({ row, idx }));
+    if (!orderBy) return entries;
+
+    if (orderBy === '#') {
+      entries.sort((A, B) => {
+        const cmp = A.idx - B.idx;
+        return order === 'desc' ? -cmp : cmp;
+      });
+      return entries;
+    }
+
+    entries.sort((A, B) => {
       const aKey = getKey(orderBy, A.row[orderBy]);
       const bKey = getKey(orderBy, B.row[orderBy]);
       let cmp = compareKeys(aKey, bKey);
       if (order === 'desc') cmp = -cmp;
-      if (cmp === 0) return A.idx - B.idx; // stable
+      if (cmp === 0) return A.idx - B.idx; // stable fallback preserves original sequence
       return cmp;
     });
-    return arr.map(x => x.row);
+    return entries;
   }, [data, orderBy, order, getKey]);
 
   // Compute date range for gradient coloring (newest -> orange, oldest -> red)
@@ -759,7 +769,13 @@ function DataTable({
                 borderBottom: theme => `2px solid ${theme.palette.divider}`,
                 backgroundColor: theme => theme.palette.mode === 'dark' ? 'rgba(55, 65, 81, 0.5)' : theme.palette.background.paper
               }}>
-                #
+                <TableSortLabel
+                  active={orderBy === '#'}
+                  direction={orderBy === '#' ? order : 'asc'}
+                  onClick={() => handleSort('#')}
+                >
+                  #
+                </TableSortLabel>
               </TableCell>
             )}
             {filteredHeaders.map((header) => (
@@ -816,9 +832,13 @@ function DataTable({
                 </TableCell>
               </TableRow>
             ) : (
-              (sortedData || data).map((row, index) => (
-                <TableRow
-                  key={index}
+              sortedEntries.map((entry) => {
+                const row = entry.row;
+                const originalIndex = entry.idx;
+                const displayRowNumber = originalIndex + 1;
+                return (
+                  <TableRow
+                  key={originalIndex}
                   sx={{
                     backgroundColor: theme => theme.palette.mode === 'dark'
                       ? 'rgba(31, 41, 55, 0.5)'
@@ -842,14 +862,14 @@ function DataTable({
                       color: theme => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.87)' : 'text.primary',
                       fontSize: '0.9rem'
                     }}>
-                      {index + 1}
+                      {displayRowNumber}
                     </TableCell>
                   )}
                   {filteredHeaders.map((header) => {
                     const cellContent = row[header];
                     return (
                       <TableCell
-                        key={`${index}-${header}`}
+                        key={`${originalIndex}-${header}`}
                         onClick={() => handleCellClick(header, cellContent, row)}
                         align={header === 'Voice VLAN' ? 'center' : ((header === 'MAC Address' || header === 'Switch Port') ? 'right' : 'left')}
                         sx={{
@@ -927,7 +947,8 @@ function DataTable({
                     );
                   })}
                 </TableRow>
-              ))
+                );
+              })
             )
           ) : (
             // Single object case (nicht-Array data)
