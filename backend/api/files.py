@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 import os
 from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
+from werkzeug.utils import secure_filename
 from typing import Iterable, List, Optional, Tuple
 from datetime import datetime
 import logging
@@ -443,6 +444,27 @@ async def preview_current_file(limit: int = 25, filename: str = "netspeed.csv", 
         Returns:
         Dictionary with headers, preview rows, and file creation date
     """
+    # Sanitize and validate filename before any path handling
+    raw_filename = filename
+    filename = secure_filename(filename)
+    # Disallow path separators and traversal by ensuring only a bare filename is accepted
+    if (
+        "/" in raw_filename
+        or "\\" in raw_filename
+        or ".." in raw_filename
+        or raw_filename != filename
+        or filename == ""
+    ):
+        return {
+            "success": False,
+            "message": "Invalid filename.",
+            "headers": [],
+            "data": [],
+            "creation_date": None,
+            "file_name": raw_filename,
+            "using_fallback": False,
+            "fallback_file": None
+        }
     try:
         # Optimized: Only one inventory lookup, fast cache, minimal row processing
         extras = _extra_search_paths()
