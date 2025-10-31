@@ -2341,7 +2341,7 @@ async def get_stats_by_location_fast(q: str) -> Dict:
         logger.error(f"Error in fast location stats: {e}")
         return {
             "success": False,
-            "message": f"Failed to load location stats from OpenSearch: {e}",
+            "message": "Failed to load location stats from OpenSearch. Please try again later or contact support.",
             "data": {
                 "query": query,
                 "mode": "fast",
