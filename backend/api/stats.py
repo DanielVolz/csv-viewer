@@ -1926,7 +1926,7 @@ async def suggest_location_codes(q: str, limit: int = 50) -> Dict:
         logger.error(f"Error in location code suggestions: {e}")
         return {
             "success": False,
-            "message": f"Search failed: {str(e)}",
+            "message": "Failed to fetch location code suggestions. Please try again later or contact support.",
             "suggestions": []
         }
 
